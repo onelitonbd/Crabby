@@ -1,0 +1,193 @@
+# Crabby — Data and Memory Specification
+
+**Status:** Planning draft
+
+**Database implementation:** SQLite proposed as leading candidate; not finalized (`DECISIONS.md` §5)
+
+**Related documents:** `PROJECT_BRIEF.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `AGENT_RUNTIME.md`, `SECURITY.md`
+
+## 1. Purpose
+
+Define how Crabby stores conversation history, task state, events, checkpoints, long-term memory, and configuration.
+
+The design must support local-first operation, Android through Termux, safe recovery, user control, and future storage changes without unnecessary architectural rewrites.
+
+## 2. Core Requirements
+
+### 2.1 Conversation History
+
+- Conversation history persists across process restarts by default.
+- Users can delete their conversation history.
+- Messages must retain their role, ordering, relevant timestamps, and association with the correct conversation.
+- Tool calls and their results must remain associated with the relevant assistant turn or task where applicable.
+- Generated summaries must not silently replace or destroy original conversation records.
+- Data deletion must define how related summaries, indexes, and derived memory are handled.
+
+**Unresolved:** Export format, retention exceptions, deletion scope, and backup behaviour.
+
+### 2.2 Task State and Checkpoints
+
+- Long-running tasks must have persistent state sufficient to support recovery.
+- Checkpoints should capture the task's progress, completed steps, pending steps, and relevant execution metadata.
+- Recovery must distinguish confirmed completed actions from actions whose outcome is uncertain.
+- A resumed task must not blindly repeat non-idempotent external actions.
+- Tasks that cannot safely resume should be marked for review or user intervention.
+- Cancellation state must remain distinguishable from successful completion and failure.
+- Recovery of task state is a distinct problem from database transaction recovery (`AGENT_RUNTIME.md` §7.4).
+
+Checkpointing does not guarantee that every external operation can be resumed automatically.
+
+**Unresolved:** Checkpoint frequency, checkpoint schema, checkpoint retention, and exact resume policy.
+
+### 2.3 Long-Term Memory
+
+Crabby uses a hybrid memory approach (D-019):
+
+- The agent may propose or create useful memories automatically within configured policy.
+- Users retain control over reviewing, correcting, deleting, or disabling automatic memory.
+- Memory entries should have identifiable provenance, such as their originating conversation or task where feasible.
+- Derived memories and summaries must be distinguishable from original conversation records.
+- Memory retrieval should be relevant to the current task and respect access and deletion rules.
+- Automatic memory creation must be possible to disable entirely for users who require that.
+
+**Unresolved:** Memory categories, confidence rules, automatic extraction thresholds, and user-facing memory management controls.
+
+### 2.4 Memory Search
+
+- The first version should support ordinary text-based search (D-021).
+- Vector or semantic search is not required for the initial release.
+- Search functionality should be designed so that semantic retrieval can be added later if justified.
+- Search indexes must not become an uncontrolled source of stale or undeletable personal data.
+- Indexes should be rebuildable from authoritative records.
+
+**Unresolved:** Search implementation (e.g. FTS-style index vs application-level index), indexing strategy, multilingual support (Bengali and English content are both expected), and criteria for adding vector search.
+
+### 2.5 Events and Audit Records
+
+- Persist events required for task recovery, debugging, approval history, and important state transitions.
+- Events should be associated with stable task, conversation, and event identifiers where applicable.
+- Event records must distinguish meaningful lifecycle transitions, including start, progress, completion, failure, and cancellation.
+- Event retention must balance recovery needs, storage consumption, privacy, and user control.
+- Event records are descriptive, not authoritative for current task state (`AGENT_RUNTIME.md` §4.4).
+
+**Unresolved:** Retention duration, pruning rules, replay windows, event payload limits, and export behaviour.
+
+### 2.6 Configuration and Secrets
+
+- Persist non-secret configuration and user preferences as appropriate.
+- Provider credentials and other secrets require separate secure handling.
+- Secrets must not be exposed in ordinary logs, conversation exports, or memory search results.
+- Configuration migrations must be considered when upgrading Crabby.
+
+**Unresolved:** Secret storage mechanism and platform-specific protection — see `SECURITY.md` §7 and O-018.
+
+## 3. Data Categories
+
+| Category | Primary purpose | Persistence requirement |
+| --- | --- | --- |
+| Conversations and messages | Conversation continuity | Persistent by default |
+| Tool calls and results | Explain execution and preserve context | Persistent where needed for history and recovery |
+| Tasks | Track execution lifecycle | Persistent for recoverable tasks |
+| Checkpoints | Resume work safely | Persistent for supported resumable tasks |
+| Events | Recovery, auditing, and debugging | Required records retained; policy open |
+| Approvals | Durable authorization decisions | Persistent while the linked action remains possible |
+| Long-term memories | Reusable context | Persistent, user-controllable |
+| Search indexes | Find relevant records | Rebuildable or maintainable from authoritative records |
+| Configuration | User preferences and system settings | Persistent where appropriate |
+| Secrets | Authentication and provider access | Secure storage; not ordinary plaintext configuration |
+
+## 4. Database Requirements
+
+The chosen storage solution should support, or be paired with mechanisms that support:
+
+- Reliable local persistence.
+- Transactions for related state changes.
+- Structured querying and indexes.
+- Consistent task and checkpoint updates.
+- Recovery after unexpected process termination, including abrupt Android process kill.
+- Backup and restore, including online backup while the Gateway runs.
+- Data migration between schema versions.
+- Controlled deletion of conversations and derived data.
+- Acceptable storage and performance on low-resource Android devices.
+- Compatibility with the selected Node.js runtime and Termux environment.
+
+SQLite is a candidate, not a confirmed implementation choice. The comparison record is in `DECISIONS.md` §5.
+
+Concurrency note: SQLite allows one writer at a time. Crabby's write path should therefore funnel persistence through a bounded, serialized write queue rather than assume free parallel writes (relevant to D-023 controlled parallelism).
+
+## 5. Storage Architecture
+
+The architecture should separate data access from the database engine.
+
+Proposed repository boundaries:
+
+- Conversation repository.
+- Task and checkpoint repository.
+- Event repository.
+- Approval repository.
+- Memory repository.
+- Configuration repository.
+
+The precise repository interfaces and whether these are separate modules or grouped implementations remain open.
+
+The first implementation should avoid unnecessary distributed storage or a mandatory database server unless validation shows that a simpler solution cannot meet the requirements.
+
+## 6. Consistency and Recovery Principles
+
+01. Persist critical task state transitions before reporting them as durably recorded.
+02. Use transactions for logically related updates where supported.
+03. Record uncertain external action outcomes explicitly.
+04. Prefer idempotency keys or equivalent safeguards where external systems support them.
+05. Treat event replay and task recovery as separate concerns.
+06. Preserve original records where required for reliable reconstruction.
+07. Do not claim that a checkpoint can restore external side effects that the external system cannot reverse or verify.
+08. WAL checkpointing, disk-space limits, and journal growth must be configured deliberately on mobile storage.
+
+## 7. Privacy and Deletion
+
+- Users must be able to delete conversation history.
+- The deletion policy must explicitly address linked memories, summaries, search indexes, task artifacts, and exported backups.
+- Deleting data from the active database does not automatically delete previously exported backups; exports must be listed so the user can act on them.
+- Cascade deletion may be used for strictly derived, non-judgemental records (indexes, cached summaries). It must **not** be the automatic default for long-term memories, because a memory may be referenced by other conversations. Deletion propagation is defined in O-016.
+- Logs should avoid unnecessary message contents and secrets.
+- Data retention defaults must be documented before implementation.
+
+**Proposed default (pending owner approval):** deleting a conversation removes its messages, its derived search entries, and marks memories whose only provenance is that conversation for user review; memories with other sources are retained and re-attributed.
+
+## 8. Backup, Restore, and Migration
+
+The system should define before release:
+
+- A backup method safe for the selected storage engine (online backup preferred over raw file copy).
+- Restore validation and failure handling.
+- Schema versioning and migrations, with an explicit failure behavior on downgrade.
+- Whether backups include memory, checkpoints, configuration, and secrets (secrets should be excluded by default).
+- Portability across supported platforms.
+- Backup retention and whether deleted data can return from an old backup, which must be disclosed to the user.
+
+## 9. Open Questions
+
+01. Which database engine and driver are finally selected? (O-001, O-002)
+02. What event retention period and storage limits are appropriate? (O-014)
+03. How should conversation deletion propagate to derived memories and summaries? (O-016)
+04. What checkpoint information is necessary for safe task recovery? (O-013)
+05. Which text-search implementation should be used initially, and how is Bengali tokenization handled? (O-015)
+06. What backup format and restore procedure are portable across supported platforms? (O-017)
+07. How should sensitive configuration and provider credentials be protected on each platform? (O-018)
+08. How should memory entries be reviewed and managed by users across all four interfaces?
+
+## 10. Acceptance Criteria for This Specification
+
+- Conversation history persists by default and users can delete it.
+- Task recovery requirements explicitly address checkpoints and unsafe replay.
+- Long-term memory supports automatic creation and user control.
+- Necessary events are retained without prematurely fixing a retention period.
+- Ordinary text search is sufficient for the initial release.
+- Database and driver choices remain open until the required evaluation is complete.
+- Deletion semantics for derived data are explicit rather than implied by cascade rules.
+
+This document specifies intended behaviour, not a finalized database implementation.
+
+---
+
+**End of Data and Memory Specification**

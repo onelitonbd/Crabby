@@ -56,7 +56,7 @@ Out of scope here: the internal state machine of the agent (`AGENT_RUNTIME.md`),
 
 Boundary rules:
 
-- **B1 — Client identity.** Every connection is attributable to a known client (interface instance + configured identity). Anonymous local access is not an accepted model; the mechanism is O-019.
+- **B1 — Client identity.** Every connection is attributable to a known client (interface instance + configured identity). Anonymous local access is not an accepted model; the mechanism is per-client pairing tokens (D-030), with residual detail tracked in O-019.
 - **B2 — API edge.** Validation and authorization happen before any application service runs. The Gateway does not trust that an interface already checked anything.
 - **B3 — Policy decisions.** All permission and approval evaluation occurs here. Tool implementations must not contain the only copy of a rule.
 - **B4 — Execution.** Tools and extensions receive only the declared capability set for the current task, never ambient full-user privileges beyond what the platform cannot avoid (see §15).
@@ -109,16 +109,33 @@ Requirements:
 - The Web UI must validate `Origin`/`Host`, and must not accept ambient browser credentials (no cookie-based session relying on the browser's automatic sending; if a session token is used it must be non-guessable and explicitly delivered).
 - Any local bearer material must be generated randomly, stored with owner-only file permissions, and revocable.
 
-Candidate mechanisms (unselected, **O-019**):
+**Selected (D-030): per-client pairing tokens.** Each interface instance is paired explicitly and receives its
+own credential, so any client can be revoked without disturbing the others.
 
-| Option | Advantage | Risk |
+```
+crabby auth pair --name kitchen-phone --interface telegram|tui|cli|web
+crabby auth list                 # show clients, creation time, last use, granted capabilities
+crabby auth revoke <client-id>   # immediate, affects that client only
+```
+
+Pairing requirements:
+
+- A pairing request is issued from inside the Gateway's own process/host (CLI/TUI command), never accepted over the network by an unauthenticated caller.
+- The pairing artifact is short-lived, single-use, and carries a TTL; the long-lived credential is delivered once and never logged.
+- Every credential is bound to a client name and an interface type so audit records say *which* client acted.
+- Revocation takes effect on the next request and must also terminate live event streams.
+- Unauthenticated requests are rejected before routing, including `GET /health` and event subscriptions.
+
+Remaining open detail (O-019): token format, optional expiry policy, and pairing UX on a phone-sized terminal.
+
+Alternatives considered and rejected:
+
+| Option | Verdict | Reason |
 | --- | --- | --- |
-| Pairing token file in the Crabby data dir | Simple, Termux-friendly, no UI needed | Anyone with the file's read access is a local client |
-| Per-client tokens issued by `crabby auth pair` | Revocable, attributable, works for remote too | Extra setup step |
-| Trust-the-OS-user (peer credential check) | Zero config | Not portable; unreliable on Android; no per-client revocation |
-| Short-lived signed tokens with expiry | Limits stolen-token lifetime | Clock and rotation complexity on mobile |
-
-Recommendation: per-client tokens issued by an explicit pairing command, with owner-only storage and one-command revocation. It satisfies all four interfaces and the remote case with a single model, and it is cheap on Termux.
+| **Per-client tokens via `crabby auth pair`** | **Selected** | Revocable, attributable, one model for local and remote, cheap on Termux |
+| Shared token file in the data dir | Rejected | Anyone who reads the file *is* every local client; no per-client audit or revocation |
+| Trust-the-OS-user peer credential check | Rejected | Not portable, unreliable on Android, no revocation |
+| Short-lived signed tokens with rotation | Deferred | Genuine benefit but clock and rotation complexity on mobile; may layer on later |
 
 ### 5.2 Telegram
 
@@ -184,7 +201,7 @@ Denials are recorded and respected; the agent must not rephrase a denied action 
 
 ## 7. Secrets Handling
 
-Requirements (storage mechanism open, **O-018**):
+Requirements (mechanism **selected: D-031** — OS keychain with encrypted-file fallback):
 
 - Secrets live outside the conversation database and outside ordinary configuration files. Never interleave keys with session records that a user might export or share.
 - Redaction is applied at the logging and event-serialization layer, not only at the UI. If an error object can contain a header, the serializer must strip it (see `AGENT_RUNTIME.md` §9.3).
@@ -193,7 +210,21 @@ Requirements (storage mechanism open, **O-018**):
 - Rotation and revocation must be a documented, one-command user action.
 - Any crash report or bug attachment flow must run a secret-pattern scan before the content is written out.
 
-Platform candidates: OS keychain (macOS Keychain, Linux Secret Service), Android `keystore`-backed storage from Termux (feasibility unknown — validate), and an encrypted file with a user passphrase as the universal fallback. The fallback must be clearly labeled as weaker.
+Platform behavior:
+
+| Platform | Store | Notes |
+| --- | --- | --- |
+| macOS | Keychain | Preferred path. |
+| Linux | Secret Service when available | Otherwise treated like the fallback case; do not silently write plaintext. |
+| Android + Termux | Encrypted file + passphrase | `keystore` reachability from Termux is unverified → O-018 remainder. If a future probe finds it usable, it may become the preferred store. |
+| Windows / WSL | Fallback encrypted file | Do not claim DPAPI protection until designed and tested (§15). |
+
+Fallback rules:
+
+- The encrypted file is created `0600`, holds a key-derived blob (KDF parameters to be pinned, O-018 remainder), and is *never* the default on a platform where a keychain exists.
+- Startup must not block forever for a passphrase: a locked vault means provider calls and T2/T3 tools are unavailable until unlocked, which must be reported clearly on all four interfaces.
+- Lock state is visible: users must always be able to tell whether secrets are currently available.
+- Any UI or log message referencing the fallback must state that it protects against casual disclosure, not against an attacker who already owns the Termux user account (§15).
 
 ## 8. Filesystem and Workspace Security
 
@@ -255,7 +286,10 @@ Default posture: **loopback only**. Requirements for the optional remote mode:
 - Enabling remote access is a T3 config change and must be visible in the UI/TUI/Web with a persistent indicator while active.
 - Quick Tunnel provides reachability, not authentication, not confidentiality of the app layer, and not availability. Permanent URLs, uptime, and third-party routing must never be promised.
 - Remote clients authenticate with the same mechanism as other clients (§5.1) over TLS to the tunnel. Without a valid token, the Gateway must reject every route, including health and SSE.
-- Remote access must not add capabilities; it may only narrow them. A dedicated `remote` profile may further restrict tools per user choice — recommended default: no `shell.privileged`, no `config.write` remotely.
+- Remote access must not add capabilities. **Selected (D-032):** Crabby applies no tunnel-specific hardening on top of normal policy — a remote client may use exactly what its paired identity is allowed, preserving feature parity (D-005) across local and remote.
+- Residual risk is accepted and must be documented for users: with a valid token, a remote client can drive a shell-capable task. The compensating controls are risk-tier approvals (§6.2), per-action T2/T3 prompts, token revocation, and audit records.
+- Narrowing remains available per client, not per transport: `crabby auth pair --restrict shell,config` produces a limited identity. This keeps parity intact — the *identity* is narrower, the *transport* is not.
+- Because exposure is the risky part, enabling a tunnel is T3, and the approval text must list which paired identities would become reachable remotely.
 - Tunnel lifecycle: URL changes on restart, so clients must discover rather than assume; the runtime must handle tunnel drops with clear state, and `crabby tunnel stop` must fully revoke exposure and close the listener.
 - Log the tunnel's active periods and any accepted remote auth failures.
 - LAN exposure (non-loopback bind) and reverse-proxy setups are separate, harder-to-secure modes; keep them out of the initial release unless requested, and never offer them implicitly.
@@ -273,11 +307,13 @@ Default posture: **loopback only**. Requirements for the optional remote mode:
 
 | Platform | Position | Notes and honest limitations |
 | --- | --- | --- |
-| Android + Termux | Primary | No application sandbox between Crabby and Termux's own data dir: any process running inside Termux can read Crabby's files and any plaintext secret there. Assume a single trust domain. Android may kill long processes; recovery must not weaken policy to "catch up". `termux-api` grants (contacts, SMS, camera) are additional high-risk capabilities and must be T3 by default. |
+| Android + Termux | Primary | No application sandbox between Crabby and Termux's own data dir: any process running inside Termux can read Crabby's files and any plaintext secret there. Assume a single trust domain. Android may kill long processes; recovery must not weaken policy to "catch up". `termux-api` grants are exposed only under D-033: each capability independently enabled, classified **T3**, per-action approval, no stored blanket grant. |
 | Linux | First-class | Standard user privileges — Crabby runs as the user and cannot claim stronger isolation without an added mechanism. Optional hardening (separate user, `bwrap`/`landrun`-style, systemd user sandbox) is a proposed future feature, not a promise. |
 | macOS | First-class | Keychain available for secrets; no per-directory ACL for Termux-style access; `TCC` prompts affect tool usability, which must be documented rather than worked around. |
 | Windows via WSL | Potential | Filesystem bridging means a workspace root under `/mnt/c` has weaker permission semantics. Path normalization and case-insensitivity need explicit tests. |
 | Native Windows | Not committed | Do not claim DPAPI/ACL-based protection until designed and tested. |
+
+Device capability rule (D-033): `termux-sms-send`, `termux-contact-list`, `termux-camera-photo`, location and sensor access are separate capabilities (`device.sms`, `device.contacts`, `device.camera`, `device.location`). Reading contacts to answer "who is in my family?" is still T3, because the sensitive act is disclosure into model context, not the write. Model providers therefore must not receive device capability output unless the current task explicitly approved that destination.
 
 Cross-platform requirement: path handling, permission bits, and process-group signaling must be implemented behind the platform adapter (`ARCHITECTURE.md` §17) and tested per platform, because these are exactly where security code tends to rot silently on the less-tested OS.
 
@@ -324,19 +360,20 @@ The security design is ready for implementation planning when:
 
 Recorded in `DECISIONS.md` §4; ownership is this document.
 
+Resolved by review — see `DECISIONS.md` D-030…D-033: client authentication mechanism, secrets storage
+strategy, remote posture, and `termux-api` exposure.
+
+Still open:
+
 - **O-008** Extension isolation strategy and supported trust levels.
-- **O-009** Remote authentication and tunnel lifecycle details.
-- **O-018** Secrets storage mechanism per platform.
-- **O-019** Local client authentication mechanism.
+- **O-009** Tunnel lifecycle details (URL rotation, reconnect, shutdown ordering).
+- **O-018** (remainder) Android `keystore` reachability from Termux; KDF and encryption parameters for the fallback.
+- **O-019** (remainder) Token format, optional expiry policy, pairing UX on narrow terminals.
 - **O-020** Per-tool risk-tier assignment.
 - **O-021** Depth of prompt-injection hardening for imported content.
 - **O-022** Audit log redaction rules.
-
-Additional items raised by this document that need a decision later, not now:
-
-- Whether `termux-api` capabilities (SMS, contacts, camera) are ever exposed to the agent, and at which tier.
-- Whether a per-task capability narrowing should be mandatory or opt-in.
-- Whether remote mode should hard-disallow `shell.run` entirely rather than merely elevate tiers.
+- **O-024** Initial `termux-api` capability list.
+- **O-025** Whether task-scoped capability narrowing is mandatory or opt-in.
 
 ## 20. Threat-to-Mitigation Summary
 

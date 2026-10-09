@@ -47,6 +47,11 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-027 | Context management: Hybrid compaction that never destroys original conversation records. | Accepted |
 | D-028 | Error handling: bounded retries, verification where practical, no security bypass to make a task succeed. | Accepted |
 | D-029 | Task, Event, Cancellation, and Checkpoint ownership is separated per `AGENT_RUNTIME.md` §4.4. | Accepted |
+| D-030 | Client authentication: per-client pairing tokens issued by an explicit `crabby auth pair` flow, stored with owner-only permissions, individually revocable, used for local and remote clients alike. | Accepted |
+| D-031 | Secrets storage: OS keychain where available (macOS Keychain, Linux Secret Service), encrypted-file passphrase fallback elsewhere (including Termux); the fallback must be labeled as weaker in UI and docs. | Accepted |
+| D-032 | Remote access adds no capability narrowing by default: a remote client may use exactly the permissions its paired identity holds, the same as a local client. Interface type may narrow only what the user configures, never what the core allows. | Accepted |
+| D-033 | `termux-api` device capabilities (SMS, contacts, camera, location, sensor read) may be exposed to the agent, classified T3 with per-action approval and no stored blanket grant; each capability is independently enable-able. | Accepted |
+| D-034 | Security decisions taken in `SECURITY.md` review are recorded here and must be reflected in that document; neither file may state a rule the other contradicts. | Accepted |
 
 ## 3. Proposed Technical Choices
 
@@ -78,7 +83,7 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-006 | TUI library | Open: compare terminal UI libraries for mobile terminal usability and platform support. |
 | O-007 | Windows support | Open: define the initial WSL support boundary and assess native Windows support. |
 | O-008 | Extension isolation | Needs Validation: evaluate permissions, process isolation, and practical sandboxing on Termux. |
-| O-009 | Remote authentication | Open: define authentication, authorization, and tunnel lifecycle. `SECURITY.md` §5 states the requirements; the concrete token scheme is unselected. |
+| O-009 | Tunnel lifecycle | Partly resolved: authentication is defined in `SECURITY.md` §5 and D-030/D-032. Open remainder: URL rotation on restart, reconnect handling, shutdown ordering, and exposure auditing. |
 | O-010 | Event replay | Open: define event IDs, ordering, retention window, replay, and reconnection semantics. |
 | O-011 | Context management algorithms | Needs Validation: evaluate token budgeting, compaction, retrieval, checkpointing, and recovery. |
 | O-012 | Installation and upgrades | Open: define installation, upgrade, rollback, backup, and recovery requirements per platform. |
@@ -87,11 +92,14 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-015 | Memory retrieval implementation | Open: define text-search implementation, indexing, and criteria for introducing vector search. |
 | O-016 | Memory deletion and privacy | Open: specify how deleting conversations affects summaries, memories, and derived records. |
 | O-017 | Backup and restore | Open: define a reliable, portable backup and restore procedure for persistent data. |
-| O-018 | Secrets storage mechanism | Open: `SECURITY.md` §7 states requirements; OS keychain vs encrypted file vs Termux-specific fallback is unselected. |
-| O-019 | Local client authentication method | Open: pair-token vs OS-user trust vs per-client identity — decision required before Gateway implementation. |
+| O-018 | Secrets storage mechanism | Accepted direction in D-031. Open remainder: Android/Termux `keystore` reachability from Termux, and the KDF/encryption parameters for the fallback file. |
+| O-019 | Local client authentication method | Accepted in D-030 (per-client pairing tokens). Open remainder: token format, expiry policy, and pairing UX on a phone-sized terminal. |
 | O-020 | Risk classification levels for tools | Open: `SECURITY.md` §6 proposes four tiers; tier assignment per tool is undecided. |
 | O-021 | Prompt-injection hardening depth for imported content | Open: instruction-source tagging vs full isolation. |
 | O-022 | Audit log redaction rules | Open: which payload fields are stripped vs hashed vs retained. |
+| O-023 | Remote shell posture | Accepted in D-032 (no tunnel-specific narrowing). See `SECURITY.md` §13 for the residual-risk note and the per-identity narrowing path. |
+| O-024 | `termux-api` exposure | Accepted in D-033 (T3, per-capability, per-action approval). Open remainder: the exact capability list shipped in the first release. |
+| O-025 | Mandatory per-task capability narrowing | Open: whether task-scoped narrowing (§6.1) should be required for every task or offered opt-in. |
 
 ## 5. Database Evaluation Record
 
@@ -155,6 +163,8 @@ Future technical decisions must respect these requirements:
 10. Resume checkpointed tasks only when the remaining actions can be evaluated for safety and duplicate-execution risk.
 11. Never let recovery, automation, or an AI recommendation weaken an approval requirement.
 12. Security policy is enforced centrally in the core, not in any interface.
+13. No request from any interface is processed without an identified paired client identity (D-030).
+14. Secrets never share a storage location with conversation, configuration, or log data (D-031).
 
 ## 7. Decision Process
 
@@ -170,12 +180,21 @@ For each open item:
 
 ## 8. Current Next Actions
 
-1. Review `SECURITY.md` and decide O-009, O-018, O-019, O-020, O-021, O-022.
-2. Write `EXTENSIONS.md`, then `PROVIDERS_AND_TOOLS.md`.
-3. Write `docs/INTERFACES_AND_API.md`, `docs/UI_UX_SPEC.md`, `docs/DESIGN_SYSTEM.md`.
-4. Write `docs/ROADMAP.md` and `docs/DEVELOPMENT.md`.
-5. Write `AGENTS.md` for AI coding agents.
-6. Run a final cross-document consistency review of all planning documents.
-7. Only then begin the implementation blueprint and the Termux validation prototype.
+**Done this round:** `SECURITY.md` written; D-030 (pairing tokens), D-031 (secrets), D-032 (remote posture),
+D-033 (`termux-api` tiers) accepted and propagated.
+
+1. Write `EXTENSIONS.md` — manifest format, compatibility check pipeline, import trust, sandbox gate (O-008).
+2. Write `PROVIDERS_AND_TOOLS.md` — provider interface, capability declaration, tool registry, and the per-tool
+   risk-tier assignment that closes O-020.
+3. Write `docs/INTERFACES_AND_API.md` — API contract, event envelope, pairing/revocation flow, reconnect and
+   replay rules (closes O-010).
+4. Write `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md`.
+5. Write `docs/ROADMAP.md` and `docs/DEVELOPMENT.md` (incl. `SECURITY.md` §17 test obligations).
+6. Write `AGENTS.md`.
+7. Final cross-document consistency review, then the Termux validation prototype.
+
+Remaining security-side open items: O-020 (tier per tool), O-021 (injection hardening depth), O-022 (audit
+redaction), O-024 (initial `termux-api` capability list), O-025 (mandatory task narrowing), plus
+O-001…O-017 as listed above.
 
 **Implementation remains out of scope until the planning documents and required decisions have been reviewed.**

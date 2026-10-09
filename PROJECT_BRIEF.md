@@ -176,7 +176,7 @@ Security is a foundational requirement, not an optional enhancement.
 Crabby should follow these principles:
 
 01. Default to local-only network access for a locally running Gateway unless the user explicitly configures another arrangement.
-02. Require appropriate authentication for protected interfaces and remote access.
+02. Require appropriate authentication for protected interfaces and remote access (per-client paired identities, `DECISIONS.md` D-030).
 03. Apply centralized authorization and permission checks to tool execution.
 04. Restrict filesystem access according to configured permissions and workspace boundaries.
 05. Treat shell execution and other high-impact operations as security-sensitive.
@@ -186,7 +186,7 @@ Crabby should follow these principles:
 09. Provide useful execution logs and audit information without unnecessarily exposing sensitive data.
 10. Keep user control over data storage, memory, and integrations.
 
-Specific sandboxing mechanisms, threat-model details, and approval policies are defined in `SECURITY.md`. Their effectiveness must not be assumed without validation.
+Specific sandboxing mechanisms, threat-model details, capability vocabulary, risk tiers, and approval policies are defined in `SECURITY.md`; the accepted choices there are recorded in `DECISIONS.md` D-030…D-034. Their effectiveness must not be assumed without validation.
 
 ## 11. Storage and Memory
 

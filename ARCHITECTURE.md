@@ -469,7 +469,7 @@ Data-level requirements are specified in `docs/DATA_AND_MEMORY.md`.
 
 Local mode is the default.
 
-The Gateway should bind to loopback interfaces unless a different exposure mode is explicitly configured. Access from local clients must still follow the relevant authentication and authorization requirements.
+The Gateway should bind to loopback interfaces unless a different exposure mode is explicitly configured. Access from local clients must still follow the relevant authentication and authorization requirements: every client uses a per-client paired identity (`DECISIONS.md` D-030), and the Gateway resolves that identity before routing. Authentication requirements are owned by `SECURITY.md` §5.
 
 The runtime must not require a cloud service to start or use supported local functionality.
 

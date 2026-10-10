@@ -1,0 +1,98 @@
+# The CI file is small on purpose, and what is *not* here is as deliberate as what is: docs/DEVELOPMENT.md §12 lists the
+# full matrix and says which legs arrive in which milestone. A job that cannot pass on the runner is worse than no job,
+# because it teaches everyone to ignore red.
+#
+# Everything below runs today, on the same commands `npm run` runs locally:
+#   * typecheck, lint, format:check — the three the docs promise are required;
+#   * test — unit + integration + security suites in one glob, over real HTTP on an OS-chosen port;
+#   * test:parity — the D-067 generator, in check mode, comparing the documents against `packages/policy`,
+#     `apps/cli/registry.ts` and `packages/gateway/app.ts` rather than against each other;
+#   * docs:check — the 22-document invariant, required for the reason §12 gives: a green build of a lying plan.
+#
+# No step in this file passes a `secrets:` block, which is how §12's "no job may require network access to a live model
+# provider" holds: the suites carry their own fake provider, so a test that quietly started needing a real key fails on
+# CI instead of quietly becoming a network dependency. If a key is ever added here, it has to come with a reason that
+# survives that sentence.
+#
+# Deliberately absent: `build`, `web build` and the install-from-tarball smoke (M2/M3/M4, when there is a build to run),
+# and the Termux leg — `termux/termux-docker` is a Docker image, not an Action, and an x86_64 container has no Android
+# runtime and no termux-api, so it would prove the container works rather than the phone does. The M0 device checklist
+# in docs/ROADMAP.md §2 is what covers that half until there is a self-hosted ARM runner to point it at.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # `macos-arm64` in the docs is macos-14: the arm64 image. The third matrix row the plan carries — `termux` —
+        # is not here for the reason in the header.
+        include:
+          - os: ubuntu-22.04
+            label: linux-x64
+          - os: macos-14
+            label: macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # The runner's Node, not the project's floor: `docs/DEVELOPMENT.md` §1 makes `engines.node` authoritative for
+          # that, and `docs/CONSISTENCY_REVIEW.md` F-28 is why the pin is still unwritten — CI cannot measure the phone,
+          # so it does not decide what the phone must run. 22 is the LTS line the suites pass on locally.
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: typecheck
+        run: npm run typecheck
+      - name: lint
+        run: npm run lint
+      - name: format
+        run: npm run format:check
+      - name: test
+        run: npm test
+      - name: test:security
+        run: npm run test:security
+      - name: test:parity
+        run: npm run test:parity
+
+  docs:
+    name: docs:check
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      # Python because `scripts/check-docs.py` is the 22-document invariant; Node because the parity generator is
+      # TypeScript that imports the packages it checks, which is the whole point of it.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22"
+      - run: npm ci --no-audit --no-fund
+      - name: 22 documents, one truth
+        run: python3 scripts/check-docs.py
+      # §8 is regenerated rather than only compared: `--write` still exits 1 when a route, a command or a capability is
+      # genuinely inconsistent, and the `git diff` after it catches the one case a check cannot — a table that is stale
+      # because someone edited the generated rows instead of the source. The fix text is in the failure, because a
+      # required check nobody can satisfy locally is a wall.
+      - name: §8 is up to date
+        run: |
+          npm run test:parity -- --write
+          git diff --exit-code docs/INTERFACES_AND_API.md || {
+            echo "::error::docs/INTERFACES_AND_API.md §8 is stale — run \`npm run test:parity -- --write\` and commit the table"
+            git --no-pager diff -- docs/INTERFACES_AND_API.md
+            exit 1
+          }

@@ -1,11 +1,12 @@
 # Crabby — M-D Cross-Document Consistency Review
 
-> **Status:** In progress — first pass complete. Mechanical checks pass; human verification by the owner is the
-> remaining item (§6).
+> **Status:** In progress — mechanical checks pass and every open question the documents could answer on their own is
+> now answered; human verification by the owner (§6) is the remaining item. The set does not need more planning
+> documents, it needs the two things a plan cannot supply: the element review, and the seven M0 measurements.
 >
 > **Reviewed:** 22 documents (16 planning at `*.md` and `docs/*.md`, 4 element inventories, the review index and
-> this file), most recently on 2026-10-10 — findings F-13…F-17 are from that pass, so every earlier finding has been
-> re-checked against the documents as they now stand.
+> this file), most recently on 2026-10-10 — findings F-13…F-21 are from the two 2026-10-10 passes (the (R) round and
+> the finalization round), so every earlier finding has been re-checked against the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
 > a scratch pad: every finding below is either fixed with a decision ID, or explicitly listed as still open.
@@ -289,12 +290,88 @@ without an open `O-` reference (negative-tested).
 them is edited. `Proposed` in a register is a *promise that someone is still deciding* — and if nobody is, the row is
 not undecided, it is abandoned.
 
+### F-18 — The fix for F-14 was applied to seven of eight places and nobody noticed
+**Severity: medium, systemic.** F-14 found eight lists of questions that had already been answered and recorded that
+"each list now states the answer". It did not. `AGENT_RUNTIME.md` §12 still carried fifteen bare bullets — task state
+machine, step granularity, checkpoint format, retry and backoff, compaction, budgeting, event schema, retention — every
+one of them answered inside that same document (§4.1, §7.3, §8, §9, §10) or by D-043, D-064, D-065, D-074. The heading
+said "Open Decisions"; the content was a history of decisions not yet marked as one.
+
+**Resolution:** §12 is now a disposition table — item, decided where, and what a phone still has to say — so a reader
+can check each claim against the section it names, and only the genuinely-measurable residue is left in an open-list.
+**Rule 15** of `scripts/check-docs.py` is the systemic half: every bullet and every table row under a heading that
+announces open questions must cite a `[DPO]-` id or a `§` of the document. Negative-tested by blanking one citation.
+
+**Lesson kept:** a finding that says "in eight places" has to be closed eight times. A fix verified only where it was
+first noticed is a fix with a coverage claim attached, and the claim is the part that lies.
+
+### F-19 — An import mapping would have let an untrusted file grant itself privileges
+**Severity: high.** `EXTENSIONS.md` §11's C-1 row listed the portable-skill import scope as "Markdown body + supported
+frontmatter fields (name, description, allowed-tools mapping)". In the upstream format `allowed-tools` *pre-approves
+tools for the skill* — so "mapping" it, read the way an implementer would, means Crabby takes a permission list from the
+file it is about to run and skips the approval step that file should be passing. The format's own security notes describe
+that failure in another harness, where such a line applies even in an untrusted folder. Nothing else in the set
+contradicted it: D-046 and `SECURITY.md` §6.2 own approvals, and the sentence that would have caught it — §11 rule 4,
+"fields that encode host behavior are translated only when there is a genuine Crabby equivalent" — did not name
+`allowed-tools`, because Crabby has a *vocabulary* for tool names even though it has no equivalent for granting them.
+
+**Resolution:** D-071 makes the field set a contract with three treatments and `allowed-tools` as the documented case of
+a fourth: **recorded, never granted**. The names are mapped into the `SECURITY.md` §6.1 vocabulary for the capability
+diff and flagged for review at install; no tier check is ever skipped because a file asked. `EXTENSIONS.md` §4.3 carries
+the table and the reasoning, §11's row now says "read for the capability diff and never granted", and the same table
+cites `SECURITY.md` §6.2's floor so the two cannot drift apart silently.
+
+**Lesson kept:** a compatibility import is a security boundary with a nicer name. Every field copied from someone else's
+format has to be classified as *data*, *display*, or *authority*, and the answer is data or display unless a decision
+says so in that document — never inferred from the source format's semantics.
+
+### F-20 — Two open questions were open nowhere, and the register's own arithmetic was wrong
+**Severity: medium.** `EXTENSIONS.md` §15 listed "Signing/integrity mechanism for `verified-community`" and "Sandbox on
+Termux" as open items. Neither had an `O-` row, so neither appeared in the register, in the counters, in the veto list,
+or in §6 of this file — an untracked open question is invisible to every control built to find stale open questions.
+Reading on for that same class of defect, `DECISIONS.md` §8's prose described the `P-` table as "Five of the ten rows
+are Accepted, four Superseded, and three Needs Validation" — twelve statuses across ten rows. The two counter cells
+rule 9 checks were right; the sentence *beside* them, the one a human reads, was not.
+
+**Resolution:** the two questions are now **O-064** (signing mechanism, with the "no hosted service" constraint and a
+revocation story) and **O-065** (Termux sandbox enforcement, measured by M0 P7 with a documented-limitation fallback),
+which moves the tracked count to 65 and the count of rows carrying work to eight. The `P-` sentence is corrected to
+four/three/three with the ids named, and `scripts/count-inventory.py --register-counters` prints all three counter cells
+*and* the ids it could not classify as closed, so both kinds of arithmetic mistake are a paste rather than a memory.
+Rule 15 requires the same of every row in a table like §15, which is what turned the two untracked items up.
+
+**Lesson kept:** an item that is not in the register does not exist, and a number beside a table is a second copy of the
+table. Both are fixed by the same thing: print the number from the data instead of typing it.
+
+### F-21 — Four table rows were splitting on an unescaped pipe, and one of them reached the review instrument
+**Severity: medium, mechanical.** A literal `|` inside a Markdown table cell ends the cell. `scripts/check-docs.py`
+checked table *content* (statuses, ids, coverage) and never table *shape*, so four rows across four documents had been
+rendering wrong for an unknown number of rounds: `EXTENSIONS.md` §15's conversion-report row (a stray pipe from an
+earlier patch that had also left the sentence repeating itself), `docs/DESIGN_SYSTEM.md` §3's fallback glyph row
+(`||` inside a code span, which does not protect pipes), `docs/INTERFACES_AND_API.md` §5's approval-decision row
+(`approve|deny`), and — the one that mattered — `docs/review/WEB.md`'s W13-09 Gateway-lifecycle row, which had six
+cells in a four-column table *and* was filed out of id order between W13-07 and W13-08, the signature of a hand-pasted
+row nobody re-parsed.
+
+The Web inventory row is not documentation-only: `docs/review/mockups/build.py` generates the review instrument from it,
+and it parsed the six cells into a label containing `| restart and shutdown, both T3 | 2 buttons |` plus a `content`
+field carrying one of them. So the screen the owner reviews element-by-element has been showing a corrupt row, and the
+generator said nothing, because a generator that tolerates anything reads as verified.
+
+**Resolution:** all four rows rewritten to the correct cell count with literal pipes escaped as `\|`, W13-09 re-filed
+after W13-08, and **rule 16** added — every row in a table must have as many cells as its header, fences skipped so
+ASCII diagrams are untouched. Negative-tested twice (a split row and an unescaped `||`). The mockup was regenerated and
+re-checked headlessly after the fix.
+
+**Lesson kept:** when a document is a *source* for a tool, its grammar is an interface. Lint the shape at the source,
+because a tolerant parser turns a formatting typo into shipped UI text with no signal anywhere.
+
 ## 3. Checks That Passed
 
 | Check | Result |
 | --- | --- |
 | All `D-`/`P-`/`O-` references resolve to a register row | ✓ |
-| Every referenced document resolves, or is an advisory for a planned-but-unwritten file | ✓ (1 advisory: `CHANGELOG.md`, created at first release) |
+| Every referenced document resolves, or is an advisory for a planned-but-unwritten file | ✓ (3 advisories, all `CHANGELOG.md`, created at first release: `README.md`, `docs/DEVELOPMENT.md`, this file) |
 | Markdown links resolve | ✓ |
 | `§N` cross-references point at a section that exists in the target file | ✓ |
 | Every tool-requested capability exists in the `SECURITY.md` §6.1 vocabulary | ✓ (enforced by the checker) |
@@ -304,6 +381,10 @@ not undecided, it is abandoned.
 | Review-progress tables equal the parsed rows (`scripts/count-inventory.py` and the checker agree by construction) | ✓ |
 | Palette ratios in `docs/DESIGN_SYSTEM.md` §2.3 recompute from the hexes, against the worst surface, with a floor that cannot be lowered for text | ✓ (rule 13; stale numbers and washed-out values both fail, verified) |
 | No `P-` row sits at `Proposed` without an open `O-` blocker | ✓ (rule 14, added because of F-17) |
+| Every item in an open-questions list cites the decision or section that owns it | ✓ (rule 15, added because of F-18; negative-tested by blanking a citation) |
+| The section 8 counters and the `P-` row arithmetic are printed by a tool, not remembered | ✓ (`scripts/count-inventory.py --register-counters`) |
+| `allowed-tools` in an imported skill cannot grant a privilege | ✓ (D-071, `EXTENSIONS.md` §4.3 — F-19) |
+| Markdown tables are rectangular, so a generator reads the same row a human does | ✓ (rule 16, added because of F-21; 4 pre-existing rows fixed) |
 
 ## 4. Requirements Coverage From `PROJECT_BRIEF.md`
 
@@ -337,8 +418,11 @@ Being explicit, because "reviewed" must not quietly mean "verified":
     That is M0's job, and M0 can still invalidate `P-003`, `P-010`, and `P-006`. The (R) round of 2026-10-10 changed
     the *designs* around those measurements and did not touch their status: what it recorded is either arithmetic that
     can be redone here (contrast ratios, cluster widths, registry versions and dates) or a choice about what to build.
-    Nothing that needs a phone was presented as settled, and the five items that need one say so with a protocol
-    (`docs/review/DECISION-QUEUE.md` §2).
+    Nothing that needs a phone was presented as settled. Eight rows carry work and each names its closing step in
+    `DECISIONS.md` §4: O-001 and O-002 (a clean Termux build, a WAL torture), O-006 and O-051 (a phone render), O-008
+    (real extensions), O-052 (post-v1 by choice), and the two registered while finalizing — O-064 (signing) and O-065
+    (sandbox). The (R) round's recommendations stay separately reviewable and vetoable in
+    `docs/review/DECISION-QUEUE.md` §2.
 02. **`SECURITY.md` has not been adversarially reviewed** by anyone other than its author. A threat model written by
     the same agent that writes the mitigations is a single point of failure; the T-01…T-15 → test mapping should be
     checked by a second reader before M5 exit.
@@ -354,7 +438,14 @@ Being explicit, because "reviewed" must not quietly mean "verified":
     ones left open, and the register marks it (`Needs Validation`) rather than smoothing it over.
 05. **Cost/effort is unestimated.** `docs/ROADMAP.md` gives order and gates, not durations. Turning it into a
     schedule would require the owner's availability, which is not a documentation fact.
-06. **Bengali rendering and input ergonomics are untested** on a real phone keyboard (`docs/UI_UX_SPEC.md` §9,
+06. **The skill frontmatter field set is described by secondary sources.** D-071's constraints (name length and folder
+    equality, the 1–1024 description, `compatibility` as prose, `allowed-tools` as an experimental pre-approval list) were
+    cross-checked on 2026-10-10 against six independent write-ups of the upstream spec, which agree with each other — not
+    against a fetched normative file, and the spec is younger than this project's ambition for it. Crabby's own rule is
+    what makes that survivable: an unknown field is recorded and never fatal, so a spec change costs a report line rather
+    than a broken import. The numbers in D-074 are likewise unfalsifiable here; each is a starting value whose only judge
+    is a device, which is why they ship as `limits.*` keys instead of prose.
+07. **Bengali rendering and input ergonomics are untested** on a real phone keyboard (`docs/UI_UX_SPEC.md` §9,
     `docs/DESIGN_SYSTEM.md` §11) — this matters more for this project than for most, since the owner's working
     language is Bengali and the primary device is a phone. What *was* measured here is the arithmetic behind the
     layout rule (code units vs grapheme clusters vs cells, in Node 22), which is enough to decide how truncation must
@@ -371,9 +462,10 @@ The remaining half of M-D. Each item is a yes/no, not a discussion:
       (`P3` driver, `P5` TUI) enough to proceed?
 - [ ] Read `AGENTS.md` §7 (forbidden shortcuts) as the rules you actually want enforced on every future coding turn.
 - [ ] Read `docs/review/DECISION-QUEUE.md` and veto anything in the (R) round you disagree with, one row at a time
-      (D-059). Thirteen `O-` rows are still open: O-001/O-002 (a phone build), O-006/O-051 (a phone render), O-008
-      (real extensions), O-052 (post-v1 by choice) and the halves of O-012/O-018 that M0 will finish — confirm that
-      nothing is open out of habit.
+      (D-059), and veto D-071…D-074 the same way if any of the four was answered wrong. Eight `O-` rows carry work —
+      O-001/O-002 (a phone build), O-006/O-051 (a phone render), O-008 (real extensions), O-052 (post-v1 by choice),
+      O-064 (signing) and O-065 (Termux sandbox) — and none of them is open out of habit: each states the measurement
+      that closes it.
 - [ ] Decide whether the (R) round's *process* is the pattern you want: a delegated answer recorded with its evidence
       and marked `(R)` beats an unmarked assumption, but it does move work from "asked" to "reviewed after". If you
       would rather every item were asked first, say so and D-059 goes back to `Proposed`.
@@ -394,8 +486,9 @@ The remaining half of M-D. Each item is a yes/no, not a discussion:
       the approved rows, then re-run §7.
 
 675 elements, 25 decided as of this round — the 25 are the rows whose only blocker was an open question the (R) round
-answered; the other 650 wait on the owner, not on research. (The count grew from 590 while F-08…F-10 were being fixed: a screen with no rows is the most expensive kind of gap, because it costs nothing to notice.) Nothing in this list is a formality: a row that reads "the small chip"
-has as much standing as "the chat pane", and cutting it is a decision with an ID.
+answered; the other 650 wait on the owner, not on research. The count grew from 590 while F-08…F-10 were being fixed,
+because a screen with no rows is the most expensive kind of gap — it costs nothing to notice. That is also why a screen
+named in an inventory has the same standing as "the chat pane": cutting one is a decision with an ID, never an edit.
 
 When these are ticked, `docs/ROADMAP.md` §0 moves to "M-D complete" and M0 starts.
 

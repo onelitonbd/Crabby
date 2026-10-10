@@ -30,7 +30,7 @@ tools, memory, skills, plugins, and permission-controlled execution — all behi
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phases M0–M6, entry and exit conditions, and which open items block which phase. |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Environment, scripts, testing, CI, release and Termux development rules. |
 | [`docs/review/`](docs/review/README.md) | **The gate in front of M0:** 675 elements across the four interfaces, one status per row, reviewed element by element (D-055). `docs/review/mockups/crabby-web-ui.html` is the Web UI as one file, generated from the inventory. |
-| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-16), what it could not verify, and the owner's checklist. |
+| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-21), what it could not verify, and the owner's checklist. |
 | [`AGENTS.md`](AGENTS.md) | The rules a coding agent works under, including the forbidden shortcuts. |
 
 `python3 scripts/check-docs.py` lints this planning set — decision-ID references, cross-links, section anchors,

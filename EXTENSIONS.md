@@ -111,6 +111,62 @@ Validation requirements: unknown fields are rejected with a message (not ignored
 disable a declared capability; `id` collisions with an installed extension require an explicit decision; the
 manifest parser must enforce size and depth limits to avoid pathological input.
 
+### 4.3 Skill frontmatter fields
+
+A skill is the one kind that often arrives without a manifest, so its frontmatter is its manifest and the field set
+is a contract (D-071). The upstream Agent Skills format defines `name`, `description`, and optionally `license`,
+`compatibility`, `metadata`, and an experimental `allowed-tools`; Crabby treats each in one of three ways, because
+"we can read this" and "we trust this" are different questions.
+
+| Field | Required | Treatment | Rule |
+| --- | --- | --- | --- |
+| `name` | yes | Honored | 1–64 characters, lowercase letters, digits and single interior hyphens, and **equal to the containing folder name**. A mismatch is a hard error, not a warning: the name is the install key, and a skill that installs under a name its folder denies is two sources of truth. |
+| `description` | yes | Honored, untrusted | 1–1024 characters, expected to state what the skill does and when to use it. It is model-visible, therefore untrusted content under `SECURITY.md` §10 — the field that decides activation is the field an author can lie in, and every interface that lists skills shows it as quoted author text, not as a system statement. |
+| `license` | no | Honored | SPDX identifier, or free text naming a bundled license file. Absence is a warning, not a block: the ecosystem ships both, and refusing an otherwise valid skill over metadata would push users toward disabling the check. |
+| `compatibility` | no | Displayed, not enforced | Free prose about the environment the author tested. Shown on the install screen and copied into the conversion report. Crabby does not parse it, and no behavior changes because a skill claims compatibility with something. |
+| `metadata` | no | Honored only for known keys | `version`, `author`, `tags`, and namespaced `crabby.*` keys are interpreted. Any other key is preserved verbatim and not read — a field we do not understand must survive a round trip so a later version can understand it. |
+| `allowed-tools` | no | **Recorded, never granted** | See the note below. |
+| anything else | no | Ignored loudly | One named line in `ext validate` and the conversion report. |
+
+`allowed-tools` is the interesting one, and the reason this table exists. In the upstream format it pre-approves tools
+for the skill, read from a file that Crabby has no reason to trust — the format's own security notes describe a
+harness where such a line applies even in an untrusted folder, letting a repository's skill grant itself broad shell
+access before anyone approves it. Crabby maps the names into the `SECURITY.md` §6.1 vocabulary **for reporting only**:
+they appear in the capability diff, and a skill requesting them is flagged for review at install. An approval tier is
+never skipped because a file asked to be exempt from approvals; that would move the security decision into the payload
+(§1.3). A user who wants fewer prompts gets them from `--restrict` plus remembered decisions owned by Crabby
+(`SECURITY.md` §6.3), not from an author's frontmatter.
+
+Body size, which the format leaves to implementations: over 500 lines is a validation **warning** recommending a split,
+and a body over 32 KiB is **refused at activation** with the instruction to move material into `references/`. Truncating
+instructions is the one thing a skill loader may never do — a truncated rule reads exactly like a complete one, and the
+model will follow the part that survived.
+
+Native manifests stay strict where imported skills are lenient, and that asymmetry is deliberate: a `crabby.extension.json`
+rejects unknown fields so a typo cannot silently drop a declared capability, while an imported `SKILL.md` records and
+preserves what it does not understand (§11 rule 3), because rejecting someone's upstream file for carrying a field
+dated after this release is how an import path becomes useless.
+
+### 4.4 Host API version policy
+
+`hostApi` in the manifest (min and max) is the mechanism; this is the policy it implements (D-072).
+
+* One version pair, `major.minor`, for the whole host API surface — not one per capability. Per-capability versions
+  would need a resolver, and a resolver is where "works on my host" goes to hide.
+* `minor` bumps are additive: a new optional method, a new field in a result. A bundle whose `max-host-api` is below
+  the running minor still loads, because nothing it called changed.
+* `major` bumps mark anything that changes a signature, a meaning, or a security-relevant default. A bundle whose
+  `min-host-api` exceeds the host **refuses to load** with `ext_host_api_unsupported`, naming both versions in the
+  message. "Half-loaded, some calls failing" is the failure mode this prevents.
+* v1 ships exactly one major. Supporting two live majors is a maintenance promise this project cannot keep on a
+  phone-sized codebase, and an honest refusal costs one error message.
+* Deprecation is a three-step ladder with at least one release between steps: `@deprecated` plus the replacement's
+  name in a minor → a warning line in `ext check-compat` and in the load report in the next minor → removal at the
+  following major. There is deliberately no release changelog before the first release, so the authoritative record of what is
+  deprecated is `ext check-compat` output, which every interface can surface — a command is harder to leave stale than a file.
+* Skills without a manifest take the current minor implicitly, and a converted skill records the resolved pair in its
+  conversion report, so "what did this assume when it was imported" stays answerable years later (D-039).
+
 ## 5. Lifecycle
 
 States: `discovered → validated → installed → enabled → active → suspended → disabled → uninstalled`, with
@@ -267,7 +323,7 @@ Adapters are built in this priority order, matching the direction recorded in `A
 
 | Phase | Target | Import scope | Explicitly out of scope |
 | --- | --- | --- | --- |
-| C-1 | Portable `SKILL.md` instruction packs | Markdown body + supported frontmatter fields (name, description, allowed-tools mapping) | Hooks, model overrides, tool-result plumbing |
+| C-1 | Portable `SKILL.md` instruction packs | Markdown body + the honored fields in §4.3 (`name`, `description`, `license`, `compatibility`, `metadata.version`/`author`/`tags`); `allowed-tools` is read for the capability diff and never granted | Hooks, model overrides, tool-result plumbing |
 | C-2 | MCP server configuration files | Server definitions, transport settings, env var *names* (never values) | Automatic approval of any server |
 | C-3 | Claude Code packages | Skills, slash-command definitions, agent descriptions as content | Executable hooks, host-API plugins, LSP integrations |
 | C-4 | OpenClaw bundles | Skills, tool references, plugin metadata as descriptors | Anything requiring an equivalent host runtime Crabby lacks |
@@ -343,15 +399,15 @@ Recorded and tracked in `DECISIONS.md`:
 | Topic | Status |
 | --- | --- |
 | Plugin isolation and supported trust levels (**O-008**) | Needs Validation. Candidate ordering: (1) in-process with filtered API for bundled/first-party only; (2) child-process execution with a capability RPC for everything else. `worker_threads` is documented as *insufficient* for security isolation and therefore not a mitigation. On Termux, `node:vm` is likewise not a security boundary. Gate: untrusted executable code stays off until a candidate passes a hostile-extension test. |
-| Extension registries | Open. No official registry in the initial release; install-by-path and install-by-git-URL only. |
+| Extension registries | **Decided as a v1 non-goal (D-035, D-050).** Install-by-path and install-by-git-URL only, so no index service, no moderation queue, no availability dependency. Revisit only when there is a publisher to be accountable to (O-064). |
 | Native extension format for third parties (**follow-on of O-008**) | Open. Contract drafted here; publication of a stable third-party API waits for the isolation decision. |
-| Event-hook capability surface | Deferred with isolation. |
-| Extension API versioning policy | Open: how host API versions are declared, negotiated, and deprecated. |
-| Skill frontmatter field set (feeds **O-021**) | Open as a field list; the rule behind it is not — D-065 closed O-021 by deciding that imported text is data, tagged by source and never parsed as an instruction. Which fields are honored versus recorded as ignored is a reviewable detail, and recording an ignored field is a requirement rather than a nicety: silence is what makes a user believe a `permissions:` line did something. |
-| Signing/integrity mechanism for `verified-community` | Open; must not require a hosted service. |
-| Sandbox on Termux | Needs Validation: practical options are limited (`SECURITY.md` §15); document as a platform limitation if none prove viable. |
+| Event-hook capability surface | Deferred with isolation (**O-008**): the surface cannot be sized before it is known which process may hold it. |
+| Extension API versioning policy | **Decided (D-072).** Declared as one `major.minor` pair in `hostApi`, additive changes bump the minor and never break a bundle, breaking changes bump the major and refuse to load, deprecated in three steps. §4.4. |
+| Skill frontmatter field set (feeds **O-021**) | **Decided as a field list (D-071), §4.3.** The rule behind it was already settled: D-065 closed O-021 by deciding imported text is data, tagged by source and never parsed as an instruction. Recording an ignored field is a requirement rather than a nicety — silence is what makes a user believe a `permissions:` line did something — which is why every unknown key, and `allowed-tools` in particular, produces a named line in the report. |
+| Signing/integrity mechanism for `verified-community` | Open as **O-064**; must not require a hosted service, and the tier stays unofferable until the mechanism and its revocation story exist. |
+| Sandbox on Termux | Needs Validation as **O-065**: practical options are limited (`SECURITY.md` §15); M0 P7 measures it, and the fallback is a documented platform limitation, not a claim. |
 | MCP server role | **Decided: non-goal (D-040).** Crabby is a client only. |
-| Conversion-report history depth | **Closed by D-065** (O-027): the report for the installed version and the one before it are kept, older ones pruned, and reports are included in user exports. Accepted in D-039 as retained and diffable. Two versions is the whole answer to "when did this start failing" while unbounded retention is only an answer to storage pressure | before pruning, and whether reports ship inside user exports/backups. |
+| Conversion-report history depth | **Closed by D-065** (O-027), accepted earlier in D-039 as retained and diffable: the report for the installed version and the one before it are kept, older ones are pruned, and both ship inside user exports. Two versions is the whole answer to "when did this start failing", and unbounded retention would only be an answer to storage pressure. |
 
 ## 16. Acceptance Criteria
 

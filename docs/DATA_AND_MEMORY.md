@@ -50,7 +50,19 @@ Crabby uses a hybrid memory approach (D-019):
 - Memory retrieval should be relevant to the current task and respect access and deletion rules.
 - Automatic memory creation must be possible to disable entirely for users who require that.
 
-**Unresolved:** confidence rules and automatic extraction thresholds — numbers to set against real usage in M2. Memory categories and the user-facing controls are not open in the same sense: they are specified by the inventories (`docs/review/WEB.md` regions W7/W8, `docs/review/TUI.md` region T9) and await the owner's element review (D-055), which is a different status from undecided.
+**Decided (D-073).** A memory carries **provenance, not a confidence score**: how it was learned (`stated` by the user /
+`confirmed` by an outcome / `inferred` from a pattern), which task or conversation it came from, how many independent
+sources support it, and when it was last confirmed. Rank is shown as a word, never a percentage — a model-written float
+cannot be calibrated by anyone, and an uncalibrated number is trusted anyway, which makes it worse than no number.
+Conflicts: a newer `stated` supersedes an older `stated`; `inferred` never overrides or deletes `stated`; anything the
+two rules cannot settle is **displayed** as two entries with timestamps, matching the no-silent-edit rule for deletions
+below. Automatic extraction is off by default, and when enabled each candidate is a diff the user can refuse before it
+is written — a memory written silently is a personality change nobody approved.
+**What stays open is one number:** the promotion threshold for `inferred` entries, tuned in M2 against the reviewed
+acceptance list (`docs/review/`), one value per rule with the case that motivated it. Memory categories and the
+user-facing controls are not open in the same sense: they are specified by the inventories (`docs/review/WEB.md`
+regions W7/W8, `docs/review/TUI.md` region T9) and await the owner's element review (D-055), a different status from
+undecided.
 
 ### 2.4 Memory Search
 

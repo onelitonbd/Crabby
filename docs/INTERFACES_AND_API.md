@@ -127,7 +127,7 @@ coverage does not shrink.
 | `POST /tasks/{id}/resume` | Explicit resume, for the cases auto-resume declined (§7.2 of the runtime doc). |
 | `GET /tasks/{id}/events?cursor=` | Historical events for a task; replay window is per-task and count-bounded (D-049). |
 | `GET /approvals?state=pending` | Approval queue for this client. |
-| `POST /approvals/{id}/decision` | `{ decision: approve|deny, scope: once }`. Only `once` exists in the first release for T2/T3 per `SECURITY.md` §6. |
+| `POST /approvals/{id}/decision` | `{ decision: approve\|deny, scope: once }`. Only `once` exists in the first release for T2/T3 per `SECURITY.md` §6. |
 | `GET /tasks/{id}/checkpoint` | Checkpoint view for recovery transparency. |
 | `GET /jobs` · `PATCH /jobs/{id}` · `POST /jobs/{id}/pause` | Scheduled jobs (`PROVIDERS_AND_TOOLS.md` §4.5). |
 

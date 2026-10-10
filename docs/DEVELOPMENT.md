@@ -41,7 +41,7 @@ from, and interface apps never import core internals directly.
 | `npm run test:security` | `SECURITY.md` §17 suite |
 | `npm run test:live` | Opt-in; hits real providers; never required for a green build |
 | `npm run lint` / `npm run format` / `npm run typecheck` | Biome, chosen in D-060 (closing O-047 and O-048). The dependency name is `@biomejs/biome` — the bare `biome` package on npm is an unrelated 2016 artifact, and a `package.json` that says `biome` installs the wrong thing silently. TypeScript itself does the typecheck; Biome does not |
-| `npm run docs:check` | `python3 scripts/check-docs.py` — planning-document lint, including the §4B review counts and the palette ratios; `npm run docs:count` runs `python3 scripts/count-inventory.py --markdown` and prints the rows to paste |
+| `npm run docs:check` | `python3 scripts/check-docs.py` — planning-document lint, including the §4B review counts and the palette ratios; `npm run docs:count` runs `python3 scripts/count-inventory.py --markdown` and prints the rows to paste, and `--register-counters` prints the `DECISIONS.md` §8 counter cells — both are paste-instead-of-type because counting a register by hand has been wrong twice (F-20) |
 | `npm run test:parity` | Parity test over `docs/INTERFACES_AND_API.md` §8 |
 | `npm run test:termux` | The above on-device; run manually before release, and in CI only if a runner exists |
 

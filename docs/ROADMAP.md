@@ -11,7 +11,7 @@
 ```
 Documentation ────────────────────────────► [YOU ARE HERE: M-D review] ─► M0 ─► M1 ─► M2 ─► …
  PROJECT_BRIEF ✓   ARCHITECTURE ✓   AGENT_RUNTIME ✓   SECURITY ✓   EXTENSIONS ✓
- PROVIDERS_AND_TOOLS ✓   DECISIONS ✓ (68 accepted · 10 proposed · 13 open)   README ✓
+ PROVIDERS_AND_TOOLS ✓   DECISIONS ✓ (74 accepted · 10 proposed · 65 tracked, 8 open)   README ✓
  docs/  DATA_AND_MEMORY ✓   INTERFACES_AND_API ✓   UI_UX_SPEC ✓   DESIGN_SYSTEM ✓
         ROADMAP ✓   DEVELOPMENT ✓            AGENTS.md ✓
 ```
@@ -197,16 +197,18 @@ Blocking means the shape of code depends on it, so guessing would be expensive:
 D-049 (per-task `seq`, count-bounded window, gap + reconcile-by-GET); O-012 install path → D-050; O-019
 token/expiry → D-051.
 
-**Closed in the (R) round (2026-10-10, D-059…D-068):** fifty of the sixty-three tracked items, including all eleven
+**Closed in the (R) round (2026-10-10, D-059…D-068):** fifty of the then-63 tracked items, including all eleven
 questions the element review had raised (O-053…O-063) and everything the toolchain, terminal contract, provider
 runtime policies, data policies, platform boundaries and interface shapes were waiting on. `docs/review/DECISION-QUEUE.md`
 is the row-by-row record, with the evidence and the veto path.
 
 What that leaves is a short list and an honest one: M0 is unblocked by decision, and the only way to close the items
-above is to run the probes. Six items carry work in the register — O-006, O-051, O-008 and O-052 open, plus the one
-measured clause left in O-001 and O-002 — and each is open because it needs a phone, needs real extensions, or is a
-post-v1 design question (D-052), never because nobody got to it. `scripts/check-docs.py` counts the register on every
-run, so a stale "still open" cannot survive a commit. The 63 `O-` rows are not 63 open questions: a closed question
+above is to run the probes. Eight items carry work: O-006 and O-051 (a phone render), O-008 (real extensions),
+O-052 (post-v1 by choice), the one measured clause left in each of O-001 and O-002, and the two questions registered
+while finalizing because they had no row at all — O-064 (signing mechanism) and O-065 (Termux sandbox). Each is open
+because it needs a device, needs real extensions, or is a post-v1 design question (D-052) — never because nobody got
+to it. The four questions that needed neither were decided instead, as D-071…D-074. `scripts/check-docs.py` counts the register on every
+run, so a stale "still open" cannot survive a commit. The 65 `O-` rows are not 65 open questions: a closed question
 keeps its number so that documents citing it stay true.
 
 ## 12. Roadmap Acceptance Criteria

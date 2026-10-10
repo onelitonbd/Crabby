@@ -6,7 +6,8 @@ Run: python3 scripts/check-docs.py
 These are documentation lint rules, not implementation tests. They cover the planning set and
 the element inventories under `docs/review/`, and they encode the project's own process rules: an open decision must stay open, decision IDs must resolve, cross
 references must point at real sections, and planning documents must not claim that
-anything is implemented.
+anything is implemented.  Markdown tables must be rectangular, because a row that splits on an unescaped `|` is read
+by a generator as an extra column.
 """
 from __future__ import annotations
 
@@ -585,12 +586,97 @@ def main() -> int:
             continue
         blockers = re.findall(r"O-\d{3}", m.group(2))
         live = [b for b in blockers if not re.match(
-            r"^\|\s*" + b + r"\s*\|[^|]*\|\s*\*\*Closed", bodies[decisions_path], flags=re.M)]
+            r"^\|\s*" + b + r"\s*\|[^|]*\|\s*(\*\*(Closed|Mostly closed|Narrowed)|Accepted in D-)",
+            bodies[decisions_path], flags=re.M)]
         if not blockers or not live:
             problems.append(
                 f"DECISIONS.md: {m.group(1)} is still Proposed without an open blocker — a proposal must cite the "
                 f"`O-` row that is waiting for evidence, or move to Accepted / Superseded / Needs Validation"
             )
+
+    # 15. a section that enumerates open questions is a second register (F-14, F-18): the answers arrive in the same
+    #     commit set and nobody re-reads the list. Every bullet under such a heading must name the id that owns it —
+    #     an accepted decision, a tracked open item, or a section of the document itself — because a bullet that cites
+    #     nothing is either already answered or too vague to close. This is why an open-questions list must stay short:
+    #     the shorter it is, the more each line has to justify itself.
+    open_section = re.compile(r"^#{2,3}\s*(?:\d+\.\s*)?(Open Decisions|Open Items|Unresolved|"
+                              r"Topics[^\n]{0,40}finalized|Remaining[^\n]{0,30}Open)[^\n]*$", re.M)
+    heading_level = re.compile(r"^(#{1,6})\s")
+    for path, body in bodies.items():
+        if "review" in path.parts:
+            continue
+        for m in open_section.finditer(body):
+            level = len(heading_level.match(m.group(0)).group(1))
+            tail = body[m.end():]
+            nxt = re.search(r"^#{1,%d}\s" % level, tail, re.M)
+            section = tail[:nxt.start()] if nxt else tail
+            lines = section.splitlines()
+            # a GFM table's header row is the line directly above the separator; it cannot cite anything
+            headers = {i - 1 for i, ln in enumerate(lines) if re.match(r"^\|\s*-{2,}", ln)}
+            for i, line in enumerate(lines):
+                if line.startswith("|") and (i in headers or re.match(r"^\|\s*-{2,}", line)):
+                    continue                      # header row and separator row carry no citation duty
+                if not line.startswith(("- ", "|")):
+                    continue
+                # a register id or a section pointer both name an owner; a bare "- Some topic." names nothing
+                if not re.search(r"[DPO]-\d{3}|§", line):
+                    problems.append(
+                        f"{path.relative_to(ROOT)}: an item under {m.group(0).lstrip('#').strip()!r} cites no decision "
+                        f"or open item — {line[:80]!r}. A document that lists open questions is a second register: "
+                        f"name the id that answers it, or the evidence it waits for (and then the id that owns that)"
+                    )
+
+
+    # 16. every row of a Markdown table must have as many cells as its header. An unescaped `|` inside a cell splits
+    #     the row, and the row that breaks is not the row that reads wrong: the cell after it shifts, and a generator
+    #     that parses the table (docs/review/mockups/build.py) invents a column. Four rows across four documents were
+    #     in that state when this rule was written, one of them in the Web inventory feeding the review mockup (F-21).
+    for path, body in bodies.items():
+        lines = body.splitlines()
+        infence = False
+        i = 0
+        while i < len(lines):
+            if lines[i].startswith("```"):
+                infence = not infence
+                i += 1
+                continue
+            is_sep = i + 1 < len(lines) and not infence and re.match(r"^\|\s*:?-{2,}[\s:|-]*\|$", lines[i + 1])
+            if lines[i].startswith("|") and is_sep:
+                def cells(line: str) -> int:
+                    return len(re.split(r"(?<!\\)\|", line)) - 2
+                want = cells(lines[i])
+                if cells(lines[i + 1]) != want:
+                    problems.append(
+                        f"{path.relative_to(ROOT)}:{i + 2}: table separator has {cells(lines[i + 1])} cells but the "
+                        f"header has {want}"
+                    )
+                j = i
+                while j < len(lines) and lines[j].startswith("|"):
+                    if cells(lines[j]) != want:
+                        problems.append(
+                            f"{path.relative_to(ROOT)}:{j + 1}: row has {cells(lines[j])} cells but this table has "
+                            f"{want} — escape a literal pipe as \\| or close the row: {lines[j][:70].strip()}"
+                        )
+                    j += 1
+                i = j
+                continue
+            i += 1
+
+
+    # 17. a findings range quoted in another document is a second copy of `docs/CONSISTENCY_REVIEW.md`'s numbering, and
+    #     a second copy is what F-20 is about. "F-01…F-16" was true for exactly one commit.
+    review = bodies.get(ROOT / "docs" / "CONSISTENCY_REVIEW.md") or text(ROOT / "docs" / "CONSISTENCY_REVIEW.md")
+    max_f = max((int(n) for n in re.findall(r"^### (?:F-)?(\d+) ", review, flags=re.M)), default=0)
+    if max_f:
+        for path, body in bodies.items():
+            for m in re.finditer(r"F-01…F-(\d+)", body):
+                if int(m.group(1)) != max_f:
+                    problems.append(
+                        f"{path.relative_to(ROOT)}: cites findings up to F-{int(m.group(1)):02d} but "
+                        f"`docs/CONSISTENCY_REVIEW.md` has F-{max_f:02d} — quote the real range, or say 'all findings' "
+                        f"if the count is the point"
+                    )
+
 
     if problems:
         print(f"✗ {len(problems)} documentation problem(s):")

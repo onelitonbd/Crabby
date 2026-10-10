@@ -260,7 +260,7 @@ Fallback rules:
 
 - Shell execution is capability-gated (`shell.run`) and **never enabled by default** for a fresh install; enabling it is an explicit act.
 - Command strings must not be assembled from untrusted content. Where possible, use argv-form invocation; if a shell is genuinely needed, quoting must be explicit and tested.
-- Each command carries: timeout, output size caps, cwd within an allowed root, environment allow-list, and resource limits where the platform supports them.
+- Each command carries: timeout (120 s wall clock for `shell.run` by default, D-074), output size caps, cwd within an allowed root, environment allow-list, and resource limits where the platform supports them.
 - Environment passed to child processes must be an explicit allow-list — the parent environment often contains provider keys.
 - Command output is untrusted data (§10) and must be rendered to the model as clearly delimited, non-authoritative content.
 - Process trees must be cancellable: Crabby spawns process groups so a cancellation or shutdown can signal children (`AGENT_RUNTIME.md` §6). Orphaned children after a crash must be detectable on restart.
@@ -276,6 +276,10 @@ Requirements:
 - **Instruction precedence** must be explicit and documented: system/security policy > user request in the current session > approved configuration > skill and memory content > retrieved or external content. Lower tiers may inform, never authorize.
 - External content is wrapped with structural delimiters and metadata (source, fetch time, trust label) so both the model and the audit log can attribute it.
 - Policy-relevant decisions must never be derived from content inside a tool result. Even if a model is persuaded, the Policy Engine still denies a capability that was not granted — this is why §2 rule 02 exists.
+- A declared field is never an authority: no manifest key and no skill frontmatter field can lower a tier, widen a
+  capability, or pre-approve a tool. `allowed-tools` in an imported `SKILL.md` is read into the capability diff and
+  reported, and grants nothing (D-071, `EXTENSIONS.md` §4.3) — the file asking to be exempt from approval is exactly
+  the payload the approval system exists to gate.
 - Importers must sanitize: strip embedded instructions that impersonate system or user roles, neutralize fake turn markers, and cap sizes.
 - Memory poisoning is a real risk under D-019 automatic memory: entries derived from untrusted content must carry their provenance and a trust label, and low-trust memories must not be injected into context for T2/T3 work without the user seeing why.
 - A task that is only supposed to read may not be escalated into writing or sending by text it read.
@@ -294,7 +298,7 @@ Requirements for the extension system (format and flow in `EXTENSIONS.md`):
 
 ## 12. Resource and Availability Controls
 
-- Concurrency limits (D-023), per-task step limits, wall-clock timeouts, retry caps (§9 of the runtime doc), and output-size caps must be enforced by the core, not the caller.
+- Concurrency limits (D-023, defaults in D-074), per-task step limits, wall-clock timeouts, retry caps (§9 of the runtime doc), and output-size caps must be enforced by the core, not the caller.
 - Rate limiting on the Gateway API protects against runaway client loops and local DoS; provider calls need budget guards so a task cannot silently burn paid quota.
 - Battery/thermal awareness: on mobile, sustained background work must be explicitly user-initiated and cancellable; a "low resource" mode should degrade parallelism before it degrades correctness.
 - Disk: WAL growth, event retention, and artifact storage need configurable caps with a warn-then-refuse behavior, because a full phone storage damages more than Crabby.

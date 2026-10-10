@@ -24,6 +24,10 @@
 - **Absence is a row too.** If something was deliberately not built — no bulk approve (C-A8), no `crabby update`
   (C1-10), no "install anyway" for an `unsafe` extension (C-E6) — it is written down, so the absence reads as a
   decision and not as an oversight.
+- **A row is a table row.** Four rows across the set once carried an unescaped `|` inside a cell, which silently splits
+   the row and shifts every field after it — and because `docs/review/mockups/build.py` parses these files, one of
+   them reached the review instrument as a corrupt label (F-21). Rule 16 refuses a table that is not rectangular, so
+   a pasted row is checked instead of trusted.
 - **One command surface.** `scripts/check-docs.py` rule 10 compares the actual token sets: every command noun in
   `docs/INTERFACES_AND_API.md` §7.1 and the §8 parity matrix must be named by a row in `CLI.md`, and every command in
   §7.4 and the matrix's Telegram column must have its own row in `TELEGRAM.md`. It runs the other way too, so a
@@ -52,7 +56,9 @@
    row, then "Copy my edits". The output is markdown rows for `WEB.md`, notes included.
 2. **TUI, CLI, Telegram:** reply with IDs. "`T5-01: Shift+Enter is fine, Android Gboard has it`" is a complete
    decision; "`C6-A: block by default`" closes an open question. Each of those becomes an `ACCEPTED`/`EDIT` row, and
-   any question that changes what gets built becomes an `O-` row in `DECISIONS.md` — that is what O-053…O-063 were.
+   any question that changes what gets built becomes an `O-` row in `DECISIONS.md` — that is what O-053…O-063 were, and
+   it is why O-064 and O-065 were registered during finalization when two open items turned up in a document with no
+   row of their own (F-20).
    **Since 2026-10-10 the flip is not blocked on a reply** for that one class of row: the owner delegated the open
    questions (D-059), so a row whose only blocker was such a question has been moved by the agent and marked with the
    decision that moved it, and `docs/review/DECISION-QUEUE.md` lists every one with its evidence. That exception
@@ -67,10 +73,13 @@
 Sessions screen (`docs/UI_UX_SPEC.md` §2.2) and the session switcher (§7.2) turned out to have **zero** elements
 anywhere (F-10) — a screen with no rows is a screen that silently disappears when these files regenerate the spec.
 
-Every open question that used to hang off these files is closed except six items, and all six are closed by a
+Every open question that used to hang off these files is closed except eight items, and all eight are closed by a
 measurement rather than by an opinion: O-001/O-002 (a clean Termux build plus a WAL torture on a phone), O-006 and
-O-051 (repaint cost and Ink 8 at 40×24, on a phone), and O-008 (extension isolation, which needs the first real
-extensions to exist). O-052, remembered approvals, stays open as a post-v1 design question by choice (D-052). The
+O-051 (repaint cost and Ink 8 at 40×24, on a phone), O-008 (extension isolation, which needs the first real
+extensions to exist), O-064 (a signing mechanism that needs no hosted service) and O-065 (what Termux actually refuses
+an untrusted process). O-052, remembered approvals, stays open as a post-v1 design question by choice (D-052). The
+questions that needed no hardware were answered rather than left open — D-071…D-074, skill frontmatter, host API
+versioning, memory provenance, timeout and concurrency defaults. The
 platform numbers in `TELEGRAM.md` are quoted from the Bot API and are to be re-verified at implementation time.
 `CHANGELOG.md` is the only file `scripts/check-docs.py` still calls out as planned-but-unwritten, and it waits for the
 first release (`docs/ROADMAP.md` §11).

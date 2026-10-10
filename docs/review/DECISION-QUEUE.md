@@ -62,8 +62,15 @@ below was checked on 2026-10-10 against the npm registry, the upstream repositor
 
 Six items did not move — four still open, two carrying one measured clause — because a recommendation about them
 would be a claim about hardware this workspace cannot see. Each has a protocol, so the measurement is the thing that
-closes it and not a mood. (The register holds 63 numbered `O-` rows and only these six still ask for work; the rest are
+closes it and not a mood. (The register holds 65 numbered `O-` rows and only these six still ask for work — the
+finalization round added two more, O-064 and O-065, recorded in `DECISIONS.md` §4 rather than here because they were
+never a recommendation of this round; the rest are
 closed *rows*, kept numbered so the documents that cite them keep pointing at something.)
+
+Nothing in this table was answerable from a desk: the four questions that *were* answerable that way — skill
+frontmatter, host API versioning, memory provenance, timeout and concurrency defaults — were decided in the same
+spirit as this round and are recorded as D-071…D-074, so they are not listed here. The veto path in the header works
+for those four exactly as it does for these.
 
 | Item | Why it stays open | How to close it |
 | --- | --- | --- |

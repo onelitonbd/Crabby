@@ -325,8 +325,8 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | W13-05 | Listener mode | loopback state, bind address, warning if non-loopback | PROPOSED |
 | W13-06 | Tunnel control | enable (T3) with the reachable-identity list, current URL, stop, status | PROPOSED |
 | W13-07 | Telegram allow-list | user/chat ids, group policy, "unauthorized get nothing" note | PROPOSED |
-| W13-09 | Gateway lifecycle | restart and shutdown, both T3 | 2 buttons | restart names who gets disconnected (open task streams, this browser), and the Web UI shows `reconnecting` until the port answers — a restart with no visible reconnect state reads as a crash (D-058) | PROPOSED |
 | W13-08 | Audit link | jumps to the audit tab with this client filtered | PROPOSED |
+| W13-09 | Gateway lifecycle | restart and shutdown buttons, both T3; restart names who gets disconnected (open task streams, this browser), and the UI shows `reconnecting` until the port answers — a restart with no visible reconnect state reads as a crash (D-058) | PROPOSED |
 
 ### Region W14 — Logs & audit (`/logs`)
 

@@ -119,7 +119,7 @@ non-Latin text; line length capped at ~72ch in chat.
 | --- | --- | --- |
 | `●` | running | `( )` |
 | `✓` `✗` | ok / failed | `ok` / `err` |
-| `▶` `⏸` `⏹` | start / paused / stopped | `>` `||` `x` |
+| `▶` `⏸` `⏹` | start / paused / stopped | `>` `\|\|` `x` |
 | `⚠` | needs attention | `!` |
 | `🔒` `🔓` | vault locked / unlocked | `locked` / `unlocked` |
 | `⇅` | reconnecting | `~` |

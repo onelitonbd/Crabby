@@ -230,7 +230,8 @@ Stage 3 rules:
   the new limits, and the user can see that happened.
 
 Timeouts are per call, not per task: a slow model that keeps responding within its per-call deadline is not
-retried merely because the overall task is long.
+retried merely because the overall task is long. The per-call numbers are the defaults in §5.2 (D-074); a slow model
+is normal operation, a stalled stream is not.
 
 ### 3.7 Credential handling
 
@@ -297,7 +298,7 @@ Every tool — native, first-party, or discovered via MCP client — is describe
 | `outputSchema` | Optional; enables verified structured results. |
 | `capability` | Required permission from `SECURITY.md` §6.1 vocabulary. |
 | `riskTier` + `tierRules` | Base tier and the argument-dependent escalations (§4.3). |
-| `limits` | Timeout, max output bytes, max files, max processes. |
+| `limits` | Timeout, max output bytes, max files, max processes; defaults per tool class in §5.2 (D-074). |
 | `idempotent` | Whether re-running is safe — directly used by recovery (`AGENT_RUNTIME.md` §7.3). |
 | `sideEffects` | `none` / `local` / `external` / `irreversible`. |
 | `availability` | Platform predicate; false yields a documented reason instead of a broken tool. |
@@ -383,7 +384,9 @@ Tier is computed per call, from the validated arguments:
 - Order of checks, always: schema validation → capability check → tier/approval → execution → result validation.
   A tool never runs "to see if it works".
 - Every execution carries: timeout, output byte cap, and a cancellation signal. On Termux, spawn in a process
-  group so a kill reaches children (`SECURITY.md` §9).
+  group so a kill reaches children (`SECURITY.md` §9). A timeout ends the call with the code `timeout` and the class
+  name of the deadline that tripped, never as a generic failure — "it took too long" and "it did not work" need
+  different responses, and a retry ladder that cannot tell them apart retries the wrong thing.
 - Child environment is an explicit allow-list; the parent's provider keys are not inherited.
 - Temp files live in a per-task scratch directory with a documented lifetime and automatic cleanup on task end,
   with leftovers reported rather than silently retained.
@@ -422,6 +425,31 @@ excuse to skip it.
 Enforced by the core, never by the caller (`SECURITY.md` §12): per-task step limit, wall-clock timeout, tool-call
 count, output bytes, parallel steps (D-023), provider request rate, and a token budget with an optional cost
 ceiling. When a limit trips, the failure names the limit and how to change it.
+
+The starting numbers are decided now, as defaults with a named override path (D-074), because "wait for a phone to learn
+what a timeout should be" would hold up four documents for values that are cheap to change and expensive to invent per
+interface:
+
+| Class | Default | Notes |
+| --- | --- | --- |
+| Provider — connect | 10 s | TCP plus TLS to the endpoint. |
+| Provider — first token | 60 s | Reasoning models are slow to start; this is the generous one. |
+| Provider — idle stream | 45 s | A stream that goes quiet is dead, not slow. |
+| Provider — absolute | 300 s | The per-call ceiling, not the per-task one. |
+| `fs.*` | 10 s | Storage on a phone can be slow; it cannot be this slow. |
+| `net.fetch` | 20 s total | One request, redirects included, so a redirect chain cannot restart the clock forever. |
+| `shell.run` | 120 s wall clock | Killed as a process group so children go with it. |
+| SQLite busy | 5 s | `PRAGMA busy_timeout`; longer and the UI starts to look frozen instead of busy. |
+| Extension, MCP | tool class + 5 s | Adapter overhead, so a slow plugin is not blamed on the tool or the host. |
+| Parallel tool steps in one task | 2 | More than two on a phone trades wall-clock time for memory pressure. |
+| Concurrent provider requests | 4 | Per Gateway, shared by all interfaces. |
+| Queued tasks | 5 | `task run` refuses past that, with the count in the message; a silently growing queue is a leak with good manners. |
+
+Every row is a `limits.*` key in `config.json` — readable with `crabby config get limits`, editable in the same screen
+as the output caps (`docs/review/WEB.md` W11-07) so there is one place where the machine's budget lives. Two clocks stay
+separate on purpose: an approval that ages out mid-step expires under D-064's approval expiry, not under the tool
+timeout, and the task record says which of the two fired. Only the retryable classes in §3.5 re-enter the ladder after a
+timeout — an `irreversible` side effect that timed out is reconciled, never retried (`AGENT_RUNTIME.md` §7.3).
 
 ## 6. Approval Interaction
 

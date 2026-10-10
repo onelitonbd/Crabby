@@ -212,7 +212,9 @@ Crabby MUST NOT claim that every interrupted task can be resumed without informa
 Checkpoint frequency is not a knob: a checkpoint is written at each committed step boundary (D-065), recovery may
 pass only a step that is idempotent or has its effect recorded, and the retry ladder is D-043's floor with D-064's
 schedule inside it. Recovery verification is the `integrity_check` and the committed-state comparison in
-`docs/DATA_AND_MEMORY.md` §2.2 — what remains open is the tuning of per-tool timeouts, not the ordering rules.
+`docs/DATA_AND_MEMORY.md` §2.2. The per-tool timeout numbers are decided as defaults (D-074, table in
+`PROVIDERS_AND_TOOLS.md` §5.2); what remains is re-measuring them on a device in M0, not choosing them, and none of it
+touches the ordering rules above.
 
 ## 8. Context Management and Compaction
 
@@ -320,25 +322,34 @@ Implementation details MUST be documented in the relevant architecture, security
 
 ## 12. Open Decisions
 
-The following items require further research, design, or validation. They are not finalized by this document.
+This section once listed fifteen items that "require further research, design, or validation". Reading the list against
+the document that grew around it, every one of them has an answer — here, in `SECURITY.md`, or in a numbered decision.
+The list survived because nobody re-read it after writing the answers, which is the same failure mode as
+`docs/CONSISTENCY_REVIEW.md` F-14 and F-17: a decision is not finished when it is made, it is finished when the last
+document that disagrees with it is edited. The residue is measurement and tuning on a real phone, not design, so the
+table below states each item's disposition instead of leaving a to-do list that invites a rewrite of settled rules:
 
-- Task state machine and permitted state transitions.
-- Scheduler implementation and concurrency limits.
-- Definition and granularity of an execution step.
-- Risk scoring, permission policies, and approval workflow (owned by `SECURITY.md`).
-- Cancellation timeouts and escalation behavior.
-- Checkpoint format, frequency, and persistence strategy.
-- Restart detection and automatic recovery orchestration.
-- Handling of uncertain external side effects.
-- Idempotency and operation reconciliation mechanisms.
-- Retry limits, backoff strategy, and error classification.
-- Context compaction thresholds and summary structure.
-- Context budgeting across different model providers.
-- Task progress event schema and delivery guarantees.
-- Logging, diagnostics, and retention policies.
-- Recovery behavior when stored state is corrupt or incomplete.
+| Item once listed as open | Decided in | What a phone still has to say |
+| --- | --- | --- |
+| Task state machine and permitted transitions | §4.1, §10.1 | — |
+| Scheduler implementation and concurrency limits | §4.2; defaults in D-074 | whether 2 parallel steps and 4 provider requests survive real memory pressure (M0 P1/P5) |
+| Definition and granularity of an execution step | §7.3, D-065 | — |
+| Risk scoring, permission policy, approval workflow | §5, `SECURITY.md` §6, D-046 | a new tool's tier at review time, per the same table |
+| Cancellation timeouts and escalation | §6; D-074 | nothing structural; the numbers are `limits.*` keys |
+| Checkpoint format, frequency, persistence | §7.3, D-065 | write cost on device storage (M0 P3) |
+| Restart detection and automatic recovery | §7.1 | Android's process-kill semantics (M0 P7) |
+| Uncertain external side effects | §7.3, §7.4 | — |
+| Idempotency and operation reconciliation | §7.3, tool `idempotent` flag in `PROVIDERS_AND_TOOLS.md` §4 | — |
+| Retry limits, backoff, error classification | §9.1, §9.2, D-043, D-064 | provider-specific rate behavior, observed not assumed |
+| Context compaction thresholds and summary structure | §8.1, §8.2, D-065 | tuned in M2 against the reviewed acceptance list |
+| Context budgeting across providers | §8.2, D-064 | — |
+| Progress event schema and delivery guarantees | §10, `docs/INTERFACES_AND_API.md` | interface-side buffer size for a dropped event (M1) |
+| Logging, diagnostics, retention | `SECURITY.md` §14, D-065, D-058 | — |
+| Recovery when stored state is corrupt or incomplete | §7.3 | whether WAL behaves identically on the device (**O-002**) |
 
-These decisions MUST be evaluated against Crabby's mobile-first requirements, Termux constraints, resource usage, reliability, and security goals before implementation.
+A number that needs a phone is not a design gap. Writing it as one would either stall M1 or manufacture a figure
+somebody then has to defend; each row above therefore says which milestone measures it and where the knob lives, so the
+measurement changes a default in `config.json` rather than a page of this document.
 
 ## 13. Acceptance Criteria
 

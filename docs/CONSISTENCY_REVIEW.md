@@ -8,10 +8,11 @@
 > this file), most recently on 2026-10-10 — findings F-13…F-31 are from the six 2026-10-10 passes (the (R) round,
 > the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from),
 > F-32…F-36 from M1c's implementation pass, the first pass where a *generator* rather than a reader compared the
-> documents with the code, and F-37…F-46 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38), a rule
-> enforced without a document to cite (F-39), the checker's own arithmetic (F-40), the three M2d's loop met when it had to
-> ask for numbers and vocabulary the plan had not priced (F-41…F-43), and the three M2e's cancellation manager met when it
-> had to write down an outcome §6.2 requires and the plan had not defined (F-44…F-46). Every earlier finding has been
+> documents with the code, and F-37…F-48 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38, sighted
+> twice), a rule enforced without a document to cite (F-39), the checker's own arithmetic (F-40), the three M2d's loop met
+> when it had to ask for numbers and vocabulary the plan had not priced (F-41…F-43), the three M2e's cancellation manager
+> met when it had to write down an outcome §6.2 requires and the plan had not defined (F-44…F-46), and the two M2g's
+> recovery met when it had to answer what a restart owes a prompt and a user (F-47, F-48). Every earlier finding has been
 > re-checked against the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
@@ -814,6 +815,44 @@ whole gated task against SQLite, with the arbiter's rows committing in the same 
 reopens the file afterwards to prove the outcome and every event that carried it survived. The one part of F-46 still open is
 the half that was never this finding's to close: `sideEffects` remains in `PENDING_RECORD_FIELDS`, so `effectsUncertain` is
 `true` for every tool step until a tool declares otherwise.)*
+
+### F-47 — After a restart, a prompt is answerable and nothing can act on the answer
+**Severity: medium, open by choice, and the one thing recovery could not make honest.** §7.1's scan marks every
+non-terminal task `interrupted`, including a task that was in `awaiting_approval` when the process died. Its approval row is
+durable — that was M2c's whole point — so the prompt is still in `GET /approvals?state=pending`, still inside D-064's
+window, and still answerable from all four interfaces. And after the answer, nothing happens: the loop's `SuspendedRun`
+was process memory (M2d says so in its header), there is no checkpoint to resume from, so no party exists that could
+consume the approval and run the action. A user answers a prompt on their phone and the action never runs.
+
+Three fixes were considered and all three were rejected in this slice. **Withdrawing the row** would need a sixth approval
+state or a reuse of `expired` for something that did not expire, and the arbiter's five states are checked into the schema
+by a `CHECK` constraint that M2c's tests assert against the file. **Refusing the answer at the route** for a task in
+`interrupted` would contradict §7.2, which *permits* resuming work covered by a still-valid approval — the surface is not
+the party that gets to narrow a rule the runtime owns (D-084's whole argument). **Rebuilding the run's conversation from
+the event log** is §8's compaction with the log's redaction and 64 KiB truncation applied, so the rebuild would be lossy in
+a way no document describes.
+
+What this slice does instead is make the situation legible: the `task.interrupted` event carries the reason and names the
+approval, the recovery report lists it under `approval` with `resumed: false` as a literal type, and §7.1's new paragraph
+says plainly that the authorization half of §7.2 has nothing to authorize yet. It closes with the runner and the checkpoint
+manager, which are the two things that would make an answer actionable — and until then the prompt expires on its own
+deadline, which is the outcome D-064's gradient was designed to make safe.
+
+### F-48 — Nothing swept the queue, so a stale prompt was shown as pending and counted as waiting
+**Severity: medium, fixed by D-093, and found by writing recovery rather than by reading the queue.** The arbiter has had
+`sweep` since M2b, and its header states why: "an approval that expires only when someone looks at it is an approval that
+can be answered late by a client reading a stale queue". Until M2g, the only callers were the loop's own expiry path and
+`answer`'s late refusal. So the security property held — a stale prompt could not be *approved*, because the arbiter
+refuses and flips the row — and the display property did not: `GET /approvals?state=pending` listed a row whose deadline had
+passed, and `crabby status` printed it as "1 waiting", which is the number a user reads to decide whether to pick up their
+phone.
+
+That is the F-40 shape again, one layer up: a claim about the world ("something is waiting for you") produced by a query
+that had not been told the clock had moved. Fixed by sweeping on the read that renders the queue, and at startup, with no
+timer (D-093 records why: a timer needs an interval nobody decided, a lifecycle, and a second clock beside the arbiter's).
+The write inside a GET is deliberate and is the part a reviewer should push on, so it is argued in the decision row rather
+than left to the diff. `tests/integration/recovery.test.ts` asserts both halves over HTTP, including that a second read
+does not log the same expiry twice.
 
 ## 3. Checks That Passed
 

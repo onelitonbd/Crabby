@@ -101,6 +101,16 @@ export interface SetStateOptions {
   readonly cancellation?: TaskCancellation;
 }
 
+/** Every task in one of these states, unpaginated, for the startup scan §7.1 requires. `listTasks` stays cursor-paged
+ *  because a client reads a page at a time; this exists because "restore the latest valid state of *every* task" is not a
+ *  question a page can answer, and the row count is bounded by D-065's retention rather than by a limit. */
+export function tasksInStates(db: SqliteDb, states: readonly TaskState[]): TaskRecord[] {
+  if (states.length === 0) return [];
+  const placeholders = states.map(() => "?").join(", ");
+  const rows = db.prepare(`${SELECT} WHERE state IN (${placeholders})`).all(...states) as Row[];
+  return rows.map(toRecord);
+}
+
 export function setState(
   db: SqliteDb,
   id: string,

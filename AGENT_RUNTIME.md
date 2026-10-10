@@ -331,6 +331,22 @@ Recovery MUST account for:
 - Relevant errors and recovery attempts.
 - External side effects that may already have occurred.
 
+**Decided in M2 (D-092).** Recovery is `packages/agent-runtime/recovery.ts`, called by the Gateway at startup beside
+D-065's retention prune, and it does three things. **Every non-terminal task becomes `interrupted`, uniformly** — D-083's
+`recoveryTarget` is a function precisely so this cannot improvise a different answer per state, and a process that died
+mid-round leaves no trustworthy record of what the model had been told. **A cancellation requested before the restart is
+settled rather than resurrected**: the request is on the record (§6.1's step 1, written at the request and not only at the
+settle — that is why D-091 was amended), so recovery moves the task `cancelling` → `cancelled` with §6.2's evidence set to
+the only truthful answer after a crash, `terminated: false`, `effectsUncertain: true` and `inFlight: "unknown"`. Routing it
+through `interrupted` instead would put a task the user asked to stop back in the state a runner resumes from, which is the
+one recovery outcome §6 exists to prevent. **Nothing resumes automatically in this build**, and the report says so per task:
+a run's conversation is process memory and D-065's committed step boundary is not implemented, so §7.3's "recovery may pass
+only a step that is idempotent or has its effect recorded" has nothing to pass. What recovery can do — and does — is leave
+the task paused with a clear, user-visible reason in the `task.interrupted` event, and name the still-valid approval a
+runner *would* be allowed to resume under, so §7.2's permission is a fact on the record instead of something a reviewer has
+to infer. The restart also sweeps the approval queue, because a deadline that passed while the process was dead is expired
+by the clock and not by anybody's opinion.
+
 ### 7.2 Approval interaction (amended rule)
 
 Automatic recovery MUST NOT bypass the approval system. Specifically:
@@ -341,7 +357,10 @@ Automatic recovery MUST NOT bypass the approval system. Specifically:
 - Where the outcome of an external action is uncertain, blind retry is prohibited (see §7.3).
 - Recovery that cannot proceed safely MUST leave the task paused with a clear, user-visible reason.
 
-Full auto-resume therefore means *automatic orchestration of recovery*, not *automatic authorization*.
+Full auto-resume therefore means *automatic orchestration of recovery*, not *automatic authorization*. In this build the orchestration is real and the authorization is empty, which is the honest state of it:
+`packages/agent-runtime/recovery.ts` reports, for each interrupted task, whether a still-valid approval covers it, and
+resumes none — a report whose `resumed` field is the literal `false` rather than a boolean, so no caller can read a
+resumption that did not happen.
 
 ### 7.3 Safe recovery
 

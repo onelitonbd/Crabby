@@ -44,22 +44,30 @@ export type CancellationMode = (typeof CANCELLATION_MODES)[number];
 /** What was running when the request arrived. D-089 records this beside the two booleans because "a provider call was in
  *  flight" and "a tool was in flight" are why `effectsUncertain` differs, and a reader who disagrees with the
  *  classification has to be able to see which one was made. */
-export const CANCELLATION_IN_FLIGHT = ["none", "provider", "tool"] as const;
+/** `unknown` is not a fourth kind of work, it is the absence of an answer: a process that died cannot say what it was
+ *  running, and §6.2 requires that uncertainty to be recorded rather than resolved by picking one (D-092). */
+export const CANCELLATION_IN_FLIGHT = ["none", "provider", "tool", "unknown"] as const;
 export type CancellationInFlight = (typeof CANCELLATION_IN_FLIGHT)[number];
 
-/** The outcome of a cancellation, on the record rather than only in the log: §6.2 requires that where an external action
- *  may already have taken effect "that uncertainty MUST be recorded explicitly on the task", and §5.2's recovery rule
- *  makes the task route the place a client that missed the event looks. Written once, at the settle (F-46). */
+/** The cancellation, on the record rather than only in the log. Two phases, and the difference is readable: §6.1's step 1
+ *  records the *request* (`mode`, `requestedAt`, who and why), and the settle adds §6.2's evidence — which is what
+ *  "that uncertainty MUST be recorded explicitly on the task" asks for, and what §5.2's recovery rule makes the task route
+ *  the place to read it. So `cancellation` present with no `settledAt` means a request was recorded and the task has not
+ *  settled; present with one means the runtime knows, and says, whether the operation stopped (F-46, D-091, and the
+ *  amendment in D-092: §7.1's recovery has to know what was *asked* before it can honour it, and reading that back out of
+ *  the event log is archaeology where a column would do). */
 export const TaskCancellation = Type.Object(
   {
     mode: Type.Union(CANCELLATION_MODES.map((name) => Type.Literal(name))),
     requestedAt: Type.String({ format: "date-time" }),
-    settledAt: Type.String({ format: "date-time" }),
+    /** Present exactly when the task has settled. The four fields below arrive with it, because §6.2's evidence does not
+     *  exist until the step in flight has finished or been walked away from. */
+    settledAt: Type.Optional(Type.String({ format: "date-time" })),
     /** §6.2's distinction: the operation reported that it stopped, which is not the same fact as the runtime ceasing to
      *  wait for it (D-089). */
-    terminated: Type.Boolean(),
-    effectsUncertain: Type.Boolean(),
-    inFlight: Type.Union(CANCELLATION_IN_FLIGHT.map((name) => Type.Literal(name))),
+    terminated: Type.Optional(Type.Boolean()),
+    effectsUncertain: Type.Optional(Type.Boolean()),
+    inFlight: Type.Optional(Type.Union(CANCELLATION_IN_FLIGHT.map((name) => Type.Literal(name)))),
     by: Type.Optional(Type.String()),
     reason: Type.Optional(Type.String()),
   },
@@ -82,8 +90,8 @@ export const TaskRecord = Type.Object(
     error: Type.Optional(
       Type.Object({ code: Type.String(), message: Type.String() }, { additionalProperties: false }),
     ),
-    /** Present once a cancellation has settled. Absent while the task is merely `cancelling`: the state says a request was
-     *  recorded, and the evidence §6.2 asks for does not exist until the step in flight has settled (D-089). */
+    /** Present from the moment a cancellation is requested, with §6.2's evidence added when the task settles (D-091,
+     *  amended by D-092 so that recovery can read what was asked instead of excavating it from the log). */
     cancellation: Type.Optional(TaskCancellation),
   },
   { additionalProperties: false },

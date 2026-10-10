@@ -10,10 +10,16 @@
 // `packages/agent-runtime/loop.ts` calls `policy.evaluate` and hands the result to the arbiter (D-084, D-086) — but it
 // has no tools to run, no provider adapter to call and no runner here to start it, so a task created over HTTP is still
 // recorded and read back while nothing moves it, and `docs/ROADMAP.md` §4 names the three. Wiring a route to the loop
-// against the fake provider would be the demo this phase has refused to ship. And there is no second listener: §2's loopback default is what
+// against the fake provider would be the demo this phase has refused to ship.
+//
+// What this file *does* own at startup is §7's recovery, beside D-065's retention prune: `createRecovery` marks every
+// non-terminal task `interrupted`, settles a cancellation that was requested before the process died instead of
+// resurrecting it, and sweeps the prompts whose deadlines passed while nobody was watching (D-092). The sweep also runs on
+// `GET /approvals`, because the count that route returns is the number `crabby status` prints as "N waiting" and a stale
+// prompt in it is a lie a user acts on (D-093, F-48). And there is no second listener: §2's loopback default is what
 // `listen` is given, and `crabby gateway start` refuses a non-loopback host until pairing has something to protect.
 
-import { createApprovals } from "@crabby/agent-runtime";
+import { type Approvals, createApprovals, createRecovery } from "@crabby/agent-runtime";
 import type { ApprovalState, ClientInterface } from "@crabby/api-contracts";
 import {
   APPROVAL_STATES,
@@ -39,6 +45,7 @@ import {
   appendEvent,
   authenticate,
   createSqliteApprovalStore,
+  createSqliteJournal,
   createTask,
   getTask,
   type Identity,
@@ -101,6 +108,34 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   const bus = createEventBus();
   const pruned = pruneEvents(db);
   if (pruned.deleted > 0) log.info("event retention pruned rows", { deleted: pruned.deleted });
+
+  // One arbiter for the whole process: the routes answer through it, the read path sweeps through it, and recovery
+  // expires through it, because a second instance over the same rows would be a second opinion about the same queue
+  // (D-084). It is built here rather than inside the route registration for that reason.
+  const approvals = createApprovals({
+    store: createSqliteApprovalStore(db),
+    newId: () => newId("apr"),
+  });
+
+  // §7.1's recovery, at the same place the retention prune runs: a restart is one operation, and both halves are about
+  // making the file match the world. Recovery marks every non-terminal task `interrupted`, settles a cancellation that
+  // was requested before the process died rather than resurrecting it, expires the prompts whose deadline passed while
+  // nobody was watching, and reports — per task — why nothing resumed (D-092). It resumes nothing, and the reason is in
+  // the event a user reads rather than in this comment.
+  const recovered = createRecovery({
+    journal: createSqliteJournal({ db, layout: deps.layout }),
+    approvals,
+    publish: (event) => bus.publish(event),
+  }).recoverAtStartup();
+  if (recovered.scanned > 0 || recovered.expiredApprovals.length > 0) {
+    log.info("startup recovery", {
+      scanned: recovered.scanned,
+      interrupted: recovered.interrupted.length,
+      settledCancellations: recovered.settledCancellations.length,
+      expiredApprovals: recovered.expiredApprovals.length,
+      resumable: recovered.interrupted.filter((task) => task.approval !== undefined).length,
+    });
+  }
 
   const app = Fastify({ logger: false, bodyLimit: 1_048_576, trustProxy: false });
 
@@ -168,7 +203,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   registerPolicyRoutes(app, deps);
   registerAuthRoutes(app, deps);
   registerTaskRoutes(app, deps, bus);
-  registerApprovalRoutes(app, deps, bus);
+  registerApprovalRoutes(app, deps, bus, approvals);
   registerEventStream(app, deps, bus);
 
   const bootstrap =
@@ -403,6 +438,62 @@ function registerTaskRoutes(
   );
 }
 
+/** §6.3's expiry, applied on the read path (D-093). Rows and events commit together and are published after, which is the
+ *  same discipline the decision route keeps; a row expired without its event would be a queue and a log disagreeing about
+ *  whether a prompt is still open. */
+function sweepApprovals(
+  deps: GatewayDeps,
+  approvals: Approvals,
+  bus: ReturnType<typeof createEventBus>,
+): number {
+  const at = Date.now();
+  const staged = transact(deps.db, () => {
+    const swept = approvals.sweep(at);
+    const events: Event[] = [];
+    for (const change of swept.expired) {
+      const task = getTask(deps.db, change.record.request.taskId);
+      if (task === undefined) {
+        // Unreachable while the foreign key holds, and still the right answer if it ever becomes reachable: an approval
+        // that moved with no task to log against cannot be described in an event, so nothing moves.
+        throw new GatewayError({
+          code: "approval_without_task",
+          message: `approval ${change.record.id} refers to task ${change.record.request.taskId}, which is not in the database`,
+          class: "internal",
+          retryable: false,
+        });
+      }
+      const event: Event = {
+        id: newId("evt"),
+        schemaVersion: SCHEMA_VERSION,
+        type: change.event,
+        ts: new Date(at).toISOString(),
+        sessionId: task.sessionId,
+        taskId: task.id,
+        seq: 0,
+        payload: {
+          approvalId: change.record.id,
+          tool: change.record.request.tool,
+          tier: change.record.request.tier,
+          binding: change.record.request.binding,
+          expiresAt: new Date(change.record.request.expiresAt).toISOString(),
+          // The event's `ts` is when the sweep ran, and this is when the row actually died: a prompt that expired
+          // overnight is logged in the morning, and a reader has to be able to tell the two times apart.
+          expiredAt: new Date(change.record.request.expiresAt).toISOString(),
+          outcome: "expired",
+        },
+      };
+      const appended = appendEvent(deps.db, {
+        event,
+        scratchDir: taskScratch(deps.layout, task.id),
+      });
+      events.push({ ...event, seq: appended.seq });
+    }
+    return events;
+  });
+  for (const event of staged) bus.publish(event);
+  return staged.length;
+}
+
 // ------------------------------------------------------------------ approvals (§4.3, SECURITY.md §6.3)
 
 /** The two routes §4.3 names for the queue. There is no third one that *creates* an approval, and that absence is the
@@ -417,16 +508,15 @@ function registerApprovalRoutes(
   app: FastifyInstance,
   deps: GatewayDeps,
   bus: ReturnType<typeof createEventBus>,
+  approvals: Approvals,
 ): void {
-  const approvals = createApprovals({
-    store: createSqliteApprovalStore(deps.db),
-    // `apr` is the prefix `@crabby/api-contracts`'s id union already reserves for approvals; the arbiter's own tests
-    // mint `apv_N` counters because a test id is not a published id.
-    newId: () => newId("apr"),
-  });
-
   app.get<{ Querystring: Record<string, string> }>("/api/v1/approvals", async (request, reply) => {
     const state = parseApprovalQuery(request.query);
+    // D-093: the queue a client reads is the queue that is true. A deadline that passed while nobody was looking expired
+    // the row by the clock and not by anybody's opinion, and §6.3's expire-on-timeout default is worth nothing if the
+    // stale prompt is still shown as pending — the count on this route is what `crabby status` prints as "N waiting".
+    // The sweep is not a timer because a timer needs an interval nobody has decided, and this needs no clock of its own.
+    sweepApprovals(deps, approvals, bus);
     const items = approvals.list({ state });
     // `serverTime` is not decoration: §6.3 makes every interface render the countdown, and a countdown measured on a
     // phone whose clock is a minute fast turns a live prompt into an expired one on screen. The Gateway is the party

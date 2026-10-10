@@ -17,12 +17,12 @@
 // state, its events and §6.2's cancellation evidence are one durable record and can be read back after the file is
 // closed and reopened (`SECURITY.md` §17's restart property, applied to a run rather than to a queue).
 import { RuntimeError, type TaskJournal } from "@crabby/agent-runtime";
-import { type Event, newId, SCHEMA_VERSION } from "@crabby/api-contracts";
+import { type Event, newId, SCHEMA_VERSION, TASK_STATES } from "@crabby/api-contracts";
 import type { DataLayout } from "@crabby/platform";
 import { type SqliteDb, transact } from "./db.ts";
 import { appendEvent } from "./events.ts";
 import { taskScratch } from "./scratch.ts";
-import { getTask, setState } from "./tasks.ts";
+import { getTask, setState, tasksInStates } from "./tasks.ts";
 
 export function createSqliteJournal(deps: {
   readonly db: SqliteDb;
@@ -31,6 +31,8 @@ export function createSqliteJournal(deps: {
   const { db, layout } = deps;
   return {
     task: (taskId) => getTask(db, taskId),
+    tasks: (states) =>
+      states === undefined ? tasksInStates(db, TASK_STATES) : tasksInStates(db, states),
     setState: (taskId, state, record) => {
       setState(db, taskId, state, {
         ...(record?.error === undefined ? {} : { error: record.error }),

@@ -48,12 +48,30 @@ export interface TaskJournal {
       cancellation?: TaskCancellation;
     },
   ) => void;
+  /** Every task in one of these states, or every task when no states are given. Recovery's scan is the only caller, and
+   *  it is a whole-table read by design: §7.1 restores the latest valid state of *every* task, which is not a query a
+   *  cursor can shortcut. */
+  readonly tasks: (states?: readonly TaskState[]) => readonly TaskRecord[];
   /** Appends and returns the event with its `seq`, so the caller publishes the frame that was actually stored. */
   readonly append: (input: JournalEventInput) => Event;
   readonly transact: <T>(body: () => T) => T;
 }
 
 export type Emit = (type: EventType, payload: Record<string, unknown>, at: number) => void;
+
+/** The same, with the task named per event. Startup recovery is the only caller, because one restart is one operation
+ *  across whatever tasks it found and a half-applied recovery is worse than none. */
+export type EmitFor = (
+  taskId: string,
+  type: EventType,
+  payload: Record<string, unknown>,
+  at: number,
+) => void;
+
+/** Binds an `EmitFor` to one task, so a caller that already has `Emit`-shaped helpers can be used unchanged. */
+export function forTask(emit: EmitFor, taskId: string): Emit {
+  return (type, payload, at) => emit(taskId, type, payload, at);
+}
 
 /** Typed, per `docs/DEVELOPMENT.md` §4: a §6 `code`, never a string. Thrown only where the runtime's own invariants
  *  broke — a task that vanished mid-run, or a state move the machine refused — because those are bugs in this package and
@@ -89,6 +107,8 @@ export interface PhaseWriter {
   /** One transaction: every row and event this step owes, committed together and published after. The staged list is why
    *  `publish` cannot be called from inside `body`. */
   phase<T>(taskId: string, correlationId: string | undefined, body: (emit: Emit) => T): T;
+  /** One transaction whose events may belong to several tasks. */
+  phaseAcross<T>(correlationId: string | undefined, body: (emit: EmitFor) => T): T;
   /** Asks the machine and writes both halves of the answer. `record.error` and `record.cancellation` are what
    *  `GET /tasks/{id}` shows; `record.payload` is what the event carries beside `from` and `to`. */
   move(
@@ -120,9 +140,9 @@ export function createPhaseWriter(deps: {
 }): PhaseWriter {
   const { journal, publish, now } = deps;
 
-  function phase<T>(taskId: string, correlationId: string | undefined, body: (emit: Emit) => T): T {
+  function phaseAcross<T>(correlationId: string | undefined, body: (emit: EmitFor) => T): T {
     const staged: Event[] = [];
-    const emit: Emit = (type, payload, at) => {
+    const emit: EmitFor = (taskId, type, payload, at) => {
       staged.push(
         journal.append({
           taskId,
@@ -136,6 +156,10 @@ export function createPhaseWriter(deps: {
     const result = journal.transact(() => body(emit));
     for (const event of staged) publish(event);
     return result;
+  }
+
+  function phase<T>(taskId: string, correlationId: string | undefined, body: (emit: Emit) => T): T {
+    return phaseAcross(correlationId, (emit) => body(forTask(emit, taskId)));
   }
 
   function move(
@@ -198,5 +222,5 @@ export function createPhaseWriter(deps: {
     return { task: currentTask(taskId), code, reason };
   }
 
-  return { phase, move, currentTask, failTask };
+  return { phase, phaseAcross, move, currentTask, failTask };
 }

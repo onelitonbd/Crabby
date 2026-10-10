@@ -232,6 +232,9 @@ function createMemoryJournal(input: {
   let inTransaction = false;
   const journal: TaskJournal = {
     task: () => record,
+    // One task, because a harness run is one task: a recovery test that needs several composes several harnesses rather
+    // than pretending one journal holds a database.
+    tasks: (states) => (states === undefined || states.includes(record.state) ? [record] : []),
     setState: (taskId, state, patch) => {
       if (taskId !== record.id)
         throw new Error(`the harness journal holds one task, not ${taskId}`);

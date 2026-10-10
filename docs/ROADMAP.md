@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-46 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-48 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -199,9 +199,13 @@ Cancellation landed after it, in the same package:
 request exists, lets the step in flight finish under `finish-step` or aborts it under `immediate`, and reports what was in
 flight so the manager can record `terminated` and `effectsUncertain` instead of guessing (D-089, D-090). Its twelve tests
 drive a real run — a step that hangs, a request that arrives while it hangs, and the two modes answering differently.
-Checkpoints and the retry-then-ask ladder are the remaining M2 managers; they
-land in `packages/agent-runtime` rather than in the Gateway for the reason in D-003: a
-rule the Gateway owns is a rule only the Gateway can follow. **Still absent, and the reason `crabby task run` and a
+Recovery landed with them: the Gateway runs §7.1's scan at
+startup beside the retention prune, marks every non-terminal task `interrupted`, **settles** a cancellation that was
+requested before the process died instead of resurrecting it, sweeps the prompts whose deadlines passed while nobody was
+watching, and reports per task why nothing resumed (D-092, D-093) — proved over HTTP with the listener *and* the file
+handle closed between the two halves of the test. Checkpoints and the retry-then-ask ladder are the remaining M2 managers;
+they land in `packages/agent-runtime` rather than in the Gateway for the reason in D-003: a rule the Gateway owns is a rule
+only the Gateway can follow. **Still absent, and the reason `crabby task run` and a
 cancellation route are not `ready`:** the loop has no tools to run (`ARCHITECTURE.md` §18's `packages/tools` does not
 exist, so the executor is a seam), no provider adapter to call (`PROVIDERS_AND_TOOLS.md` §3.3's four arrive in M2/M4, and
 the fake is a test reference rather than a product provider), and nothing in the Gateway that drives a task — so a route

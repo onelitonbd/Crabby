@@ -216,7 +216,7 @@ much later. "Answerable" is about reach and not about authority: which surface m
 and it is enforced where an answer is recorded (D-084, D-085) rather than in each interface, because a queue shared by
 four surfaces cannot be guarded four different ways.
 
-Expiry is per tier, decided in D-064 (closing O-041): **T1 15 minutes, T2 10 minutes, T3 5 minutes.** The direction of that gradient is the whole point — the more an approval grants, the less time an unattended prompt should stay answerable, because the window in which a phone is left unlocked and a request is left standing is exactly the window this rule covers. The countdown is rendered by every interface (Web W-A5, TUI T-A5, Telegram G-A1) with the reason it expires.
+Expiry is per tier, decided in D-064 (closing O-041): **T1 15 minutes, T2 10 minutes, T3 5 minutes.** The direction of that gradient is the whole point — the more an approval grants, the less time an unattended prompt should stay answerable, because the window in which a phone is left unlocked and a request is left standing is exactly the window this rule covers. The countdown is rendered by every interface (Web W-A5, TUI T-A5, Telegram G-A1) with the reason it expires. Expiry is applied by the arbiter's sweep, which runs at startup (§7.1's recovery) and on the read that renders the queue (D-093), and by `answer` refusing a row whose deadline passed — so a stale prompt is neither shown as live nor answerable, whichever a client reaches first.
 
 Approval binding: a decision applies to *that* action with *those* arguments in *that* task. Approval must never be interpreted as a general license, and re-approval is required when the action materially changes (targets a new path, host, or destination) — per `AGENT_RUNTIME.md` §5.
 

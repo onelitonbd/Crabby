@@ -27,6 +27,7 @@
 // runner. And no checkpoint: §6.1's step 5 asks for task state and checkpoint information, and the settle event says
 // plainly that D-065's checkpoint boundary is not in this build rather than implying one was written.
 import {
+  type CancellationInFlight,
   type ClientInterface,
   type Event,
   isTerminal,
@@ -59,7 +60,9 @@ export interface CancellationRequest {
 export interface CancellationEvidence {
   readonly terminated: boolean;
   readonly effectsUncertain: boolean;
-  readonly inFlight: "none" | "provider" | "tool";
+  /** The contract's vocabulary, including `unknown` — which only §7's recovery can honestly supply, because a dead
+   *  process cannot say what it was running (D-092). */
+  readonly inFlight: CancellationInFlight;
   readonly step?: { readonly tool?: string; readonly ok?: boolean; readonly code?: string };
 }
 
@@ -221,7 +224,17 @@ export function createCancellation(deps: CancellationDeps): Cancellation {
       // asked, in which mode, and why. `transition()` supplies `task.state.changed`, so no second event type is invented
       // for a request — §5.2's family already carries it and `task.cancelled` is the settle.
       if (task.state !== "cancelling") {
-        move(task, "cancelling", {}, emit, at, { payload: requestPayload(request_) });
+        move(task, "cancelling", {}, emit, at, {
+          // §6.1's step 1 on the record and not only in the log, so §7.1's recovery can honour a request whose process is
+          // gone (D-092). The evidence fields stay absent: they do not exist until the step settles.
+          cancellation: {
+            mode: request_.mode,
+            requestedAt: new Date(at).toISOString(),
+            ...(request_.byClientId === undefined ? {} : { by: request_.byClientId }),
+            ...(request_.reason === undefined ? {} : { reason: request_.reason }),
+          },
+          payload: requestPayload(request_),
+        });
       } else {
         emit("task.progress", { cancellation: "recorded", ...requestPayload(request_) }, at);
       }

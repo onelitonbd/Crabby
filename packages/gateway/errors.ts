@@ -46,6 +46,29 @@ export class GatewayError extends Error {
   }
 }
 
+/** Every code the approval arbiter can refuse with, mapped to a class — written as an exhaustive `Record` over the
+ *  union so that adding a refusal in `packages/agent-runtime/approvals.ts` makes this file fail to compile until the
+ *  new code is classified. §6's error envelope is what a client branches on, so "we did not think about what this one
+ *  means over HTTP" has to be a build error and not a 500 with `internal` in it. */
+export const APPROVAL_REFUSAL_CLASS: Record<
+  import("@crabby/agent-runtime").ApprovalFailureCode,
+  ErrorBody["class"]
+> = {
+  // The request was malformed rather than unwelcome, and the two must not print the same way: §6's `validation` is
+  // "fix what you sent", `policy` is "you may not have this".
+  "incomplete-request": "validation",
+  "ttl-not-as-decided": "policy",
+  "scope-unsupported": "policy",
+  "surface-not-allowed": "policy",
+  "not-found": "not-found",
+  "already-answered": "conflict",
+  expired: "conflict",
+  "not-pending": "conflict",
+  consumed: "conflict",
+  "materially-changed": "conflict",
+  denied: "conflict",
+};
+
 export function notFound(what: string, requestId?: string): GatewayError {
   return new GatewayError({
     code: "not_found",

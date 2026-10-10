@@ -58,12 +58,41 @@ export async function runStatus(layout: DataLayout, renderer: Renderer): Promise
           .map((state) => `${state} ${diagnostics.tasks[state]}`)
           .join(" · ") || "none",
       );
-      renderer.line(
-        "approvals",
-        "no policy engine in this build — T2/T3 approvals arrive with M2, so nothing is waiting",
-      );
     }
-    return renderer.done({ ...diagnostics, health: info });
+    // §7.1 asks this screen for "gateway, task and approval state at a glance", so the approval line *asks*. What was
+    // here before was a sentence — "no policy engine in this build, so nothing is waiting" — which was true when it was
+    // written and became a lie one milestone later without failing anything, because no test reads a prose string and
+    // a user does not check a screen that says "nothing is waiting". A hardcoded state of the build in an output line
+    // is a claim that outlives its subject; this is the same defect F-38 was written about, one notch smaller.
+    let queue: Awaited<ReturnType<typeof connection.client.approvals>>;
+    try {
+      queue = await connection.client.approvals({ state: "pending" });
+    } catch (error) {
+      // A Gateway old enough to lack the route answers 404 with §6's envelope, and the screen has to say which of the
+      // two truths it is showing: nothing waiting, or nothing knowable. Collapsing them would be the same lie in a
+      // different font.
+      renderer.line("approvals", `the queue could not be read: ${(error as Error).message}`);
+      return renderer.done({ ...diagnostics, approvals: { readable: false }, health: info });
+    }
+    const pending = queue.body as {
+      count: number;
+      items: { id: string; request: { tier: string; summary: string; tool: string } }[];
+    };
+    renderer.line(
+      "approvals",
+      pending.count === 0
+        ? "nothing waiting — requests are opened by M2's runtime loop, which lands after this slice"
+        : `${pending.count} waiting · ${pending.items
+            .map((item) => `${item.request.tier} ${item.request.tool}`)
+            .join(", ")}`,
+    );
+    // The same fact in both renderings: a `--json` reader that saw an `approvals` line on screen and nothing in the
+    // document would be left guessing which one the command means.
+    return renderer.done({
+      ...diagnostics,
+      approvals: { pending: pending.count, ids: pending.items.map((item) => item.id) },
+      health: info,
+    });
   } catch (error) {
     return reportFailure(renderer, error);
   }

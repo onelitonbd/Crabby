@@ -116,6 +116,10 @@ describe("gateway over http", () => {
       // §4.4 documents `GET /tools` as "registry with tier, capability, and platform availability", and a route that
       // answered without a token would leak which tools a device has to an unauthenticated probe.
       "/api/v1/tools",
+      // The approval queue is the most interesting thing on this list: an unauthenticated `GET /approvals` is a map of
+      // what the user has been asked to authorize, and an unauthenticated `POST …/decision` is a grant.
+      "/api/v1/approvals",
+      "/api/v1/approvals/apr_none/decision",
     ]) {
       await assert.rejects(
         async () => await bare.request(route),
@@ -151,7 +155,11 @@ describe("gateway over http", () => {
       false,
       "no vault code exists yet, so health must not imply one",
     );
-    assert.equal(body.storage.schemaVersion, 1);
+    // Literal on purpose, and it is the second place the number is written: `docs/DATA_AND_MEMORY.md` §2's
+    // `crabby.sqlite3` row says the same thing. A migration therefore cannot land quietly — it moves the ledger here and
+    // in the document, or one of the two goes red, which is the only mechanism that keeps "what schema is this file
+    // on?" answerable by someone holding a phone and a backup.
+    assert.equal(body.storage.schemaVersion, 2, "M2's `approval` table advanced the ledger from 1");
   });
 
   it("reports readiness over exactly §4.1's five subsystems", async () => {

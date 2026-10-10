@@ -150,6 +150,16 @@ export interface GatewayClient {
   }): Promise<Response<unknown>>;
   getTask(id: string): Promise<Response<unknown>>;
   taskEvents(id: string, cursor?: number): Promise<Response<unknown>>;
+  /** §4.3's queue. `state` defaults to the only value a client can act on, and is passed through as text so a typo is
+   *  refused by the Gateway rather than answered with an empty list. */
+  approvals(options?: { state?: string }): Promise<Response<unknown>>;
+  /** §4.3's decision. The key is optional — the row already refuses a second answer, which is why a lost response is
+   *  a replay convenience here and a requirement for `createTask`. */
+  decideApproval(
+    id: string,
+    body: { decision: "approve" | "deny"; scope?: string },
+    idempotencyKey?: string,
+  ): Promise<Response<unknown>>;
   authList(): Promise<Response<unknown>>;
   authRevoke(id: string): Promise<Response<unknown>>;
 }
@@ -241,6 +251,16 @@ export function createClient(input: {
       request(
         `/api/v1/tasks/${encodeURIComponent(id)}/events${cursor === undefined ? "" : `?cursor=${cursor}`}`,
       ),
+    approvals: (options = {}) =>
+      request(
+        `/api/v1/approvals${options.state === undefined ? "" : `?state=${encodeURIComponent(options.state)}`}`,
+      ),
+    decideApproval: (id, body, idempotencyKey) =>
+      request(`/api/v1/approvals/${encodeURIComponent(id)}/decision`, {
+        method: "POST",
+        body,
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      }),
     authList: () => request("/api/v1/auth/clients"),
     authRevoke: (id) =>
       request(`/api/v1/auth/clients/${encodeURIComponent(id)}`, { method: "DELETE" }),

@@ -634,6 +634,54 @@ into `docs/DEVELOPMENT.md` §1's install row instead of being discovered by the 
 rule this file has been building since F-20 applies to a red you cannot reproduce: name it, date it, and record what
 was measured against it, because "could not reproduce" without the measurements is how a real race becomes folklore.
 
+### F-39 — A security rule enforced by code cited a section that does not state it, and the fix moved the rule and the sentence
+**Severity: high, because the rule was correct.** `packages/policy/evaluate.ts` refuses to queue a T3 approval for a
+Telegram client, and its comment and its user-facing message both cite `SECURITY.md` §6.2. §6.2's T3 row says
+"explicit approval, no stored blanket grant, re-prompt on every material change"; §6.2's rules list says nothing about
+which surface may answer. Meanwhile §6.3 states "it must be answerable from all four interfaces". So a reviewer reading
+only the documents — which is what `docs/DEVELOPMENT.md` §7 asks of a security change — would find an enforcement that
+the prose forbids, in the one place a chat notification is most likely to be answered, and the defensible action would
+be to delete the `if`. Finding it required writing the approval arbiter and needing to know, for the route, *who may
+answer what*: the answer was not in any document.
+
+Two moves, in this order. The rule was kept and §6.2 gained a bullet, because "a T3 signature may be made only on a
+surface that renders the whole request" is the §6.2 floor and D-080's procedure for changing what a tier means is to
+move the document first, in a commit a reviewer reads. And the enforcement moved from the queue to the answer:
+`evaluate` refusing to *create* a T3 prompt for one surface is not the same rule as refusing to *record an answer* on
+it, because the queue is shared ("answer from anywhere"), a T3 row opened for the TUI sits in the phone's list too, and
+a per-surface check would have to be written four times and would fail the first time a fifth surface arrived. D-085
+records both halves, including the part that was decided rather than found: a refusal from a wrong surface leaves the
+row `pending` and writes no event, since sending someone to another device to say *no* is worse than the prompt they
+were already reading, and an unanswered request expires in D-064's window instead.
+
+The general rule this adds to the one F-27 established: a citation in a message string is a claim about a document, and
+`grep` settles it — but a *refusal* a user reads is also a rule, so the check is two-sided. A citation that points at a
+section which does not say it is a finding even when the behavior is right, because the behavior is then owned by a
+comment instead of by the specification that is supposed to be able to overrule it.
+
+### F-40 — The checker counted one thing and printed another, and the fix was to make the number come from the list
+**Severity: low, category: the tooling that enforces everything else.** `scripts/check-docs.py` printed
+`! 4 advisory item(s)` followed by three bullets. The count came from the raw list and the bullets from
+`sorted(set(list))`, so one duplicate reference — three documents citing the not-yet-written `CHANGELOG.md`, plus a
+second mention in one of them — made the line advertise output the tool had not shown. Nothing failed, which is how a
+reporter bug survives: the check it belongs to is advisory by design, because a reference to a planned document is a
+promise and not an error. That part is correct and stays — `CHANGELOG.md` is owed to M9's release process, and the
+advisory list is where a reviewer sees the debt without a build going red for it.
+
+What was fixed is the arithmetic: the list is deduplicated first and its length is what is printed, so the number is
+computed from the thing beneath it rather than from an earlier snapshot of the same data. The general rule, which
+belongs next to F-27's: **a count printed above a list has to come from the expression that produced the list** —
+`len(raw)` beside `sorted(set(raw))` is a discrepancy no test can catch because both halves are individually correct,
+and a tool whose numbers do not match its own output teaches a reviewer to skim it.
+
+The same audit found and fixed one instance of the *worse* version of this in a user-facing command, recorded here
+rather than in its own section because the cause is identical: `crabby status` printed "no policy engine in this build
+— T2/T3 approvals arrive with M2, so nothing is waiting". The policy engine has been in the build since M1c and the
+approval queue has been answerable since M2's arbiter, so the line asserted a fact about the release that the release no
+longer matches, and no test reads prose. The command now queries `GET /approvals?state=pending` and prints the count it
+gets, with the same object in the `--json` document — the claim became a measurement, which is the only fix that cannot
+go stale again.
+
 ## 3. Checks That Passed
 
 | Check | Result |

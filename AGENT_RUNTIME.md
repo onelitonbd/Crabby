@@ -177,7 +177,17 @@ arguments is legal, and it records `supersedes` so the chain is readable. An app
 approved is the runtime's lateness and is deliberately **not** counted as a refusal, because a pause caused by our own
 queueing would punish the user for it.
 
-The risk tiers and their per-tool assignment are decided (`SECURITY.md` §6, `PROVIDERS_AND_TOOLS.md` §4.2, D-046), and so is the classifier that nudges `shell.run` upward (D-066, closing O-032 — an escalation hint, never the boundary). Approval **persistence** is decided as *absent* in v1 (D-052), and policy configuration is one file in one format, `config.json`, whose schema is the artifact `crabby config schema --json` prints (D-060). What remains open in this area is a number, not a design: the timeout thresholds and escalation tuning that M2 sets against real usage. `SECURITY.md` owns the policy and threat-model definition.
+Signing is a surface question and the arbiter decides it, so `answer` takes `via` — the interface the answer arrived
+on — and refuses a tier that surface may not sign (D-085, `SECURITY.md` §6.2). Refusing changes nothing: the row stays
+`pending` for a surface that may sign it, and no event is written for a refusal that moved no state. The two §4.3
+routes (`GET /approvals`, `POST /approvals/{id}/decision`) call this same object rather than querying the table, which
+is the only reason "answer from anywhere" is a fact and not a hope; `Idempotency-Key` is accepted on the decision route
+and not required, because the row itself refuses a second answer, so a replay is a convenience and not a guard.
+
+The risk tiers and their per-tool assignment are decided (`SECURITY.md` §6, `PROVIDERS_AND_TOOLS.md` §4.2, D-046), and so is the classifier that nudges `shell.run` upward (D-066, closing O-032 — an escalation hint, never the boundary). Approval **durability** is real from M2 on — one row per request in `crabby.sqlite3`, which is what makes `once` mean
+once *across a restart* (`SECURITY.md` §17) — while approval **reuse** ("remember this") is decided as absent in v1
+(D-052); the two were one word in this paragraph until the table existed, and the sentence is now split so the second
+meaning cannot be read as the first. Policy configuration is one file in one format, `config.json`, whose schema is the artifact `crabby config schema --json` prints (D-060). What remains open in this area is a number, not a design: the timeout thresholds and escalation tuning that M2 sets against real usage. `SECURITY.md` owns the policy and threat-model definition.
 
 ## 6. Cancellation Behavior
 

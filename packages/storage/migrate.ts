@@ -75,6 +75,41 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // D-084's queue, and the reason `ApprovalStore` was made a seam instead of a query API: this table is the only
+    // place an approval exists, so "answer from anywhere" (SECURITY.md §6.3) is a property of the row rather than of
+    // whichever surface wrote it.
+    version: 2,
+    name: "approvals",
+    up(db) {
+      db.exec(`
+        CREATE TABLE approval (
+          id           TEXT PRIMARY KEY,
+          task_id      TEXT NOT NULL REFERENCES task (id) ON DELETE CASCADE,
+          tool         TEXT NOT NULL,
+          tier         TEXT NOT NULL,
+          binding      TEXT NOT NULL,
+          state        TEXT NOT NULL CHECK (state IN ('pending','approved','denied','expired','consumed')),
+          requested_at INTEGER NOT NULL,
+          expires_at   INTEGER NOT NULL,
+          answered_at  INTEGER,
+          answered_by  TEXT,
+          consumed_at  INTEGER,
+          supersedes   TEXT REFERENCES approval (id) ON DELETE SET NULL,
+          request_json TEXT NOT NULL
+        );
+        -- The queue read (?state=) and the expiry sweep are the only two queries M2 needs. The order a client sees is
+        -- the rowid order ApprovalStore.all() asks for, and it is deliberately NOT indexed: rowid is not even a
+        -- nameable index column in SQLite (underscore-rowid is), which the first run of this migration reported, and leaving
+        -- it that way is the decision rather than the error -- a covering index that happens to return rows in
+        -- insertion order is a temptation to make an ordering a contract on a table that holds a phone's handful of
+        -- pending prompts. Backticks are absent from this block on purpose: a template literal ends at the first one.
+        CREATE INDEX approval_state   ON approval (state);
+        CREATE INDEX approval_expiry  ON approval (state, expires_at);
+        CREATE INDEX approval_task    ON approval (task_id);
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

@@ -137,7 +137,7 @@ The names are here because a name that lives only in code is a name an interface
 | File | Mode | What it is |
 | --- | --- | --- |
 | `config.json` | `0644` | Overrides only; the defaults stay in code (D-074). `AGENTS.md` names this file, so it is listed for completeness. |
-| `crabby.sqlite3` | `0600` dir-inherited | One database: tasks, events, client identities, pairing codes, idempotency records. `journal_mode = WAL`, `busy_timeout` from `limits.sqliteBusyTimeoutMs` (D-074). |
+| `crabby.sqlite3` | `0600` dir-inherited | One database: tasks, events, client identities, pairing codes, idempotency records, and the approval queue (§6.3, schema version 2). `journal_mode = WAL`, `busy_timeout` from `limits.sqliteBusyTimeoutMs` (D-074). |
 | `crabby.sqlite3-wal`, `crabby.sqlite3-shm` | — | SQLite's own siblings, present while a writer is open. Online backup takes a checkpoint first. |
 | `scratch/<taskId>/` | `0700` | Overflow for a payload past D-064's 64 KiB inline cap, named `<eventId>.json`, pruned at startup past 24 h with the removal logged. One directory per task so a completed task's bytes leave as a unit. |
 | `vault/` | `0700` | D-066's secret store; the only directory whose contents may be referenced by name and never by value in a log line. |
@@ -154,11 +154,15 @@ Proposed repository boundaries:
 - Conversation repository.
 - Task and checkpoint repository.
 - Event repository.
-- Approval repository.
+- Approval repository — implemented as `packages/storage/approvals.ts`, which is `SECURITY.md` §6.3's row plus §17's
+  restart property, and which *implements* `ApprovalStore` from `packages/agent-runtime` rather than defining it
+  (`ARCHITECTURE.md` §19: adapters implement abstractions). Its table is `approval`, at schema version 2.
 - Memory repository.
 - Configuration repository.
 
-The precise repository interfaces and whether these are separate modules or grouped implementations remain open.
+The precise repository interfaces and whether these are separate modules or grouped implementations remain open for the
+four not yet named by a milestone. The approval repository is the first one M2 needed, and it is a module rather than a
+split of `tasks.ts` because its row's meaning belongs to the runtime's arbiter and its bytes belong here.
 
 The first implementation should avoid unnecessary distributed storage or a mandatory database server unless validation shows that a simpler solution cannot meet the requirements.
 

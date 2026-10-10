@@ -209,8 +209,13 @@ def main() -> int:
                     )
 
     if advisories:
-        print(f"! {len(advisories)} advisory item(s) (documents planned but not yet written):")
-        for a in sorted(set(advisories)):
+        # Deduplicated *before* the count is printed, not after: the list beneath this line is `sorted(set(...))`, and
+        # counting the raw list advertised "4 advisory item(s)" above three bullets. A count that does not match the
+        # list it generated reads as output the tool failed to print — which is F-27's discipline turned on the checker
+        # itself, and is what F-40 records.
+        unique = sorted(set(advisories))
+        print(f"! {len(unique)} advisory item(s) (documents planned but not yet written):")
+        for a in unique:
             print(f"  - {a}")
 
     # 7. traceability: every accepted decision must be enforced by at least one document,

@@ -5,13 +5,18 @@
 // Two things are absent on purpose. There is no policy *enforcement* here: `@crabby/policy` answers "what tier is this
 // and who may do it" and `GET /api/v1/tools` publishes that registry, but no route grants anything, because "an
 // interface may request, display, and relay; it may never grant" (`SECURITY.md` §6.1) would break at the first attempt
-// if a Gateway endpoint could wave a T3 through. Approvals arrive with M2's approval service, which calls
-// `policy.evaluate` and holds the outcome; until then a task that needs approval has no way to get one, and this build
-// says so in `crabby status` rather than pretending otherwise. And there is no second listener: §2's loopback default is what
+// if a Gateway endpoint could wave a T3 through. The approval queue and its two §4.3 routes are in this build, and
+// they only *answer*: nothing here opens a request. The caller that opens one is M2's runtime loop, which is the party
+// that calls `policy.evaluate` and hands the result to the arbiter (D-084); until that loop exists a task that needs an
+// approval has no way to get one, and this build says so in `crabby status` rather than pretending otherwise. And there is no second listener: §2's loopback default is what
 // `listen` is given, and `crabby gateway start` refuses a non-loopback host until pairing has something to protect.
 
-import type { ClientInterface } from "@crabby/api-contracts";
+import { createApprovals } from "@crabby/agent-runtime";
+import type { ApprovalState, ClientInterface } from "@crabby/api-contracts";
 import {
+  APPROVAL_STATES,
+  ApprovalDecisionBody,
+  ApprovalListQuery,
   CreateTaskBody,
   type Event,
   errorEnvelope,
@@ -31,8 +36,10 @@ import { allToolRecords, CAPABILITIES, registryDigest, TIERS, TOOL_REGISTRY } fr
 import {
   appendEvent,
   authenticate,
+  createSqliteApprovalStore,
   createTask,
   getTask,
+  type Identity,
   listIdentities,
   listTasks,
   mintPairingCode,
@@ -48,10 +55,17 @@ import {
   schemaVersion,
   stateCounts,
   taskScratch,
+  transact,
 } from "@crabby/storage";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { createEventBus } from "./bus.ts";
-import { authError, GatewayError, notFound, validationError } from "./errors.ts";
+import {
+  APPROVAL_REFUSAL_CLASS,
+  authError,
+  GatewayError,
+  notFound,
+  validationError,
+} from "./errors.ts";
 import { comment, frame, gapFrame, HEARTBEAT_MS, openStream, type StreamState } from "./sse.ts";
 
 export interface GatewayDeps {
@@ -116,7 +130,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
     // `SECURITY.md` §13 states the rule as "without a valid token, the Gateway must reject every route, including
     // health and SSE". A local caller without credentials therefore gets `401`, which is also the honest answer to
     // "is a Gateway running here?" — it is, and you are not paired to it.
-    requireToken(db, request);
+    request.crabbyClient = requireToken(db, request);
   });
 
   app.setErrorHandler((error: unknown, request: FastifyRequest, reply: FastifyReply) => {
@@ -152,6 +166,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   registerPolicyRoutes(app, deps);
   registerAuthRoutes(app, deps);
   registerTaskRoutes(app, deps, bus);
+  registerApprovalRoutes(app, deps, bus);
   registerEventStream(app, deps, bus);
 
   const bootstrap =
@@ -386,6 +401,157 @@ function registerTaskRoutes(
   );
 }
 
+// ------------------------------------------------------------------ approvals (§4.3, SECURITY.md §6.3)
+
+/** The two routes §4.3 names for the queue. There is no third one that *creates* an approval, and that absence is the
+ *  security model: §6.1 lets an interface "request, display, and relay" and never grant, so the only writer of a
+ *  request is the runtime that evaluated the policy. A client asks for an action; whether a prompt exists is what
+ *  `packages/policy` computed, not something a route can be talked into.
+ *
+ *  The service is built here rather than reached for a `packages/storage` query, because the rules and the queue view
+ *  belong to one arbiter (D-084): `?state=` reads `approvals.list`, the same function a TUI consults, so a phone
+ *  cannot be shown a different set of live prompts than the surface that answers them. */
+function registerApprovalRoutes(
+  app: FastifyInstance,
+  deps: GatewayDeps,
+  bus: ReturnType<typeof createEventBus>,
+): void {
+  const approvals = createApprovals({
+    store: createSqliteApprovalStore(deps.db),
+    // `apr` is the prefix `@crabby/api-contracts`'s id union already reserves for approvals; the arbiter's own tests
+    // mint `apv_N` counters because a test id is not a published id.
+    newId: () => newId("apr"),
+  });
+
+  app.get<{ Querystring: Record<string, string> }>("/api/v1/approvals", async (request, reply) => {
+    const state = parseApprovalQuery(request.query);
+    const items = approvals.list({ state });
+    // `serverTime` is not decoration: §6.3 makes every interface render the countdown, and a countdown measured on a
+    // phone whose clock is a minute fast turns a live prompt into an expired one on screen. The Gateway is the party
+    // that decides expiry, so it publishes its own clock and a client renders the difference.
+    return reply.send({ items, count: items.length, state, serverTime: new Date().toISOString() });
+  });
+
+  app.post<{ Params: { id: string }; Body: ApprovalDecisionBody }>(
+    "/api/v1/approvals/:id/decision",
+    { schema: { body: ApprovalDecisionBody } },
+    async (request, reply) => {
+      const client = request.crabbyClient;
+      if (client === undefined) throw authError("missing", request.crabbyRequestId);
+      const body = request.body;
+      const route = "POST /api/v1/approvals/:id/decision";
+      const key = request.headers["idempotency-key"];
+      const hasKey = typeof key === "string" && key.length > 0;
+      const hash = requestHash(body);
+      // Optional here and required on `POST /tasks`, which is the difference between the two: a lost create response
+      // leaves a task nobody asked for, while a lost answer leaves a queue row that already says `approved`. The key
+      // is accepted so a phone that retried after a blip reads back its own answer instead of being told it answered
+      // twice — and a *different* answer under the same key is the conflict §2 defines.
+      if (hasKey && typeof key === "string") {
+        const cached = recall(deps.db, key, route, hash);
+        if (cached.found && "mismatch" in cached) {
+          throw new GatewayError({
+            code: "idempotency_conflict",
+            message:
+              "that `Idempotency-Key` was already used with a different body; a second answer to one approval is a new " +
+              "request and not an override (SECURITY.md §6.3)",
+            class: "conflict",
+            retryable: false,
+          });
+        }
+        if (cached.found && "record" in cached) return reply.send(cached.record.response);
+      }
+
+      // Read the row before answering, because a refusal that still moved it (`expired`) has to describe the row it
+      // moved, and `ApprovalResult`'s failure arm deliberately carries no record: a caller that could read a record
+      // off a refusal would be tempted to treat it as an accepted answer.
+      const before = approvals.list().find((row) => row.id === request.params.id);
+      const at = Date.now();
+      const correlationId = request.crabbyRequestId;
+      const outcome = transact(deps.db, () => {
+        const result = approvals.answer({
+          id: request.params.id,
+          decision: body.decision,
+          scope: body.scope ?? "once",
+          byClientId: client.id,
+          via: client.interface,
+          at,
+        });
+        const kind = result.ok ? result.event : result.event;
+        if (kind === undefined || before === undefined) {
+          return { result, published: undefined as Event | undefined };
+        }
+        const task = getTask(deps.db, before.request.taskId);
+        if (task === undefined) {
+          // Unreachable while the foreign key holds, and the throw is still the right answer if it ever becomes
+          // reachable: an approval that moved with no task to log against cannot be described in an event, so nothing
+          // moves — the transaction rolls the row back with it.
+          throw new GatewayError({
+            code: "approval_without_task",
+            message:
+              `approval ${before.id} refers to task ${before.request.taskId}, which is not in the database — a pending ` +
+              "approval is deleted with its task (docs/DATA_AND_MEMORY.md §7)",
+            class: "internal",
+            retryable: false,
+          });
+        }
+        const event: Event = {
+          id: newId("evt"),
+          schemaVersion: SCHEMA_VERSION,
+          type: kind,
+          ts: new Date(at).toISOString(),
+          sessionId: task.sessionId,
+          taskId: task.id,
+          seq: 0,
+          ...(correlationId === undefined ? {} : { correlationId }),
+          payload: {
+            // §14's audit fields, and §14's rule that a payload keeps *what was attempted*: the exact target travels
+            // with the outcome in plaintext, because an approval whose command was hashed cannot be reviewed a week
+            // later (D-065's reasoning, applied to the one record that exists to be read after the fact).
+            approvalId: before.id,
+            tool: before.request.tool,
+            tier: before.request.tier,
+            binding: before.request.binding,
+            summary: before.request.summary,
+            exact: before.request.exact,
+            actor: client.id,
+            via: client.interface,
+            outcome: result.ok ? body.decision : result.code,
+            ...(result.ok ? { scope: body.scope ?? "once", state: result.record.state } : {}),
+          },
+        };
+        const appended = appendEvent(deps.db, {
+          event,
+          scratchDir: taskScratch(deps.layout, task.id),
+        });
+        return { result, published: { ...event, seq: appended.seq } };
+      });
+
+      if (!outcome.result.ok) {
+        const refusal = outcome.result;
+        throw new GatewayError({
+          code: `approval_${refusal.code}`,
+          // The arbiter's own sentence, verbatim: it already names the section that refused and the next action, and a
+          // route that rephrased it would be a second voice telling a user why they were denied.
+          message: refusal.reason,
+          class: APPROVAL_REFUSAL_CLASS[refusal.code],
+          retryable: false,
+          ...(correlationId === undefined ? {} : { requestId: correlationId }),
+        });
+      }
+
+      const response = { record: outcome.result.record, approvalId: outcome.result.record.id };
+      if (hasKey && typeof key === "string") {
+        remember(deps.db, { key, route, requestHash: hash, response });
+      }
+      // Published after the transaction, never inside it: a stream that learned about an answer a rollback later is a
+      // client that has to be told the opposite, and §5.4 has no frame for taking an event back.
+      if (outcome.published !== undefined) bus.publish(outcome.published);
+      return reply.send(response);
+    },
+  );
+}
+
 // ------------------------------------------------------------------ events (SSE, §5.1/§5.4)
 
 function registerEventStream(
@@ -463,6 +629,9 @@ function registerEventStream(
 declare module "fastify" {
   interface FastifyRequest {
     crabbyRequestId?: string;
+    /** The paired identity the bearer token belongs to, resolved once by `onRequest`. §14 of `SECURITY.md` asks every
+     *  audit record for an actor, and an actor reconstructed per route is an actor two routes can disagree about. */
+    crabbyClient?: Identity;
   }
 }
 
@@ -478,12 +647,13 @@ function requireLoopback(request: FastifyRequest): void {
   }
 }
 
-function requireToken(db: SqliteDb, request: FastifyRequest): void {
+function requireToken(db: SqliteDb, request: FastifyRequest): Identity {
   const header = request.headers.authorization;
   if (typeof header !== "string" || !header.toLowerCase().startsWith("bearer "))
     throw authError("missing");
   const identity = authenticate(db, header.slice(7).trim());
   if (!identity) throw authError("invalid");
+  return identity;
 }
 
 function pairingFailure(reason: string | undefined): string {
@@ -537,6 +707,30 @@ function parseListQuery(query: unknown): {
     ...(value.state === undefined ? {} : { state: value.state }),
     ...(value.sessionId === undefined ? {} : { sessionId: value.sessionId }),
   };
+}
+
+/** `GET /approvals?state=` (§4.3). Validated against the contract's list rather than ignored: a filter that silently
+ *  matched nothing turns a typo into an empty queue, and an empty queue on a phone reads as "nothing needs you" — the
+ *  one false negative an approval system cannot afford. `pending` is the default because it is the only state a client
+ *  can still act on. */
+function parseApprovalQuery(query: unknown): ApprovalState {
+  const raw = (query ?? {}) as Record<string, unknown>;
+  const candidate: Record<string, unknown> = { ...raw };
+  for (const [key, value] of Object.entries(candidate)) {
+    if (typeof value === "string" && value.length === 0) delete candidate[key];
+  }
+  const result = validate(ApprovalListQuery, candidate);
+  if (!result.ok) {
+    throw validationError([
+      ...result.problems,
+      {
+        path: "state",
+        message: `must be one of ${APPROVAL_STATES.join(", ")}`,
+        kind: "approval-state",
+      },
+    ]);
+  }
+  return (result.value as { state?: ApprovalState }).state ?? "pending";
 }
 
 function boundAddress(app: FastifyInstance): { host: string; port: number | undefined } {

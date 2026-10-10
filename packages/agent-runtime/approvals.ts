@@ -7,14 +7,19 @@
 // §4 names (D-014), rather than in the Gateway — so the TUI, the Web UI, Telegram and a scheduled job all get the same
 // answer, because "answer from anywhere" is only true if the arbiter is not one of the answerers.
 //
-// Not here yet, on purpose: persistence and the routes. `ApprovalStore` is the seam `packages/storage` implements, and
-// `GET /approvals` + `POST /approvals/{id}/decision` (`docs/INTERFACES_AND_API.md` §4.3) are the surface. Neither is
-// written until it can be written with its migration and its tests, because a route over a table nobody has made is a
-// demo, not a feature.
-import type { ApprovalRequest } from "@crabby/policy";
+// The seam is `ApprovalStore` below, and `packages/storage/approvals.ts` implements it — which is `ARCHITECTURE.md`
+// §19's direction and not an accident ("Infrastructure adapters implement those abstractions"): this module owns the
+// abstraction and imports no database, so an adapter can import the abstraction it serves. The two surfaces are
+// `GET /approvals` and `POST /approvals/{id}/decision` (`docs/INTERFACES_AND_API.md` §4.3), and neither one grants
+// anything: a route calls the same four methods a TUI calls, which is what makes D-084's "one arbiter" checkable
+// instead of rhetorical.
+import type { ApprovalState, ClientInterface } from "@crabby/api-contracts";
+import type { ApprovalRequest, Tier } from "@crabby/policy";
 
 export type ApprovalDecision = "approve" | "deny";
-export type ApprovalState = "pending" | "approved" | "denied" | "expired" | "consumed";
+// The state *names* are the contract's, because `GET /approvals?state=` and the schema's `CHECK` constraint have to
+// agree with them, and D-083's rule is that names live in `@crabby/api-contracts` while the edges live here.
+export type { ApprovalState } from "@crabby/api-contracts";
 
 /** The event kind each operation owes the task's log (`docs/INTERFACES_AND_API.md` §5.2's `approval.*` set). Returned
  *  rather than appended, because this module owns no database: the caller writes the record and its event in one
@@ -70,7 +75,19 @@ export type ApprovalFailureCode =
   | "not-found"
   | "scope-unsupported"
   | "materially-changed"
+  | "surface-not-allowed"
   | "consumed";
+
+/** Which tiers a given surface may sign. A `Record` with only the restricted keys, so widening an approval to a new
+ *  interface is a change to a line that cites a rule rather than a default that happens to allow it.
+ *
+ *  This is D-085's answer to a contradiction the code had been carrying quietly: `packages/policy` refused to *queue*
+ *  a T3 approval for a Telegram client and cited §6.2, while §6.3's own sentence says an approval "must be answerable
+ *  from all four interfaces" — and no document anywhere said which surface may sign which tier. A rule that lives in
+ *  one package's `if` and contradicts another package's prose gets deleted by the next person reading the prose, so
+ *  §6.2 now states it, and it is enforced here rather than in the route: the queue is shared across surfaces
+ *  ("answer from anywhere"), so a T3 row opened for the TUI is sitting in the Telegram client's list too, and a
+ *  restriction the Gateway alone applied would be gone the moment a TUI called the service directly.
 
 /** A refusal can carry an event too, and that is deliberate: `answer` on a request whose deadline has passed *changes*
  *  the row to `expired` while refusing the answer, and a rule that says "every state change has an event" cannot be
@@ -101,6 +118,10 @@ export interface Approvals {
     readonly decision: ApprovalDecision;
     readonly scope: string;
     readonly byClientId?: string;
+    /** Which interface the answer arrived on. Required, not optional: an answer that does not say where it came from
+     *  cannot be checked against §6.2, and a `via` that defaults to something permissive is how a restriction becomes
+     *  a caller's courtesy. A caller with no surface at all is a caller that skipped the rule. */
+    readonly via: ClientInterface;
     readonly at: number;
   }): ApprovalResult;
   /** The consume-once step the runtime performs immediately before executing an approved action. */
@@ -116,6 +137,13 @@ export interface Approvals {
    *  the two paths agree whichever runs first. */
   sweep(at: number): { readonly expired: readonly ApprovalChange[] };
   pending(taskId?: string): readonly ApprovalRecord[];
+  /** The queue view every surface reads, including the answered history a `?state=` filter asks for. It is on the
+   *  arbiter and not a `SELECT` the route writes, because "answer from anywhere" only holds if the phone and the
+   *  desktop are reading the same list out of the same function — a second query path is a second opinion. */
+  list(filter?: {
+    readonly state?: ApprovalState;
+    readonly taskId?: string;
+  }): readonly ApprovalRecord[];
   /** D-043's ladder needs a count and not a verdict: repeated refusal of the same class is what pauses a task, the loop
    *  decides what "repeated" means, and this reports what happened. An expiry counts only when nobody answered it —
    *  a lapsed approval the runtime never executed is the runtime's lateness, not a user's refusal. */
@@ -125,6 +153,10 @@ export interface Approvals {
 /** §6.3's mandatory text. Checked trimmed rather than merely present, because "expected effects" satisfied by a string
  *  that renders as nothing is the same defect as a missing field, and this list is short enough to read against the
  *  sentence it comes from. */
+const ANSWERABLE_FROM: Partial<Record<Tier, readonly ClientInterface[]>> = {
+  T3: ["tui", "web"],
+};
+
 const REQUIRED_TEXT: readonly (keyof ApprovalRequest)[] = [
   "taskId",
   "tool",
@@ -228,7 +260,7 @@ export function createApprovals(deps: {
       };
     },
 
-    answer({ id, decision, scope, byClientId, at }) {
+    answer({ id, decision, scope, byClientId, via, at }) {
       const record = store.get(id);
       if (record === undefined) {
         return {
@@ -277,6 +309,22 @@ export function createApprovals(deps: {
           reason:
             `approval ${id} was already \`${record.state}\`${record.answeredBy === undefined ? "" : ` by client ${record.answeredBy}`}; ` +
             "the first answer stands, and a change of mind is a new request rather than an override",
+        };
+      }
+      const allowed = ANSWERABLE_FROM[record.request.tier];
+      if (allowed !== undefined && !allowed.includes(via)) {
+        // Refused *without* touching the row, which is the part a route-level check would get wrong by accident: the
+        // TUI is still expected to answer this one, so a refusal from a phone must neither expire it nor consume it.
+        return {
+          ok: false,
+          code: "surface-not-allowed",
+          reason:
+            `approval ${id} is \`${record.request.tier}\`, and \`${record.request.tier}\` is answerable on ${allowed
+              .map((surface) => `\`${surface}\``)
+              .join(
+                " or ",
+              )} only — the request stays pending there (SECURITY.md §6.2, D-085). This interface may ` +
+            "display an approval and relay an answer made elsewhere; it may not sign this one",
         };
       }
       record.state = decision === "approve" ? "approved" : "denied";
@@ -361,6 +409,14 @@ export function createApprovals(deps: {
         }
       }
       return { expired };
+    },
+
+    list(filter = {}) {
+      const { state, taskId } = filter;
+      return store
+        .all()
+        .filter((record) => state === undefined || record.state === state)
+        .filter((record) => taskId === undefined || record.request.taskId === taskId);
     },
 
     pending(taskId) {

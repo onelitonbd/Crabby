@@ -201,10 +201,20 @@ Rules:
 - Tier assignment is a property of the tool and the *argument shape*, not of the model's confidence. `rm -rf` and `ls` are never the same tier even though both are "shell".
 - A tool may raise its own tier; it may not lower it. Configuration may raise strictness but never below the tier's floor.
 - Unknown, unclassified, or newly imported extensions default to **T2** until classified.
+- A **T3 answer is signed in the TUI or the Web control UI.** Another interface may display the request and relay an
+  answer made elsewhere; when it tries to sign, it is refused and the request stays pending for a surface that may
+  (D-085). This is a rule about *signing*, not about reach: §6.3's "answerable from all four interfaces" says every
+  interface can see and answer a prompt, and this says which tiers each may put its name to. The distinction is
+  recorded because `packages/policy` had been enforcing the Telegram half of it while citing §6.2 for a sentence §6.2
+  did not contain, and a rule that lives in one package's `if` and not in the document it cites gets deleted by the
+  next person reading the document (F-39).
 
 ### 6.3 Approval workflow
 
-An approval request must carry: task id, tool, tier, human-readable action summary, the exact command or path or destination host, expected effects, reversibility, and an explicit "what could go wrong". It must be answerable from all four interfaces, with an expire-on-timeout default so a stale prompt cannot be approved much later.
+An approval request must carry: task id, tool, tier, human-readable action summary, the exact command or path or destination host, expected effects, reversibility, and an explicit "what could go wrong". It must be answerable from all four interfaces, with an expire-on-timeout default so a stale prompt cannot be approved
+much later. "Answerable" is about reach and not about authority: which surface may *sign* which tier is §6.2's rule,
+and it is enforced where an answer is recorded (D-084, D-085) rather than in each interface, because a queue shared by
+four surfaces cannot be guarded four different ways.
 
 Expiry is per tier, decided in D-064 (closing O-041): **T1 15 minutes, T2 10 minutes, T3 5 minutes.** The direction of that gradient is the whole point — the more an approval grants, the less time an unattended prompt should stay answerable, because the window in which a phone is left unlocked and a request is left standing is exactly the window this rule covers. The countdown is rendered by every interface (Web W-A5, TUI T-A5, Telegram G-A1) with the reason it expires.
 

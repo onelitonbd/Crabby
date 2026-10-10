@@ -70,7 +70,7 @@ function event(taskId: string, sessionId: string, payload: Record<string, unknow
 }
 
 describe("migrations", () => {
-  it("creates the six M1 tables and records the version in the ledger", () => {
+  it("creates the six M1 tables, M2's approval queue, and the ledger rows for both", () => {
     const { db, close } = tempDb();
     const names = (
       db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]
@@ -78,6 +78,7 @@ describe("migrations", () => {
       .map((row) => row.name)
       .sort();
     for (const wanted of [
+      "approval",
       "client_identity",
       "idempotency",
       "pairing_code",
@@ -86,12 +87,20 @@ describe("migrations", () => {
       "task_event",
     ])
       assert.ok(names.includes(wanted), `missing table ${wanted}`);
-    assert.equal(schemaVersion(db), 1);
-    const ledger = db.prepare("SELECT version, name FROM schema_migration").all() as {
+    assert.equal(schemaVersion(db), 2);
+    // One row per migration, in order, and never an update to an old one: that is what `docs/DATA_AND_MEMORY.md`
+    // §2.6's "configuration migrations must be considered when upgrading" means for this file — a v1 database gains a
+    // table on the next start rather than being rebuilt, so an upgrade cannot silently drop a pending approval.
+    const ledger = db
+      .prepare("SELECT version, name FROM schema_migration ORDER BY version")
+      .all() as {
       version: number;
       name: string;
     }[];
-    assert.deepEqual(ledger, [{ version: 1, name: "tasks-events-clients-idempotency" }]);
+    assert.deepEqual(ledger, [
+      { version: 1, name: "tasks-events-clients-idempotency" },
+      { version: 2, name: "approvals" },
+    ]);
     close();
   });
 
@@ -99,7 +108,7 @@ describe("migrations", () => {
     const { db, close } = tempDb();
     const second = migrate(db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 1);
+    assert.equal(second.version, 2);
     close();
   });
 

@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-38 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-40 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -181,9 +181,13 @@ a table cannot carry are in the function's signature instead of a comment: an en
 outcome, an entry into `running` out of an approval names the answer, and recovery may not authorize itself (§7.2).
 `packages/agent-runtime/approvals.ts` is the second module, and D-084 is the reason it is a runtime object rather than
 a Gateway handler: one arbiter for four answerers, `once` that means once because a single row says so, and an expiry
-that arrives as an event whether or not an answer arrived with it. Its persistence and its two §4.3 routes come next,
-together with the migration — a route over a table nobody has written is a demo. Cancellations and checkpoints are the
-remaining M2 managers, and they land in `packages/agent-runtime` rather than in the Gateway for the reason in D-003: a
+that arrives as an event whether or not an answer arrived with it. Its persistence and its two §4.3 routes landed with them:
+schema version 2 is the `approval` table, `packages/storage/approvals.ts` implements the arbiter's `ApprovalStore`
+seam, and the queue and the decision are `GET /approvals` and `POST /api/v1/approvals/{id}/decision` — a route over a
+table nobody had written would have been a demo, so the table came first. Writing it against §6.2 also surfaced that
+the tier-a-surface-may-sign rule had no document at all, which is F-39 and D-085. The loop that *opens* a request when
+a task reaches a gated action is the next thing, with cancellations and checkpoints as the remaining M2 managers; they
+land in `packages/agent-runtime` rather than in the Gateway for the reason in D-003: a
 rule the Gateway owns is a rule only the Gateway can follow.
 
 ## 5. Phase M3 — Four interfaces in parallel

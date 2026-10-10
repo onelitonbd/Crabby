@@ -58,6 +58,13 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-038 | No third-party executable extension kind (tool, provider adapter, hook, interface integration) is enabled in the first release, including via any override. The only path is the `O-008` isolation gate. | Accepted |
 | D-039 | Conversion reports are retained as per-version history and never overwritten by an update; `crabby ext info` shows the current report plus a diff against the previous one. | Accepted |
 | D-040 | Crabby is an MCP **client** only. Exposing Crabby as an MCP server is a non-goal, not a deferred feature. | Accepted |
+| D-041 | Users can attach any OpenAI-compatible endpoint by base URL + API key without a Crabby code change or a new release. Custom endpoints get no extra trust and no exemption from policy. | Accepted |
+| D-042 | First-release bundled provider presets are the lean set: `groq`, `openrouter`, `ollama`, `anthropic`, `gemini`, `mock/fake`. Other services arrive through D-041. | Accepted |
+| D-043 | Retry ladder stage 1: same model, same provider, at least 5 attempts per failing stage (configurable), transient classes only, honoring provider hints with jitter. Never a silent model switch. | Accepted |
+| D-044 | On failure after the retry budget, Crabby asks the user which model to use instead, and resumes from the checkpoint — never restarts the task, and never re-runs completed steps or repeated side effects. | Accepted |
+| D-045 | Any model's capability descriptor is user-overridable (force on/off, context ceiling, output reserve). Priority: user override → preset → discovery → adapter default. Forcing a capability on does not exempt it from runtime verification. | Accepted |
+| D-046 | Tier confirmations: `history.export` T2, `cron.schedule` T2 with runtime per-step approval (§4.5 of `PROVIDERS_AND_TOOLS.md`), `memory.save` T1 while external-derived memory is T2. Closes O-020. | Accepted |
+| D-047 | Automatic provider/model fallback is off by default; a per-identity pre-approved narrow ladder may be configured, limited to reliability classes that change neither cost nor data destination. | Accepted |
 
 ## 3. Proposed Technical Choices
 
@@ -79,7 +86,7 @@ Each proposal remains pending until explicitly accepted or validated as required
 
 ## 4. Open Decisions and Validation Requirements
 
-| ID | Topic | Status / Next action |
+| ID | Topic | Status / next action |
 | --- | --- | --- |
 | O-001 | Database engine | Largely informed: SQLite is the leading candidate after comparison against `docs/DATA_AND_MEMORY.md` §4. Final confirmation still requires reproduction on a clean environment. |
 | O-002 | Database driver | Needs Validation: reproduce `better-sqlite3` build and runtime behaviour on a clean Termux environment; pin supported version range. |
@@ -100,23 +107,27 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-017 | Backup and restore | Open: define a reliable, portable backup and restore procedure for persistent data. |
 | O-018 | Secrets storage mechanism | Accepted direction in D-031. Open remainder: Android/Termux `keystore` reachability from Termux, and the KDF/encryption parameters for the fallback file. |
 | O-019 | Local client authentication method | Accepted in D-030 (per-client pairing tokens). Open remainder: token format, expiry policy, and pairing UX on a phone-sized terminal. |
-| O-020 | Risk classification levels for tools | Tier *model* settled in `SECURITY.md` §6.2; per-tool assignment proposed in `PROVIDERS_AND_TOOLS.md` §4.2. Open pending owner confirmation of three judgement calls (export tier, cron-with-T2-steps tier, auto-memory-from-external-content tier). |
+| O-020 | Risk classification levels for tools | **Closed (D-046).** Tier model in `SECURITY.md` §6.2, per-tool assignment in `PROVIDERS_AND_TOOLS.md` §4.2; the three judgement calls confirmed. |
 | O-021 | Prompt-injection hardening depth for imported content | Open: instruction-source tagging vs full isolation. |
 | O-022 | Audit log redaction rules | Open: which payload fields are stripped vs hashed vs retained. |
 | O-023 | Remote shell posture | Accepted in D-032 (no tunnel-specific narrowing). See `SECURITY.md` §13 for the residual-risk note and the per-identity narrowing path. |
 | O-024 | `termux-api` exposure | Accepted in D-033 (T3, per-capability, per-action approval). Open remainder: the exact capability list shipped in the first release. |
 | O-025 | Mandatory per-task capability narrowing | Open: whether task-scoped narrowing (`SECURITY.md` §6.1) should be required for every task or offered opt-in. |
-| O-026 | MCP server role | **Closed — decided as a non-goal (D-040).** |
+| O-026 | MCP server role | **Closed — non-goal (D-040).** Crabby is an MCP client only. |
 | O-027 | Conversion-report history depth | Open: how many per-version reports to retain before pruning, and whether reports ship inside user exports/backups. |
-| O-028 | Bundled provider list | Open: pick the first-release adapters from `PROVIDERS_AND_TOOLS.md` §3.3. Each bundled provider is an ongoing maintenance commitment. |
-| O-029 | Provider retry/backoff policy | Open: per-error-class retry budgets, `Retry-After` handling, jitter bounds. |
-| O-030 | Provider fallback default | Open: allowed by default vs always explicit. Privacy-relevant because fallback can move data to another vendor (`PROVIDERS_AND_TOOLS.md` §3.6). |
+| O-028 | Bundled provider list | **Closed (D-042).** Lean presets (`groq`, `openrouter`, `ollama`, `anthropic`, `gemini`, `mock/fake`) + user-defined OpenAI-compatible endpoints (D-041). |
+| O-029 | Provider retry/backoff policy | Open: per-class budgets, `Retry-After` handling, jitter. The 5-attempt floor per failing stage is fixed (D-043); the schedule inside it is undecided. |
+| O-030 | Provider fallback default | **Closed (D-047).** Explicit ask by default (D-043); optional narrow pre-approved ladder, reliability classes only. |
 | O-031 | Token estimation when a provider has no counter | Open: heuristic choice and how estimates are labeled to users. |
 | O-032 | Shell command classifier ruleset | Open: initial rules, where the table lives (in-tree vs updatable skill), and its documented non-boundary status. |
-| O-033 | `generic-http` user-defined provider | Open: recommended out; a user-supplied request template is a security review of its own. |
+| O-033 | `generic-http` user template | **Closed as rejected.** OpenAI-compatible shape is the supported custom path (D-041); a user-authored request template stays out until proven need. |
 | O-034 | Local inference on Android | Open: document as unsupported, or support only via an external local server (current §3.3 assumption). |
 | O-035 | Tool output caps and temp-file lifetime | Open: per-platform defaults for a low-resource device. |
 | O-036 | Planning-doc checker coverage | Proposed in `scripts/check-docs.py`. Open: whether it should run in CI once a repository workflow exists. |
+| O-037 | Capability override UX | Open: `crabby model edit` as per-field prompts vs an editor screen on Web/TUI (D-045 data model is fixed). |
+| O-038 | Provider-wide capability override | Open: allow overriding every model of one provider at once, or per-model only. |
+
+**Open here means genuinely undecided.** A row marked closed must stay consistent with the decision it cites.
 
 ## 5. Database Evaluation Record
 
@@ -215,10 +226,11 @@ D-033 (`termux-api` tiers) accepted and propagated.
 
 | Counter | Value |
 | --- | --- |
-| Accepted decisions | 40 (D-001…D-040) |
+| Accepted decisions | 47 (D-001…D-047) |
 | Proposed technical choices | 9 (P-001…P-009) |
-| Open / needs-validation items | 36 (O-001…O-036; O-026 closed as non-goal D-040) |
+| Open / needs-validation items | 38 tracked: 5 closed as decided (O-020, O-026, O-028, O-030, O-033), 33 still open |
 | Planning docs written | 9 (incl. `EXTENSIONS.md`, `PROVIDERS_AND_TOOLS.md`) |
+| Custom endpoint / fallback decisions | D-041…D-047 accepted this round |
 | Planning docs remaining | 7 |
 
 Run `python3 scripts/check-docs.py` after editing any planning document; it verifies ID references,

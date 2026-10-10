@@ -375,6 +375,11 @@ Provider-specific capabilities must be declared rather than assumed.
 
 Local and remote models should use the same high-level orchestration flow wherever their capabilities permit.
 
+A model's declared capabilities are user-overridable, in the order **user override → bundled preset → provider
+discovery → adapter default** (`DECISIONS.md` D-045), and an override never exempts a capability from runtime
+verification. Recovery from a provider failure follows the retry-then-ask ladder in
+`PROVIDERS_AND_TOOLS.md` §3.6, which resumes from a checkpoint rather than restarting the task (D-044).
+
 Free-tier API availability and local inference support are optional capabilities, not guarantees of unlimited free usage.
 
 ## 13. Tools and Policy Engine

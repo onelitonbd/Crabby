@@ -143,7 +143,12 @@ Alternatives considered and rejected:
 - Authorization is by **allow-listed Telegram user IDs and/or chat IDs**, configured explicitly. Being able to message the bot is not authorization.
 - The bot must ignore unauthorized senders without revealing whether an ID exists, and should record attempts.
 - Webhook mode must verify the secret token; long polling is the simpler default for Termux.
-- Inline-button approval callbacks must be verified to originate from the same user, chat, and message that the approval was issued for; a callback id alone is not a decision.
+- Scheduled and background jobs are the one place where a single approval could silently become a standing one, so:
+creating a job is a normal tiered action, and **each run re-evaluates every step** — a schedule grants nothing in
+advance (`PROVIDERS_AND_TOOLS.md` §4.5). A job that cannot get approval within its window stops with a visible
+reason rather than running unattended.
+
+Inline-button approval callbacks must be verified to originate from the same user, chat, and message that the approval was issued for; a callback id alone is not a decision.
 - Group chats are denied for privileged operations unless separately enabled, and approvals must not be answerable by anyone but the requesting user.
 
 ### 5.3 Remote access

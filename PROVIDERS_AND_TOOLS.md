@@ -37,6 +37,10 @@ provider, tool, or extension gets to grant itself authority (`SECURITY.md` §2 r
     one from the TUI (D-005).
 08. **Mobile budget applies to tools too.** Output caps, timeouts, and temp-file lifetime are set for low-resource
     devices, not desktop defaults.
+09. **Discovery is a default, not a cage.** What a provider reports about a model seeds the descriptor; the user's
+    override wins, because providers lie, lag, and differ by endpoint (§3.8).
+10. **A provider failure is never a restart.** Retrying or switching a model resumes the task from its checkpoint.
+    Completed steps are not re-run and side effects are never repeated for the sake of simplicity (§3.9, D-044).
 
 ## 3. Model Provider Architecture
 
@@ -102,11 +106,32 @@ genuinely differs.
 | `llama-cpp-server` | `llama-server`, local GGUF | Optional | Depends on the user running the server; no bundling decision here |
 | `anthropic` | Claude APIs | Yes (message format, tool use) | Different system-role and tool-block semantics justify a dedicated adapter |
 | `gemini` | Google AI / Vertex | Yes | Distinct streaming and safety metadata |
-| `generic-http` | Anything else via a user-supplied template | No | Tempting, dangerous to support; revisit only if demand is proven |
+| `openai-compatible` **user-defined** | Any endpoint the user points at: base URL + API key + model name | **Yes — required** | Accepted in D-041. First-class feature, not a workaround: a user must never need a Crabby code change or a released preset to attach an endpoint |
+| `generic-http` (non-OpenAI-shaped template) | Anything else via a user-supplied request template | No | Rejected for now (O-033): a user-authored request/response template is its own security review, and `openai-compatible` already covers the practical cases |
 | `mock/fake` | Deterministic test provider | Yes | Required so tests never hit live APIs (`SECURITY.md` §17) |
 
-The concrete list ships as a decision, not an assumption: which providers are bundled is recorded in §8 (O-028),
-because every bundled provider is a maintenance and API-churn commitment.
+Two distinct things, deliberately separated:
+
+- **Bundled presets** (O-028, accepted as the lean set — D-042): `groq`, `openrouter`, `ollama`, `anthropic`,
+  `gemini`, `mock/fake`, plus `openai-compatible` used with a user-supplied base URL. Presets exist only to
+  pre-fill a display name, a default base URL, and a known model list; they carry no privileged behavior.
+- **User-defined endpoints** (D-041): anything OpenAI-compatible can be attached by the user without a release.
+  A custom endpoint is subject to exactly the same validation, capability rules, tier policy, and credential
+  handling as a bundled one — it gains no extra trust and no exemption.
+
+Custom-provider requirements:
+
+- Configured through `crabby provider add` or configuration, never through an agent-requested change
+  (`config.write` is T3, `PROVIDERS_AND_TOOLS.md` §4.2).
+- Required fields: name, base URL, model name(s); key supplied by reference to the vault (`§3.7`), never inline in
+  a conversation or an ordinary config file.
+- Base URL validation: absolute `http(s)` URL, no embedded credentials in the URL, and a clear warning if the
+  host is not loopback while the key would be sent over plain HTTP.
+- Connecting a custom endpoint sends task context to a third party chosen by the user; that is the user's
+  decision to make, and the model/provider in use MUST be visible on every interface during the task.
+- A custom endpoint may not declare itself exempt from timeouts, output caps, or approval tiers, and its declared
+  capabilities are treated as unverified until the conformance check for §3.2 passes or the user overrides them
+  knowingly (§3.8).
 
 Local inference **on** Android (running a model inside Termux) is a separate question from talking to a local
 server, and is not promised — device capability, storage, and thermal limits decide it.
@@ -141,21 +166,116 @@ Retry policy per class is an open decision (O-029).
 ### 3.6 Selection, routing, and fallback
 
 - The user selects a default model and may pin a model per task or per interface session; per-task pinning wins.
-- Fallback is a **policy**, not a convenience: automatic switching on `rate-limit`/`overloaded` is off by default
-  and must be explicitly enabled, because switching provider changes who sees the user's data — a privacy-relevant
-  act, not just a reliability one.
-- When enabled, fallback must not cross a trust boundary the user did not approve (e.g. from local to a hosted
-  provider) without a recorded, visible indication in the task.
-- No capability downgrade may be silent: if the fallback model lacks `toolCalling`, the runtime must say so rather
-  than pretend the agent still can.
-- Cost guard: a `billing`-class error stops the task rather than cycling through providers, since cycling spends
-  money the user did not authorize (§5.2).
+
+**Retry-then-ask ladder (D-043, D-044).** When a model call fails, the runtime walks exactly one sequence, and
+every stage is observable to the user:
+
+```
+Stage 1  Same model, same provider
+         retry the failed call, up to 5 attempts with backoff
+         (transient classes only: rate-limit, overloaded, timeout,
+          invalid-response that is plausibly partial)
+   |
+   |  still failing, budget exhausted
+   v
+Stage 2  Ask the user — do NOT switch silently
+         "Which model should Crabby use instead?"
+         offer: other models on the same provider, then models on
+         other configured providers; each option labeled with its
+         provider, capability deltas, and cost class
+   |
+   |  user selects
+   v
+Stage 3  Resume from the checkpoint
+         the task does NOT restart; completed steps stay completed
+```
+
+Stage 1 rules:
+
+- **5 attempts is a floor, not a ceiling**, and it is configurable; it applies *per failing stage*, so recovering
+  and then hitting a new error starts a fresh budget rather than continuing a spent one.
+- Retries obey the per-class policy (O-029): honor a provider `Retry-After` when present, always with jitter, and
+  never retry a non-retryable class (`auth`, `billing`, `content-filter`, `cancelled`, denied permission).
+- A retry re-issues the **failed call only**. It never re-runs earlier steps, and it never re-sends an action whose
+  side effect is already recorded as complete.
+
+Stage 2 rules:
+
+- Automatic provider/model switching on `rate-limit`/`overloaded` is **off by default** (O-030 closed as D-043):
+  the user is asked, because switching changes who sees the data — a privacy decision, not a reliability detail.
+- The prompt must name the destination of the candidate (provider + host) and any capability loss. Selecting an
+  alternative from the prompt counts as the user's approval for that switch, recorded on the task.
+- A pre-approved automatic ladder MAY be configured per identity (e.g. "on `rate-limit` only, fall back to
+  model X"); it may not extend to classes that change cost or data destination.
+- `billing` never triggers a switch attempt: the task stops and reports, because cycling spends money the user did
+  not authorize (§5.2).
+- No capability downgrade may be silent. If the chosen model lacks `toolCalling` or a smaller context window, the
+  runtime states it and re-plans only what the budget requires.
+
+Stage 3 rules:
+
+- Switching models or exhausting retries **must not restart the task from scratch**. Work already completed
+  remains complete; execution continues from the saved checkpoint and the pending step that failed.
+- If a step's external effect is uncertain, the recovery rules of `AGENT_RUNTIME.md` §7.3 apply unchanged —
+  Crabby reconciles or asks, it does not blindly repeat.
+- The task record must show the switch: original model, chosen model, reason, stage reached, and whether any step
+  was re-attempted.
+- Where a conversation was generated partly on one model and continues on another, the context is re-budgeted for
+  the new limits, and the user can see that happened.
+
+Timeouts are per call, not per task: a slow model that keeps responding within its per-call deadline is not
+retried merely because the overall task is long.
 
 ### 3.7 Credential handling
 
 Provider credentials are secrets under `SECURITY.md` §7 and D-031: they are supplied once, stored in the vault, and
 referenced by name in configuration — `provider.groq.key = vault://groq`. Adapters receive a handle that yields the
 value at call time; the agent never reads it, and it never enters model context (`SECURITY.md` §7).
+
+### 3.8 Per-model capability override by the user
+
+Provider-reported capabilities are a **starting point, and the user may override any of them for any model**
+(D-045) — bundled or custom, discovered or static.
+
+Override record (stored per model id in user configuration, not inside the adapter):
+
+| Field | Meaning |
+| --- | --- |
+| `reported` | The descriptor the provider/adapter supplied, kept for reference and drift reports. |
+| `overrides` | Only what the user changed. |
+| `limits` | User-set `contextWindow`, `maxOutputTokens`, `reserveForOutput`. |
+| `supports.<flag>` | Forced `true` / `false` / `auto`. |
+| `source` | `manual` \| `preset` — how it got there. |
+| `notes` | Free text, e.g. "endpoint is a proxy, reports no tool support but works". |
+
+Rules:
+
+- Highest specificity wins: **user override → bundled preset → provider discovery → adapter default.**
+- Overrides are per model *and per provider endpoint*, because the same model name behind a proxy is not the same
+  capability set.
+- Forcing a capability **on** is a trust decision with a cost: the runtime still verifies at call time, and when a
+  forced-on capability fails, Crabby must report "`toolCalling` was declared by override and failed" rather than
+  fall back silently. That failure feeds §3.5's `unsupported-capability`.
+- Forcing a capability **off** is always allowed and never argued about — that is the user's fastest lever for a
+  misbehaving endpoint.
+- Changing a context ceiling affects budgeting (§3.4) immediately and is reflected in the TUI/Web provider screens.
+- Editing overrides is a configuration change: `config.write`, T3 (`SECURITY.md` §6.2) — an agent must not be able
+  to widen its own model capabilities by editing this.
+- `crabby model list` shows model, provider, effective capability set, and which entries are overridden;
+  `crabby model edit <provider>/<model>` is the single entry point, mirrored in the Web UI and the TUI.
+
+### 3.9 Resume and re-attempt semantics (shared with the runtime)
+
+The retry ladder and provider switching both land on one rule, which `AGENT_RUNTIME.md` §7 already owns for
+restarts:
+
+- A task resumes at the boundary between completed and pending work, never at step 1.
+- Task progress is authoritative from recorded state, not from what a model believes it had done
+  (`AGENT_RUNTIME.md` §10.1).
+- Re-entry into a step is allowed only when the step is retryable and its side effects are known-safe, or when
+  `idempotent`/`sideEffects` metadata (§4.1) says so.
+- If the new model cannot satisfy a pending step (e.g. no tool calling), the step is marked blocked with a reason
+  and the user chooses: skip, adapt, or approve a different model — instead of the runtime restarting everything.
 
 ## 4. Tool Architecture
 
@@ -213,10 +333,10 @@ may relax only where a floor exists (T3 has no relaxation path in the first rele
 | `shell.run` | `shell.run` | **T2** per command | Capability itself is off by default. Tier computed per command, not per tool; escalation table in §4.3. |
 | `shell.run` (elevated) | `shell.privileged` | **T3** | Package install/remove, service control, system config. |
 | `process.spawn` / `process.list` | `shell.run` | **T2** / **T0** | Long-running processes must be cancellable and re-attachable after restart. |
-| `memory.save` | `memory.write` | **T1** | Auto-memory is T1; a memory containing external content is T2 until the user confirms. |
+| `memory.save` | `memory.write` | **T1** (confirmed) | Auto-memory is T1; a memory whose content originates from untrusted external material stays **T2** until the user confirms — writing injection text into durable memory is the poisoning path (`SECURITY.md` §10). |
 | `memory.search` | read-only | **T0** | |
 | `memory.delete` | `memory.delete` | **T2** | **T3** for bulk or "forget everything about X" (see `docs/DATA_AND_MEMORY.md` §7). |
-| `history.export` | `session.read` | **T2** | Leaves the controlled store; may contain third-party content. |
+| `history.export` | `session.read` | **T2** (confirmed) | Leaves the controlled store; may contain third-party content and secrets that were quoted into messages. Redaction runs before the file is written (§4.4). |
 | `history.deleteConversation` | `session.write` | **T3** | Irreversible relative to derived memories. |
 | `notify.send` (Telegram out) | `net.egress` | **T2** | Sending to a new recipient is T2; publishing is T2/T3 by audience size. |
 | `git.read` (`status`/`diff`/`log`) | `fs.read` | **T0** | Read-only, inside repo root. |
@@ -227,7 +347,7 @@ may relax only where a floor exists (T3 has no relaxation path in the first rele
 | `termux-contact-list` | `device.contacts` | **T3** | Disclosure into context is the risk (`EXTENSIONS.md` §15 area, `SECURITY.md` §15). |
 | `termux-camera-photo`, `termux-location`, sensor read | `device.camera` / `device.location` / `device.sensor` | **T3** | D-033, per-capability enablement. |
 | `termux-battery-status`, `termux-wifi-connectioninfo`, `termux-torch`, `termux-vibrate` | `device.sensor` / `device.control` | **T1** | Low consequence; still opt-in per capability. |
-| `cron.schedule` | `config.write`-adjacent | **T2** | **T3** if the scheduled job itself contains T2/T3 steps — a timer must not become an approval bypass. |
+| `cron.schedule` | `config.write`-adjacent | **T2** | Confirmed: creating a timer is T2, and every step inside the job is still evaluated against policy **each time it runs** — a schedule never inherits or pre-buys approval. Editing an existing job to add T3 steps, or changing what it targets, is **T3**. See §4.5. |
 | `screenshot` / `clipboard.read` | `device.screen` / `device.clipboard` | **T2** | Clipboard is a notorious secret carrier; reading it deserves to be visible. |
 | `clipboard.write` | `device.clipboard` | **T2** | |
 
@@ -262,6 +382,23 @@ Tier is computed per call, from the validated arguments:
   with leftovers reported rather than silently retained.
 - Results above the cap are truncated *and labeled*; a tool must not pretend a partial result is complete.
 - Output is delivered to the model as delimited, attributed, untrusted content (`SECURITY.md` §10).
+
+### 4.5 Scheduled and background work
+
+A timer is the one feature that can quietly turn "one approval" into "approval forever", so the rules are explicit:
+
+- Scheduling is authorized for *the job as described at creation time*. Any material change to its steps, targets,
+  recipients, or model/provider crosses into re-approval (§4.3, `SECURITY.md` §6.3).
+- Every execution of a scheduled job is a fresh policy evaluation: capability check, tier check, and — for T2/T3
+  steps — an approval request delivered through the interfaces at run time, not at schedule time.
+- If a scheduled run cannot obtain approval within its window, it stops and records "waiting on approval"; it must
+  not proceed unattended. Unattended runs are only possible for steps whose tier and grants already permit them.
+- A job inherits no ambient authority from the user who created it beyond its own recorded capability set, and it
+  runs under the identity that created it, so audit records name a person rather than "cron".
+- Jobs are cancellable like tasks (`task.cancel`), and a paused/unlocked vault (§3.7) means the job defers with a
+  visible reason rather than failing opaquely.
+- On a device that killed Termux overnight, jobs are evaluated against their recorded schedule and must not fire a
+  burst of backlogged runs on resume without telling the user.
 
 ## 5. Capability Negotiation
 
@@ -310,12 +447,19 @@ fall back across a privacy boundary (§3.6).
 
 Tracked in `DECISIONS.md`:
 
-- **O-020** — closed by §4.2, subject to owner confirmation of three judgement calls: (a) whether
-  `memory.save` from external content should be T2 or T1, (b) whether `cron.schedule` containing T2 steps should
-  be T3 rather than T2, (c) whether `history.export` is T2 or T0 for the user's own data.
-- **O-028** — the bundled provider list for the first release (§3.3 candidate table).
-- **O-029** — retry/backoff policy per error class, including honoring `Retry-After` and jitter bounds.
-- **O-030** — fallback defaults: allowed by default, or always off until explicitly enabled.
+- ~~**O-020**~~ — **closed.** §4.2 is the accepted assignment for the initial tool set, with the three judgement
+  calls confirmed as: `memory.save` T1 (external-content memory T2), `cron.schedule` T2 with runtime per-step
+  approval (§4.5), `history.export` T2.
+- ~~**O-028**~~ — **closed as the lean set** (D-042): `groq`, `openrouter`, `ollama`, `anthropic`, `gemini`,
+  `mock/fake`, plus user-defined `openai-compatible` endpoints (D-041) rather than a wide preset catalogue.
+- **O-029** — retry/backoff policy per error class, including `Retry-After` handling and jitter bounds. The 5-attempt
+  floor per stage is fixed (D-043); the schedule inside it is still open.
+- ~~**O-030**~~ — **closed** (D-043): no silent switching; the user is asked. A per-identity pre-approved narrow
+  ladder is the only exception.
+- **O-037** — override UX: whether `crabby model edit` is one prompt per field, or an editor-style screen on Web
+  and TUI. Same data model either way.
+- **O-038** — whether a user may override a capability for *all* models of one provider at once (convenient for
+  proxies; makes drift reports harder to read).
 - **O-031** — token estimation method when a provider exposes no counter, and how estimates are labeled.
 - **O-032** — the initial `shell.run` command-classifier ruleset and where its data lives (in-tree table vs
   updatable skill).

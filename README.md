@@ -23,7 +23,10 @@ tools, memory, skills, plugins, and permission-controlled execution — all behi
 | [`DECISIONS.md`](DECISIONS.md) | Accepted vs proposed vs open decisions, validation records, decision process. |
 | [`docs/DATA_AND_MEMORY.md`](docs/DATA_AND_MEMORY.md) | Persistence requirements, history, checkpoints, memory, search, deletion, backup. |
 
-Planned next: `EXTENSIONS.md`, `PROVIDERS_AND_TOOLS.md`, `docs/INTERFACES_AND_API.md`,
+`python3 scripts/check-docs.py` lints this planning set — decision-ID references, cross-links, section anchors,
+capability coverage, and the rule that no planning document may claim an implementation exists.
+
+Planned next: `docs/INTERFACES_AND_API.md`,
 `docs/UI_UX_SPEC.md`, `docs/DESIGN_SYSTEM.md`, `docs/ROADMAP.md`, `docs/DEVELOPMENT.md`, `AGENTS.md`.
 
 ## Non-negotiable principles

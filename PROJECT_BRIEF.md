@@ -277,6 +277,7 @@ The project does not currently promise:
 - A mandatory hosted cloud service.
 - A dedicated native Android application.
 - A fully isolated sandbox on every platform from the first release.
+- Exposing Crabby itself as an MCP server (client role only; `EXTENSIONS.md` §10, D-040).
 - Full Windows compatibility before it has been evaluated and tested.
 
 These may be explored where useful, but they must not be treated as guaranteed deliverables.
@@ -320,21 +321,21 @@ This document defines the project's purpose, goals, constraints, and intended sc
 
 Other documentation provides the implementation-independent details needed to guide development:
 
-| Document | Location | Scope |
-| --- | --- | --- |
-| `ARCHITECTURE.md` | root | System structure and component boundaries. |
-| `DECISIONS.md` | root | Accepted decisions, proposals, open questions, validation records. |
-| `AGENT_RUNTIME.md` | root | Planning, execution, task state, orchestration, recovery. |
-| `SECURITY.md` | root | Threat model, permissions, authentication, approvals. |
-| `DATA_AND_MEMORY.md` | `docs/` | Persistence, memory, retention, retrieval, deletion. |
-| `EXTENSIONS.md` | `docs/` | Skills, plugins, MCP, external compatibility. |
-| `PROVIDERS_AND_TOOLS.md` | `docs/` | Model providers, tools, capability interfaces. |
-| `INTERFACES_AND_API.md` | `docs/` | Interface behavior, API contracts, event delivery. |
-| `UI_UX_SPEC.md` | `docs/` | Layouts, screens, interactions per interface. |
-| `DESIGN_SYSTEM.md` | `docs/` | Visual identity and shared components. |
-| `ROADMAP.md` | `docs/` | Phases, priorities, dependencies, milestones. |
-| `DEVELOPMENT.md` | `docs/` | Development environment, repository, testing. |
-| `AGENTS.md` | root | Instructions for AI coding agents working on Crabby. |
+| Document | Scope |
+| --- | --- |
+| `ARCHITECTURE.md` | System structure and component boundaries. |
+| `DECISIONS.md` | Accepted decisions, proposals, open questions, validation records. |
+| `AGENT_RUNTIME.md` | Planning, execution, task state, orchestration, recovery. |
+| `SECURITY.md` | Threat model, permissions, authentication, approvals. |
+| `EXTENSIONS.md` | Skills, plugins, MCP, and external compatibility. |
+| `PROVIDERS_AND_TOOLS.md` | Model providers, tools, capability interfaces, risk tiers. |
+| `docs/DATA_AND_MEMORY.md` | Persistence, memory, retention, retrieval, deletion. |
+| `docs/INTERFACES_AND_API.md` | Interface behavior, API contracts, event delivery. |
+| `docs/UI_UX_SPEC.md` | Layouts, screens, interactions per interface. |
+| `docs/DESIGN_SYSTEM.md` | Visual identity and shared components. |
+| `docs/ROADMAP.md` | Phases, priorities, dependencies, milestones. |
+| `docs/DEVELOPMENT.md` | Development environment, repository structure, testing. |
+| `AGENTS.md` | Instructions for AI coding agents working on Crabby. |
 
 All documents must remain consistent with this brief. If a significant requirement changes, the relevant documents must be reviewed and updated.
 

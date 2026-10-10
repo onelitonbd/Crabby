@@ -162,13 +162,19 @@ Permissions are named capabilities, not free-form text. Initial proposed vocabul
 | `task.create` / `task.cancel` / `task.read` | Start, cancel, inspect tasks. |
 | `fs.read:<root>` / `fs.write:<root>` | File access scoped to a configured root. |
 | `net.egress:<hostset>` | Outbound network from tools, scoped by host set. |
+| `task.read` | Inspect task state, history, and results (read-only). |
 | `shell.run` | Execute commands through the shell tool. |
 | `shell.privileged` | Commands touching package managers, services, system config. |
 | `provider.invoke` / `provider.billing` | Call a provider / call a paid endpoint. |
 | `memory.write` / `memory.delete` | Persist or purge long-term memory. |
+| `memory.read` | Search and read memory entries. |
 | `ext.install` / `ext.execute` | Install / run external code. |
 | `config.write` | Change configuration, including security settings. |
+| `config.read` | Read non-secret configuration. |
+| `ext.list` | Enumerate installed extensions and their metadata. |
+| `ext.read` | Read an extension's own manifest, docs, and conversion reports. |
 | `tunnel.enable` | Expose the Gateway remotely. |
+| `device.<capability>` | One independently enabled Termux device capability: `device.sms`, `device.contacts`, `device.camera`, `device.location`, `device.sensor`, `device.notify`, `device.control`, `device.screen`, `device.clipboard`. Each is a distinct grant; `device.notify` and `device.control` for benign outputs are the only low-risk members (D-033, `PROVIDERS_AND_TOOLS.md` §4.2). |
 
 A task may additionally be given a *task-scoped* narrowing of these, so "just do this repo job" does not mean "and everything else".
 
@@ -369,7 +375,8 @@ Still open:
 - **O-009** Tunnel lifecycle details (URL rotation, reconnect, shutdown ordering).
 - **O-018** (remainder) Android `keystore` reachability from Termux; KDF and encryption parameters for the fallback.
 - **O-019** (remainder) Token format, optional expiry policy, pairing UX on narrow terminals.
-- **O-020** Per-tool risk-tier assignment.
+- **O-020** Per-tool risk-tier assignment: proposed in `PROVIDERS_AND_TOOLS.md` §4.2, pending owner
+  confirmation of its three judgement calls.
 - **O-021** Depth of prompt-injection hardening for imported content.
 - **O-022** Audit log redaction rules.
 - **O-024** Initial `termux-api` capability list.

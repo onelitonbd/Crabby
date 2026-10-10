@@ -57,6 +57,7 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-037 | External harness support is implemented as converters with a stored conversion report; dropped or reinterpreted features must be reported, never silently ignored. | Accepted |
 | D-038 | No third-party executable extension kind (tool, provider adapter, hook, interface integration) is enabled in the first release, including via any override. The only path is the `O-008` isolation gate. | Accepted |
 | D-039 | Conversion reports are retained as per-version history and never overwritten by an update; `crabby ext info` shows the current report plus a diff against the previous one. | Accepted |
+| D-040 | Crabby is an MCP **client** only. Exposing Crabby as an MCP server is a non-goal, not a deferred feature. | Accepted |
 
 ## 3. Proposed Technical Choices
 
@@ -99,14 +100,23 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-017 | Backup and restore | Open: define a reliable, portable backup and restore procedure for persistent data. |
 | O-018 | Secrets storage mechanism | Accepted direction in D-031. Open remainder: Android/Termux `keystore` reachability from Termux, and the KDF/encryption parameters for the fallback file. |
 | O-019 | Local client authentication method | Accepted in D-030 (per-client pairing tokens). Open remainder: token format, expiry policy, and pairing UX on a phone-sized terminal. |
-| O-020 | Risk classification levels for tools | Open: `SECURITY.md` §6 proposes four tiers; tier assignment per tool is undecided. |
+| O-020 | Risk classification levels for tools | Tier *model* settled in `SECURITY.md` §6.2; per-tool assignment proposed in `PROVIDERS_AND_TOOLS.md` §4.2. Open pending owner confirmation of three judgement calls (export tier, cron-with-T2-steps tier, auto-memory-from-external-content tier). |
 | O-021 | Prompt-injection hardening depth for imported content | Open: instruction-source tagging vs full isolation. |
 | O-022 | Audit log redaction rules | Open: which payload fields are stripped vs hashed vs retained. |
 | O-023 | Remote shell posture | Accepted in D-032 (no tunnel-specific narrowing). See `SECURITY.md` §13 for the residual-risk note and the per-identity narrowing path. |
 | O-024 | `termux-api` exposure | Accepted in D-033 (T3, per-capability, per-action approval). Open remainder: the exact capability list shipped in the first release. |
 | O-025 | Mandatory per-task capability narrowing | Open: whether task-scoped narrowing (`SECURITY.md` §6.1) should be required for every task or offered opt-in. |
-| O-026 | MCP server role | Open: letting other AI tools drive Crabby. Deferred from the first release per `EXTENSIONS.md` §10 — confirm it remains a planned later milestone or is dropped from committed scope. |
+| O-026 | MCP server role | **Closed — decided as a non-goal (D-040).** |
 | O-027 | Conversion-report history depth | Open: how many per-version reports to retain before pruning, and whether reports ship inside user exports/backups. |
+| O-028 | Bundled provider list | Open: pick the first-release adapters from `PROVIDERS_AND_TOOLS.md` §3.3. Each bundled provider is an ongoing maintenance commitment. |
+| O-029 | Provider retry/backoff policy | Open: per-error-class retry budgets, `Retry-After` handling, jitter bounds. |
+| O-030 | Provider fallback default | Open: allowed by default vs always explicit. Privacy-relevant because fallback can move data to another vendor (`PROVIDERS_AND_TOOLS.md` §3.6). |
+| O-031 | Token estimation when a provider has no counter | Open: heuristic choice and how estimates are labeled to users. |
+| O-032 | Shell command classifier ruleset | Open: initial rules, where the table lives (in-tree vs updatable skill), and its documented non-boundary status. |
+| O-033 | `generic-http` user-defined provider | Open: recommended out; a user-supplied request template is a security review of its own. |
+| O-034 | Local inference on Android | Open: document as unsupported, or support only via an external local server (current §3.3 assumption). |
+| O-035 | Tool output caps and temp-file lifetime | Open: per-platform defaults for a low-resource device. |
+| O-036 | Planning-doc checker coverage | Proposed in `scripts/check-docs.py`. Open: whether it should run in CI once a repository workflow exists. |
 
 ## 5. Database Evaluation Record
 
@@ -192,8 +202,10 @@ D-033 (`termux-api` tiers) accepted and propagated.
 
 1. ~~Write `EXTENSIONS.md`~~ done — D-035…D-039 accepted, O-008 narrowed to a validation gate, first-release scope confirmed (no third-party executable).
 2. Review `EXTENSIONS.md` for scope: confirm the initial release really only needs skills + commands + MCP client + first-party tools.
-3. Write `PROVIDERS_AND_TOOLS.md` — provider interface, capability declaration, tool registry, and the per-tool
-   risk-tier assignment that closes O-020.
+3. ~~Write `PROVIDERS_AND_TOOLS.md`~~ done — provider contract, tool registry, tier table (§4.2) proposed;
+   O-020 narrowed, O-028…O-036 opened. `device.*` and read-side capabilities added to the `SECURITY.md` §6.1
+   vocabulary so no tool references an undefined grant.
+3b. Add `scripts/check-docs.py` to a pre-commit or CI step once the repository has workflows (O-036).
 4. Write `docs/INTERFACES_AND_API.md` — API contract, event envelope, pairing/revocation flow, reconnect and
    replay rules (closes O-010).
 5. Write `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md`.
@@ -201,8 +213,15 @@ D-033 (`termux-api` tiers) accepted and propagated.
 7. Write `AGENTS.md`.
 8. Final cross-document consistency review, then the Termux validation prototype.
 
-Remaining open items: O-020 (tier per tool), O-021 (injection hardening depth), O-022 (audit redaction),
-O-024 (initial `termux-api` capability list), O-025 (mandatory task narrowing), O-026 (MCP server role),
-O-027 (report history depth), plus O-001…O-017 as listed above.
+| Counter | Value |
+| --- | --- |
+| Accepted decisions | 40 (D-001…D-040) |
+| Proposed technical choices | 9 (P-001…P-009) |
+| Open / needs-validation items | 27 (O-001…O-036, with O-026 closed) |
+| Planning docs written | 9 (incl. `EXTENSIONS.md`, `PROVIDERS_AND_TOOLS.md`) |
+| Planning docs remaining | 7 |
+
+Run `python3 scripts/check-docs.py` after editing any planning document; it verifies ID references,
+cross-references, section anchors, capability coverage, and that no document claims an implementation exists., plus O-001…O-017 as listed above.
 
 **Implementation remains out of scope until the planning documents and required decisions have been reviewed.**

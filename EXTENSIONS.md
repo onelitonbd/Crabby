@@ -250,10 +250,14 @@ adapter per service.
   list.
 - Server output sizes, timeouts, and call rates are capped by Crabby, not by the server's own defaults.
 
-**Server role (the opposite direction — other AI tools calling *into* Crabby):** deferred to a later milestone,
-outside the first-release scope above; confirmation tracked as **O-026**. Requirements if implemented: it must
-serve through the same Policy Engine, must not widen what an approval grants, must require its own explicit
-enablement, and must never expose `config.write` or `shell.*` merely because a client asked.
+**Server role (the opposite direction — other AI tools calling *into* Crabby): rejected (D-040).** Crabby is an
+MCP client only and does not expose itself as an MCP server. Rationale: it does not serve the primary use case
+(operating an agent from a phone), it multiplies the inbound attack surface for every deployment, and it would
+require a second authentication and approval story with weaker UX than the four interfaces already have.
+
+If this is ever revisited, the design must start from these constraints — served through the same Policy Engine,
+no widening of what an approval grants, an explicitly enabled and separately authenticated endpoint, and never
+exposing `config.write` or `shell.*` merely because a client asked. None of that is a reason to build it now.
 
 **MCP is not a trust level.** An MCP server is an unverified third party by default and inherits the §8 rules.
 
@@ -346,7 +350,7 @@ Recorded and tracked in `DECISIONS.md`:
 | Skill frontmatter field set (feeds **O-021**) | Open: exactly which imported fields are honored versus recorded as ignored. |
 | Signing/integrity mechanism for `verified-community` | Open; must not require a hosted service. |
 | Sandbox on Termux | Needs Validation: practical options are limited (`SECURITY.md` §15); document as a platform limitation if none prove viable. |
-| MCP server role | Open (**O-026**): deferred from the first release; confirm whether it stays a planned later milestone or is dropped from committed scope entirely. |
+| MCP server role | **Decided: non-goal (D-040).** Crabby is a client only. |
 | Conversion-report history depth | Accepted in D-039 (retained, diffable). Open remainder tracked as **O-027**: how many versions to keep before pruning, and whether reports ship inside user exports/backups. |
 
 ## 16. Acceptance Criteria

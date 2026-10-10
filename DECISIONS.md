@@ -55,6 +55,8 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-035 | Extension strategy is content-first: skills, command templates, and MCP configuration are supported in the initial release; third-party executable code is blocked until the isolation gate passes. | Accepted |
 | D-036 | No "install anyway" override exists for an `unsafe` compatibility verdict while untrusted executable isolation is unresolved. | Accepted |
 | D-037 | External harness support is implemented as converters with a stored conversion report; dropped or reinterpreted features must be reported, never silently ignored. | Accepted |
+| D-038 | No third-party executable extension kind (tool, provider adapter, hook, interface integration) is enabled in the first release, including via any override. The only path is the `O-008` isolation gate. | Accepted |
+| D-039 | Conversion reports are retained as per-version history and never overwritten by an update; `crabby ext info` shows the current report plus a diff against the previous one. | Accepted |
 
 ## 3. Proposed Technical Choices
 
@@ -102,7 +104,9 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-022 | Audit log redaction rules | Open: which payload fields are stripped vs hashed vs retained. |
 | O-023 | Remote shell posture | Accepted in D-032 (no tunnel-specific narrowing). See `SECURITY.md` §13 for the residual-risk note and the per-identity narrowing path. |
 | O-024 | `termux-api` exposure | Accepted in D-033 (T3, per-capability, per-action approval). Open remainder: the exact capability list shipped in the first release. |
-| O-025 | Mandatory per-task capability narrowing | Open: whether task-scoped narrowing (§6.1) should be required for every task or offered opt-in. |
+| O-025 | Mandatory per-task capability narrowing | Open: whether task-scoped narrowing (`SECURITY.md` §6.1) should be required for every task or offered opt-in. |
+| O-026 | MCP server role | Open: letting other AI tools drive Crabby. Deferred from the first release per `EXTENSIONS.md` §10 — confirm it remains a planned later milestone or is dropped from committed scope. |
+| O-027 | Conversion-report history depth | Open: how many per-version reports to retain before pruning, and whether reports ship inside user exports/backups. |
 
 ## 5. Database Evaluation Record
 
@@ -186,7 +190,7 @@ For each open item:
 **Done this round:** `SECURITY.md` written; D-030 (pairing tokens), D-031 (secrets), D-032 (remote posture),
 D-033 (`termux-api` tiers) accepted and propagated.
 
-1. ~~Write `EXTENSIONS.md`~~ done — D-035…D-037 accepted, O-008 narrowed to a validation gate.
+1. ~~Write `EXTENSIONS.md`~~ done — D-035…D-039 accepted, O-008 narrowed to a validation gate, first-release scope confirmed (no third-party executable).
 2. Review `EXTENSIONS.md` for scope: confirm the initial release really only needs skills + commands + MCP client + first-party tools.
 3. Write `PROVIDERS_AND_TOOLS.md` — provider interface, capability declaration, tool registry, and the per-tool
    risk-tier assignment that closes O-020.
@@ -197,8 +201,8 @@ D-033 (`termux-api` tiers) accepted and propagated.
 7. Write `AGENTS.md`.
 8. Final cross-document consistency review, then the Termux validation prototype.
 
-Remaining security-side open items: O-020 (tier per tool), O-021 (injection hardening depth), O-022 (audit
-redaction), O-024 (initial `termux-api` capability list), O-025 (mandatory task narrowing), plus
-O-001…O-017 as listed above.
+Remaining open items: O-020 (tier per tool), O-021 (injection hardening depth), O-022 (audit redaction),
+O-024 (initial `termux-api` capability list), O-025 (mandatory task narrowing), O-026 (MCP server role),
+O-027 (report history depth), plus O-001…O-017 as listed above.
 
 **Implementation remains out of scope until the planning documents and required decisions have been reviewed.**

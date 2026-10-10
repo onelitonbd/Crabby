@@ -50,14 +50,19 @@ large plugin framework, a package registry, or an OS sandbox before a first rele
 | **Skill** | Instructions, procedures, and templates that shape how the agent works (Markdown + frontmatter). | No | Yes |
 | **Command template** | A named, parameterized prompt or task recipe, invocable from any interface. | No | Yes |
 | **MCP server reference** | A connection to an external MCP server exposing tools, resources, prompts. | Remote/child process | Yes (client only) |
-| **Tool** | A callable capability with a validated input schema. | Yes | Native, first-party only |
-| **Provider adapter** | Implements the provider interface for a model service. | Yes | Yes for built-ins; third-party pending O-008 |
+| **Tool** | A callable capability with a validated input schema. | Yes | First-party only; third-party blocked (O-008) |
+| **Provider adapter** | Implements the provider interface for a model service. | Yes | Built-ins only; third-party blocked (O-008) |
 | **Event hook** | Reacts to lifecycle events (task started, tool finished, approval denied). | Yes | Deferred — needs isolation |
 | **Interface integration** | Adds or customizes a surface (e.g. a dashboard panel, a channel adapter). | Yes | Deferred |
 | **Theme / preset pack** | Design tokens or configuration presets. | No | Yes |
 
 Everything inert (rows 1–3, 8) is safe to support early because it cannot execute; it is still *untrusted
 content* under `SECURITY.md` §10 and cannot become instructions that override policy.
+
+Initial release scope, confirmed: **skills + command templates + MCP client + first-party tools/providers**.
+Third-party executable kinds (Tool, Provider adapter, Event hook, Interface integration) are blocked until
+`O-008` passes, and a blocked kind must be reported as "not supported yet in this version" rather than
+silently failing to load.
 
 ## 4. Package Layout and Manifest
 
@@ -203,7 +208,10 @@ unresolved (O-008). Adding one is a security decision, not a convenience flag.
 | **unverified** | Any other source (git URL, local path, archive) | Nothing | O-008 gate; content-only import allowed today |
 
 The initial release ships with only `bundled` and `first-party` able to carry executable code. Content from any
-tier may be imported as a skill. A `verified-community` tier needs a signing/integrity story that actually works
+tier may be imported as a skill. **Confirmed by the project owner:** no third-party executable tool, provider
+adapter, hook, or interface integration is enabled in the first release — not behind a warning, not behind an
+advanced flag. The only path from "I want this extension" to "it runs" for third-party code is the O-008
+isolation gate passing first. A `verified-community` tier needs a signing/integrity story that actually works
 without a hosted registry — which is why registries are deferred (§15), and why the tier table above is a policy
 for later, not a promise of a marketplace now.
 
@@ -242,7 +250,8 @@ adapter per service.
   list.
 - Server output sizes, timeouts, and call rates are capped by Crabby, not by the server's own defaults.
 
-**Server role (exposing Crabby to external clients):** optional and later. Requirements if implemented: it must
+**Server role (the opposite direction — other AI tools calling *into* Crabby):** deferred to a later milestone,
+outside the first-release scope above; confirmation tracked as **O-026**. Requirements if implemented: it must
 serve through the same Policy Engine, must not widen what an approval grants, must require its own explicit
 enablement, and must never expose `config.write` or `shell.*` merely because a client asked.
 
@@ -301,7 +310,8 @@ Stored through the storage abstraction (`docs/DATA_AND_MEMORY.md` §5), logicall
 
 - Installed extension records: id, version, kind, source tier, install path, integrity value, enabled state.
 - Capability grants, per extension and per version.
-- Validation results and conversion reports, so a verdict is re-readable after a restart.
+- Validation results and the full conversion-report history per version, so a verdict is re-readable after a
+  restart and an update never destroys the record of what the previous version could not do.
 - Activation history and suspension reasons for diagnostics.
 
 Extension data lives in a per-extension data directory, removed or reported on uninstall. Extension code and data
@@ -336,6 +346,8 @@ Recorded and tracked in `DECISIONS.md`:
 | Skill frontmatter field set (feeds **O-021**) | Open: exactly which imported fields are honored versus recorded as ignored. |
 | Signing/integrity mechanism for `verified-community` | Open; must not require a hosted service. |
 | Sandbox on Termux | Needs Validation: practical options are limited (`SECURITY.md` §15); document as a platform limitation if none prove viable. |
+| MCP server role | Open (**O-026**): deferred from the first release; confirm whether it stays a planned later milestone or is dropped from committed scope entirely. |
+| Conversion-report history depth | Accepted in D-039 (retained, diffable). Open remainder tracked as **O-027**: how many versions to keep before pruning, and whether reports ship inside user exports/backups. |
 
 ## 16. Acceptance Criteria
 

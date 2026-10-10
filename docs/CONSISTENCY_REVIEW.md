@@ -5,7 +5,7 @@
 > documents, it needs the two things a plan cannot supply: the element review, and the seven M0 measurements.
 >
 > **Reviewed:** 22 documents (16 planning at `*.md` and `docs/*.md`, 4 element inventories, the review index and
-> this file), most recently on 2026-10-10 — findings F-13…F-24 are from the three 2026-10-10 passes (the (R) round and
+> this file), most recently on 2026-10-10 — findings F-13…F-26 are from the four 2026-10-10 passes (the (R) round and
 > the finalization round), so every earlier finding has been re-checked against the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
@@ -427,6 +427,36 @@ counts are exempt because they belong to the region beside them.
 **Lesson kept:** a summary document is the most trusted and least checked thing in a repository. If it quotes numbers
 it cannot see, delete the numbers and keep the precedence rule.
 
+### F-25 — P4's pass condition named a section number that two documents both have
+**Severity: low, and it was the probe that caught it, not the checker.** `docs/ROADMAP.md` M0's P4 row says the served
+bundle's colour values must be "the §2.3 palette". Two documents have a §2.3: `docs/UI_UX_SPEC.md`'s is *Empty states*,
+`docs/DESIGN_SYSTEM.md`'s is the measured palette. The probe written against that sentence read the wrong file, found no
+table, and would have reported a passing check built on nothing — `probes/p4.mjs` now reads the palette out of
+`DESIGN_SYSTEM.md` and asserts that every custom property in the fixture is a value of the token it is named after, so
+the check has a source. The roadmap row names the document.
+
+Rule 5 verifies that a referenced *file* exists; it cannot tell that `§2.3` pointed at a different document's section 2.3,
+and no rule could. **Lesson kept:** a cross-reference inside a pass condition needs the file name in it. "See §X" is a
+promise the checker cannot keep, and the more precise the number looks, the less suspicious anyone gets.
+
+### F-26 — P5's pass condition named a rate that no candidate dependency provides, and the honest fix was a new obligation
+**Severity: medium, because the easy reading would have been a library rejection.** The condition says the TUI must
+"hold ≤4 fps repaint without dropping input". `probes/p5.mjs` put Ink 8 in a real 40×24 pty and fed it 200 keystrokes
+3 ms apart: every character arrived, and the frame was repainted around 300 times a second. The run's exact figure is the failing line in
+`probes/RESULTS.md`, and only that: a number quoted in two documents is a number that can go stale (F-24). Ink is
+not misbehaving; it schedules a render per state change, which is the right default for a library and the wrong answer
+for a phone. Two ways out existed. Relax the row to "Ink repaints per state change" — which would have made the
+condition pass by describing something else — or accept that the sentence describes work our own code has to do. The
+second is what happened: `P-011` now owns the throttle, cites `O-006` as the device half, and the 4/s number stays in the
+roadmap where it can be falsified again.
+
+The same run found two smaller obligations nobody had written down: while Ink's `exitOnCtrlC` default is on, the app's
+own handler never sees Ctrl+C (measured both ways in P5), and stdin coalesces — 200 characters delivered in one write
+arrive as 2 handler calls, so counting events instead of characters invents lost keystrokes. Both are in `P-010`'s row
+because M-T has to implement them, and neither is in a spec, because a spec is where a *decision* goes, not a library
+fact. **Lesson kept:** when a probe fails, first ask whether the assumption or the measurement is at fault — and if the
+measurement is right, the finding goes into the register as work, not into the roadmap as softer wording.
+
 ## 3. Checks That Passed
 
 | Check | Result |
@@ -479,7 +509,7 @@ Being explicit, because "reviewed" must not quietly mean "verified":
 
 01. **No document has been tested against a real system.** Termux behavior (`node:sqlite` stability, Ink repaint
     cost, WAL growth, Android process killing) is asserted from reports and registry metadata, not measured here.
-    That is M0's job, and M0 can still invalidate `P-003`, `P-010`, and `P-006`. The (R) round of 2026-10-10 changed
+    That is M0's job, and M0 can still invalidate `P-003`, `P-004`, `P-010` and `P-011`. Its container half was run on 2026-10-10 and is generated into `probes/RESULTS.md` — which proves the probes work, not the assumptions, and produced F-25 and F-26 on the way. The (R) round of 2026-10-10 changed
     the *designs* around those measurements and did not touch their status: what it recorded is either arithmetic that
     can be redone here (contrast ratios, cluster widths, registry versions and dates) or a choice about what to build.
     Nothing that needs a phone was presented as settled. Eight rows carry work and each names its closing step in

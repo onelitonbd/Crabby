@@ -30,7 +30,7 @@ tools, memory, skills, plugins, and permission-controlled execution — all behi
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phases M0–M6, entry and exit conditions, and which open items block which phase. |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Environment, scripts, testing, CI, release and Termux development rules. |
 | [`docs/review/`](docs/review/README.md) | **M-D's element gate, now closed:** 675 elements across the four interfaces, every row reviewed (D-055, D-075) — the criteria and the scan are in that index, and review continues one implementation step at a time (D-076). `docs/review/mockups/crabby-web-ui.html` is the Web UI as one file, generated from the inventory. |
-| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-24), what it could not verify, and the owner's checklist. |
+| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-26), what it could not verify, and the owner's checklist. |
 | [`AGENTS.md`](AGENTS.md) | The rules a coding agent works under, including the forbidden shortcuts. |
 
 `python3 scripts/check-docs.py` lints this planning set — decision-ID references, cross-links, section anchors,
@@ -46,11 +46,14 @@ first release, the second at the moment code is distributed.
 
 Nothing in this repository needs another planning document. What is scheduled, in order:
 
-01. **Owner go-ahead for M0** (`docs/ROADMAP.md` §2) — seven Termux probes plus one document task. They are cheap, they
-    are throwaway, and each one can invalidate a decision by name instead of by surprise: `P1` Node baseline, `P2`
-    Fastify bind, `P3` `better-sqlite3` build and WAL torture, `P4` the Web build, `P5` Ink 8 at 40×24, `P6` Android
-    background behavior, `P7` hostile extension, `P8` regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from
-    the accepted inventories.
+01. **M0 — in progress.** The seven probes are written and run from one command (`npm run probe`, contract in
+    `probes/README.md`): `P1` the Node baseline that decides `engines`, `P2` the Fastify Gateway and its SSE channel,
+    `P3` `better-sqlite3` build and WAL torture, `P4` the framework-free Web bundle, `P5` Ink 8 at 40×24, `P6` Android
+    process lifetime, `P7` a hostile extension against the sandbox; `P8` then regenerates `docs/UI_UX_SPEC.md` and
+    `docs/DESIGN_SYSTEM.md` from the accepted inventories. Each one says which machine it ran on: the container half is
+    generated into `probes/RESULTS.md`, and the phone's column — `npm run test:termux` — is what M0 is waiting for.
+    Two of them already contradicted the plan in ways worth reading before the first line of M1 (`docs/CONSISTENCY_REVIEW.md`).
+
 02. **Then M1** (contracts and skeleton), and from there every step that ships carries its own owner review:
     the running screen or command plus the element IDs it implements, one unit at a time (`D-076`). An answer becomes a
     code change *and* an inventory-row change in the same commit; no answer is recorded as `unreviewed`, never as

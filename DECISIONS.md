@@ -104,13 +104,14 @@ These choices are recommendations, not accepted technical decisions.
 | P-001 | Gateway framework | Fastify | Accepted — chosen in D-069, with `validatorCompiler` over the TypeBox schemas instead of a second `ajv` dialect |
 | P-002 | Streaming | SSE for server-to-client updates, ordinary HTTP endpoints for client actions | Accepted — D-048 |
 | P-003 | Database engine | SQLite | Needs Validation — the design is accepted (D-066); O-001 and O-002 are the clean-build and WAL measurement |
-| P-004 | Database driver | `better-sqlite3` (source build on Termux) | Needs Validation — pinned at `^13.0.3` by D-066; O-001 and O-002 are the measurement, `node:sqlite` the named alternative it is compared against |
+| P-004 | Database driver | `better-sqlite3` (source build on Termux) | Needs Validation — pinned at `^13.0.3` by D-066; O-001 and O-002 are the measurement, `node:sqlite` the named alternative it is compared against. `probes/p3.mjs` ran both drivers through the same kill-during-write on Node 22.22.3 and both came back `integrity_check ok` with whole-batch recovery; it also found the driver ships bundled prebuilds and selects among them by "is glibc absent", which is Termux's shape too, so a device install has to move `prebuilds/` aside or load the compiled binding by path — that, plus the compile time on bionic, is what is still unmeasured |
 | P-005 | Workspace tooling | npm workspaces | Accepted — D-060 |
 | P-006 | Schema validation | Zod | Superseded — D-060 chose TypeBox (O-005). The row stays so the reversal is visible |
 | P-007 | Web frontend | React + Vite | Superseded — D-068 chose framework-free custom elements (O-043). Six documents still named this stack and were corrected in the same pass (F-17) |
 | P-008 | Test framework | Vitest | Superseded — D-069 chose `node:test` with native type stripping; Vitest is allowed later with a named reason |
 | P-009 | Telegram library | grammY | Accepted — D-069, as a transport adapter with Crabby-owned retry and `retry_after` handling |
-| P-010 | TUI library | Ink 8 (React renderer for terminals) | Needs Validation — O-006 and O-051, measured on a phone in M0 P5. Ink 8.0.0 was published 2026-10-03, a week before this review, which is precisely why it is not Accepted |
+| P-010 | TUI library | Ink 8 (React renderer for terminals) | Needs Validation — O-006 and O-051, measured on a phone in M0 P5. Ink 8.0.0 was published 2026-10-03, a week before this review, which is precisely why it is not Accepted. `probes/p5.mjs` ran it in a real 40×24 pty and settled four things a document could not: its layout is WebAssembly (no device compiler, unlike P-004), Ctrl+J and Enter arrive as LF and CR so the composer can tell them apart, a kitty-capable terminal's Shift+Enter arrives as `return+shift`, and `exitOnCtrlC` has to be turned off before the app can see Ctrl+C at all — the last two are M-T's obligations, recorded in P-011 and F-26 |
+| P-011 | TUI repaint throttle | The app owns a render scheduler capped at 4 repaints a second, coalescing streamed tokens into one frame | Needs Validation — the plan's 4/s rule is an obligation on our code, not a property to verify inside Ink: `probes/p5.mjs` measured roughly 300 repaints/s for 200 paced keystrokes with all 200 characters arriving (F-26). O-006 is the device half, and P-010 and P-011 are accepted together once that number is in `probes/RESULTS.md` |
 
 Each proposal remains pending until explicitly accepted or validated as required.
 
@@ -380,7 +381,7 @@ D-033 (`termux-api` tiers) accepted and propagated.
 | Counter | Value |
 | --- | --- |
 | Accepted decisions | 76 (D-001…D-076) |
-| Proposed technical choices | 10 (P-001…P-010) |
+| Proposed technical choices | 11 (P-001…P-011) |
 | Open / needs-validation items | 65 tracked (63 from the (R) round plus O-064 and O-065 registered while finalizing), 50 of them closed by D-060…D-068 in the (R) round of 2026-10-10; closed earlier as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033. O-023 is closed by D-032 under the wording "Accepted in D-032" rather than "Closed by" — the phrasing a count-by-hand pass misreads, so `scripts/count-inventory.py --register-counters` prints the ids it could not classify instead of a bare number. Six items carry work and each has its closing protocol in `docs/review/DECISION-QUEUE.md` §2 rather than a vague promise: four open rows (O-006 and O-051 need a phone render, O-008 needs real extensions, O-052 is a post-v1 design question) and two with one measured clause left (O-001, O-002: a clean Termux build and a WAL torture). The row count stays 63 because a closed question keeps its number — otherwise a register that renumbers itself cannot be cited by a document that was written against it |
 | Planning docs written | 16 — includes `docs/CONSISTENCY_REVIEW.md` (M-D record) |
 | Custom endpoint / fallback decisions | D-041…D-047 accepted this round |

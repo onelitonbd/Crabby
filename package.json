@@ -1,0 +1,37 @@
+{
+  "name": "crabby",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Mobile-first AI agent runtime with four interfaces. Planning set plus M0 validation probes; no product code yet.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2"
+  },
+  "scripts": {
+    "test": "node --test 'tests/**/*.test.ts' 'packages/**/*.test.ts' 'apps/**/*.test.ts'",
+    "test:coverage": "node --test --experimental-test-coverage 'tests/**/*.test.ts' 'packages/**/*.test.ts' 'apps/**/*.test.ts'",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "docs:check": "python3 scripts/check-docs.py",
+    "docs:count": "python3 scripts/count-inventory.py --markdown",
+    "docs:review": "python3 scripts/review-scan.py",
+    "probe": "node probes/run.mjs",
+    "probe:p1": "node probes/p1.mjs",
+    "probe:p2": "node probes/p2.mjs",
+    "probe:p3": "node probes/p3.mjs",
+    "probe:p4": "node probes/p4.mjs",
+    "probe:p5": "node probes/p5.mjs",
+    "probe:p6": "node probes/p6.mjs",
+    "probe:p7": "node probes/p7.mjs",
+    "probe:results": "node probes/to-results.mjs",
+    "test:termux": "node probes/run.mjs --device"
+  }
+}

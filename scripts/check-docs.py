@@ -3,8 +3,8 @@
 
 Run: python3 scripts/check-docs.py
 
-These are documentation lint rules, not implementation tests. They encode the project's
-own process rules: an open decision must stay open, decision IDs must resolve, cross
+These are documentation lint rules, not implementation tests. They cover the planning set and
+the element inventories under `docs/review/`, and they encode the project's own process rules: an open decision must stay open, decision IDs must resolve, cross
 references must point at real sections, and planning documents must not claim that
 anything is implemented.
 """
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DOC_GLOBS = ["*.md", "docs/*.md"]
+DOC_GLOBS = ["*.md", "docs/*.md", "docs/review/*.md"]
 
 ID_RE = re.compile(r"\b([DPO])-(\d{3})\b")
 MD_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)#]+\.[A-Za-z]+)(#[^)]*)?\)")
@@ -195,7 +195,9 @@ def main() -> int:
             # Only capability positions are checked: the "Capability" table column and
             # inline `requires \`x.y\`` phrasing.
             sites = re.findall(r"^\|[^|]*\|\s*`([^`]+)`", body, flags=re.M)
-            sites += re.findall(r"(?:capabilit(?:y|ies)[^`]{0,40})`([^`]+)`", body, flags=re.I)
+            # never across a table cell boundary: `| Capability summary | \`fs: workspace\`` is UI copy,
+            # not a capability grant, and reading it as one produced a false positive.
+            sites += re.findall(r"(?:capabilit(?:y|ies)[^`|]{0,40})`([^`]+)`", body, flags=re.I)
             for cap in sorted(set(sites)):
                 base = cap.split(":")[0]
                 if base.split(".")[0] not in prefixes:
@@ -307,6 +309,8 @@ def main() -> int:
 
     # 9. the counter table in DECISIONS.md must be read off the register, not remembered: the
     #    same numbers have drifted twice by hand.
+    # the review inventories are linted too, but "planning docs written" counts the planning set
+    n_planning = sum(1 for p in files if "review" not in p.relative_to(ROOT).parts)
     n_acc = sum(1 for k, v in defined.items() if k.startswith("D-") and "Accepted" in v)
     n_pro = sum(1 for k in defined if k.startswith("P-"))
     n_open = sum(1 for k in defined if k.startswith("O-"))
@@ -325,7 +329,7 @@ def main() -> int:
             problems.append(f"DECISIONS.md: counter {label!r} reads {m.group(1).strip()!r}, register says {want!r}")
     for label, want in [
         ("Open / needs-validation items", f"{n_open} tracked"),
-        ("Planning docs written", f"{len(files)} —"),
+        ("Planning docs written", f"{n_planning} —"),
     ]:
         m = re.search(rf"^\|\s*{re.escape(label)}\s*\|([^|\n]*)\|", bodies[decisions_path], flags=re.M)
         if m and not m.group(1).strip().startswith(want):
@@ -337,7 +341,9 @@ def main() -> int:
             print(f"  - {prob}")
         return 1
 
-    print(f"✓ {len(files)} planning documents consistent")
+    n_review = len(files) - n_planning
+    suffix = f" + {n_review} element inventories" if n_review else ""
+    print(f"✓ {len(files)} documents consistent ({n_planning} planning{suffix})")
     print(f"  decisions: {sum(1 for k in defined if k.startswith('D-'))} accepted · "
           f"{sum(1 for k in defined if k.startswith('P-'))} proposed · "
           f"{sum(1 for k in defined if k.startswith('O-'))} open")

@@ -139,7 +139,6 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-039 | API versioning style | Open: `/api/v1` path prefix vs header-based versioning (`docs/INTERFACES_AND_API.md` §12). |
 | O-040 | Web UI serving | Open: served by the Gateway, or by a separate static step behind `crabby web open`. |
 | O-041 | Approval expiry policy | Open: single duration vs per-tier durations (a T3 prompt should not age like a T2 one). |
-| O-052 | Remembered approvals after v1 | Open: whether scoped "remember this" approvals return, and with which persistence and revocation guarantees. Out of scope for v1 per D-052. |
 | O-042 | Parity matrix source | Open, recommended: generate `docs/INTERFACES_AND_API.md` §8 from the tool registry plus annotations instead of hand-maintaining it. |
 | O-043 | Web component approach | Open: in-house primitives vs a dependency-free library. Tokens must not depend on the choice (`docs/DESIGN_SYSTEM.md` §1 rule 05). |
 | O-044 | Concrete palette values | Open: hex values plus verified WCAG 2.2 AA contrast for text and non-text. |
@@ -150,6 +149,14 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-049 | Package publishing model | Open: publish `packages/*` independently, or only as app bundles. |
 | O-050 | Termux CI runner | Open: find a practical runner, or keep the M0 manual checklist as the documented substitute. |
 | O-051 | TUI repaint strategy under streaming | Needs Validation (M0 P5): measure Ink's reconciliation cost for token-by-token output on a phone terminal; decide buffer/flush policy from the result. |
+| O-052 | Remembered approvals after v1 | Open: whether scoped "remember this" approvals return, and with which persistence and revocation guarantees. Out of scope for v1 per D-052. |
+| O-053 | Web status bar overflow at 360px | Open (raised by `docs/review/WEB.md`, W1-A): four inline chips plus a "more" sheet, with a locked vault and an offline state escaping the sheet. Blocks regenerating the spec from approved elements. |
+| O-054 | TUI screen buffer vs scrollback | Open (`docs/review/TUI.md`, T1-A): alternate screen vs inline rendering, with an explicit "print to scrollback" action. Decide together with the O-051 measurement on a phone. |
+| O-055 | TUI newline key | Open (T5-A): which key inserts a newline when `Shift+Enter` is not reportable. Constrained by what a phone keyboard can actually send, so it is decided with O-002. |
+| O-056 | TUI markdown rendering depth | Open (T4-A): render emphasis and code spans only, or pass text through raw. Affects the streaming rows T4-02 and T4-05. |
+| O-057 | TUI approval queue shape | Open (T-A-A): one card at a time vs a selectable list when several approvals are pending. Proposal is one at a time; 24 rows cannot hold two readable cards. |
+| O-058 | Terminal rendering of Bengali | Open (T-C2-B): a terminal may not shape Indic conjuncts the way a browser does. Choose pass-through with a stated limit, English chrome with pass-through content, or measure on device first. |
+| O-059 | TUI key configurability | Open (T3-A): whether keys are user-configurable in v1 at all, or fixed with the documented set. |
 
 **Open here means genuinely undecided.** A row marked closed must stay consistent with the decision it cites.
 
@@ -209,7 +216,7 @@ Per D-055, interface review proceeds as element inventories. An element counts a
 | File | Surfaces covered | Elements | Approved | Remaining |
 | --- | --- | --- | --- | --- |
 | `docs/review/WEB.md` | 17 regions of the Web UI | 161 | 0 | 161 |
-| `docs/review/TUI.md` | planned | — | — | — |
+| `docs/review/TUI.md` | 19 regions of the TUI | 185 | 0 | 185 |
 | `docs/review/CLI.md` | planned | — | — | — |
 | `docs/review/TELEGRAM.md` | planned | — | — | — |
 
@@ -218,6 +225,10 @@ Review medium (D-056): `python3 docs/review/mockups/build.py` renders `docs/revi
 references an element the inventory does not define, or if the inventory has a row the mockup cannot place, so
 the picture cannot drift from the document. Decisions made in the mockup leave it as paste-ready rows; nothing
 the mockup stores counts until it is written back into the `.md`.
+
+An open question written in an inventory is not left inside the inventory: each one that changes what gets built is
+registered as an `O-` row in section 4 (the Web and TUI questions became O-053…O-059), so review progress and
+unresolved questions are counted in the same register as everything else.
 
 After all four are reviewed: regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from the accepted
 inventories, then re-run `docs/CONSISTENCY_REVIEW.md` (a spec written from approved elements cannot contradict them).
@@ -324,7 +335,7 @@ D-033 (`termux-api` tiers) accepted and propagated.
 | --- | --- |
 | Accepted decisions | 56 (D-001…D-056) |
 | Proposed technical choices | 10 (P-001…P-010) |
-| Open / needs-validation items | 52 tracked; closed as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033 (O-006 stays open until M0 P5 measures). Remaining blockers are device measurements, not opinions: O-002, O-006, O-051 |
+| Open / needs-validation items | 59 tracked; new in M-D from the element review: O-053…O-059; closed as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033 (O-006 stays open until M0 P5 measures). Remaining blockers are device measurements, not opinions: O-002, O-006, O-051 |
 | Planning docs written | 16 — includes `docs/CONSISTENCY_REVIEW.md` (M-D record) |
 | Custom endpoint / fallback decisions | D-041…D-047 accepted this round |
 | Planning docs remaining | 0 (M-D review is the last step) |

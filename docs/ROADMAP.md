@@ -179,6 +179,7 @@ Blocking means the shape of code depends on it, so guessing would be expensive:
 | --- | --- |
 | O-002 (`better-sqlite3` reproduction) | Storage abstraction and migrations depend on the driver; needs a real device |
 | O-006 / O-051 (TUI: Ink 8 pending measurement) | P-010 stays Proposed until M0 P5 measures repaint cost; the TUI workstream waits on the result, not on a preference |
+| O-053…O-059 (element review, `docs/review/`) | These are the open questions raised while reviewing Web and TUI elements one by one (D-055). They block regenerating `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from approved elements — M-D work — and they do not block running the M0 probes |
 
 **Closed during M-D (2026-10-09):** O-004 transport → D-048 (SSE + HTTP, no WebSocket in v1); O-010 replay →
 D-049 (per-task `seq`, count-bounded window, gap + reconcile-by-GET); O-012 install path → D-050; O-019
@@ -188,7 +189,7 @@ What that leaves blocking nothing but *shaping* M0: the only way to close O-002 
 M0 is now unblocked by decision and blocked only by the owner's go-ahead.
 
 Not blocking, and safe to decide during the phase that needs them: O-001, O-003, O-005, O-007, O-011, O-013…O-018,
-O-021…O-025, O-027, O-029…O-046 — the rest of the 38 open items, each tracked where it applies.
+O-021…O-025, O-027, O-029…O-052 — the rest of the tracked open items, each recorded where it applies (the count itself is checked against the register by `scripts/check-docs.py`).
 
 ## 12. Roadmap Acceptance Criteria
 

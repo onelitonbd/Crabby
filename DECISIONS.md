@@ -208,13 +208,13 @@ Per D-055, interface review proceeds as element inventories. An element counts a
 
 | File | Surfaces covered | Elements | Approved | Remaining |
 | --- | --- | --- | --- | --- |
-| `docs/review/WEB.md` | 17 regions of the Web UI | 160 | 0 | 160 |
+| `docs/review/WEB.md` | 17 regions of the Web UI | 161 | 0 | 161 |
 | `docs/review/TUI.md` | planned | — | — | — |
 | `docs/review/CLI.md` | planned | — | — | — |
 | `docs/review/TELEGRAM.md` | planned | — | — | — |
 
 Review medium (D-056): `python3 docs/review/mockups/build.py` renders `docs/review/WEB.md` into
-`docs/review/mockups/web.html` — one self-contained file, no network, no CDN. The build fails if the mockup
+`docs/review/mockups/crabby-web-ui.html` — one self-contained file, no network, no CDN. The build fails if the mockup
 references an element the inventory does not define, or if the inventory has a row the mockup cannot place, so
 the picture cannot drift from the document. Decisions made in the mockup leave it as paste-ready rows; nothing
 the mockup stores counts until it is written back into the `.md`.

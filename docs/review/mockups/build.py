@@ -6,7 +6,7 @@ table row, so the picture cannot drift from the document. Re-run after editing W
 
     python3 docs/review/mockups/build.py
 
-Writes web.html next to this script: self-contained (inline CSS, inline data, no fetch, no
+Writes crabby-web-ui.html next to this script: self-contained (inline CSS, inline data, no fetch, no
 CDN, no network), because it has to open from a file or from a Termux-hosted port on a phone.
 
 This is a review instrument for planning, not application code: it renders the approved
@@ -22,7 +22,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 INVENTORY = HERE.parent / "WEB.md"
 SHELL = HERE / "shell.html"
-OUT = HERE / "web.html"
+OUT = HERE / "crabby-web-ui.html"
 
 STATUSES = ("PROPOSED", "ACCEPTED", "EDIT", "CUT", "?")
 REGION_HEAD_RE = re.compile(r"^#{2,4} Region ((?:W\d+|W-[A-Z]))\s*(?:—|-{1,2})\s*(.*)$")
@@ -87,7 +87,7 @@ def parse() -> list[dict]:
 def check_refs(rows: list[dict]) -> tuple[set[str], set[str]]:
     """Every element rendered in the mockup must exist in the inventory, and vice versa."""
     by_id = {r["id"] for r in rows}
-    # web.html is generated output and contains this same markup plus the app source: scanning
+    # the generated page contains this same markup plus the app source: scanning
     # it would report the app's own string literals as references.
     sources = [SHELL] + [p for p in HERE.glob("*.html") if p not in (SHELL, OUT)]
     markup = "\n".join(p.read_text(encoding="utf-8") for p in sources)

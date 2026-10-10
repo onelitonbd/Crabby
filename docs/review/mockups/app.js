@@ -1,7 +1,6 @@
 /* Crabby Web UI review mockup — behaviour.
- * Generated into web.html by build.py; the element list comes from docs/review/WEB.md, so this
- * file never invents an element and never hides one. Nothing here talks to a network or stores
- * anything outside this browser's localStorage.
+ * Inlined into crabby-web-ui.html by build.py. The element list comes from docs/review/WEB.md, so this file
+ * never invents an element and never hides one. No network, no storage outside localStorage.
  */
 (function () {
   "use strict";
@@ -14,27 +13,31 @@
   var BY_ID = {};
   ROWS.forEach(function (r) { BY_ID[r.id] = r; });
 
-  var TABS = [
+  // One entry per screen of the app; the persistent status bar and nav wrap every screen, the way
+  // they do in the real thing, so the review sees them in context instead of once.
+  var SCREENS = [
     { tpl: "chat", label: "Chat" },
     { tpl: "tasks", label: "Tasks" },
     { tpl: "detail", label: "Task detail" },
     { tpl: "approvals", label: "Approvals" },
-    { tpl: "settings", label: "Providers · models · tools" },
-    { tpl: "panels", label: "Memory · extensions · logs" },
-    { tpl: "states", label: "States & first run" },
-    { tpl: "inventory", label: "Inventory sheet" }
+    { tpl: "context", label: "Context" },
+    { tpl: "memory", label: "Memory" },
+    { tpl: "providers", label: "Providers" },
+    { tpl: "models", label: "Models" },
+    { tpl: "tools", label: "Tools" },
+    { tpl: "extensions", label: "Extensions" },
+    { tpl: "settings", label: "Settings" },
+    { tpl: "access", label: "Access" },
+    { tpl: "logs", label: "Logs" },
+    { tpl: "onboarding", label: "First run" },
+    { tpl: "states", label: "Overlays & states" },
+    { tpl: "inventory", label: "Every row" }
   ];
 
   var KEY = "crabby-web-review-v1";
   var review = load();
-
-  function load() {
-    try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
-  }
-  function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(review)); } catch (e) { /* private mode: notes live only in this tab */ }
-  }
-
+  function load() { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(review)); } catch (e) { /* private mode */ } }
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
@@ -44,56 +47,57 @@
   var stage = document.getElementById("stage");
   var tabsEl = document.getElementById("tabs");
   var screensEl = document.getElementById("screens");
+  var barTpl = document.getElementById("tpl-bar");
+  var navTpl = document.getElementById("tpl-nav");
 
-  /* ---------- build screens from the markup templates ---------- */
-  TABS.forEach(function (tab, i) {
+  SCREENS.forEach(function (scr, i) {
     var btn = document.createElement("button");
     btn.type = "button";
     btn.setAttribute("role", "tab");
-    btn.textContent = tab.label;
-    btn.dataset.tab = tab.tpl;
+    btn.textContent = scr.label;
+    btn.dataset.tab = scr.tpl;
     btn.setAttribute("aria-selected", i === 0 ? "true" : "false");
     tabsEl.appendChild(btn);
 
     var screen = document.createElement("section");
     screen.className = "screen";
-    screen.dataset.tab = tab.tpl;
+    screen.dataset.tab = scr.tpl;
     screen.setAttribute("role", "tabpanel");
     if (i === 0) screen.dataset.active = "true";
 
-    if (tab.tpl === "inventory") screen.appendChild(inventorySheet());
+    if (scr.tpl === "inventory") screen.appendChild(inventorySheet());
     else {
-      var src = document.getElementById("tpl-" + tab.tpl);
+      var src = document.getElementById("tpl-" + scr.tpl);
       if (src) {
-        screen.innerHTML = src.textContent;
-        src.remove();  // the template is markup text, not content: keep it out of the a11y tree
+        var persistent = (barTpl ? barTpl.textContent : "") + '<p class="banner" data-el="W1-06" hidden>tunnel on</p>';
+        screen.innerHTML = persistent + src.textContent + (navTpl ? navTpl.textContent : "");
+        src.remove();  // templates are markup text, not content: keep them out of the a11y tree
       }
     }
     screensEl.appendChild(screen);
   });
 
   function inventorySheet() {
-    // Every row of WEB.md appears here, even ones with no distinct visual, so the mockup can
-    // never quietly drop an element. Rows also drawn on a screen say so.
+    // Every row of WEB.md appears here, even ones with no distinct visual, so the mockup can never
+    // quietly drop an element. Rows drawn on a screen say which screen.
     var wrap = document.createElement("div");
     var byRegion = {};
     ROWS.forEach(function (r) { (byRegion[r.region] = byRegion[r.region] || []).push(r); });
     var order = Object.keys(byRegion).sort(function (a, b) {
       return a.length === b.length ? (a < b ? -1 : 1) : a.length - b.length;
     });
-    var html = '<p class="note" style="margin:0;padding:8px 12px">All ' + ROWS.length +
-      " rows from <code>docs/review/WEB.md</code>, in region order. Anything here can be reviewed " +
-      "exactly like a rendered element — the drawer is the same.</p>";
+    var html = '<p class="note pad">All ' + ROWS.length + " rows from <code>docs/review/WEB.md</code>, in region order. " +
+      "Anything here can be reviewed exactly like a rendered element — the drawer is the same.</p>";
     order.forEach(function (region) {
       var rows = byRegion[region];
-      html += '<div class="bar" style="justify-content:space-between"><strong>' + esc(region) +
-        " — " + esc(rows[0].region_title || "") + '</strong><span class="note">' + rows.length + " element" +
+      html += '<div class="bar"><strong>' + esc(region) + " — " + esc(rows[0].region_title || "") +
+        '</strong><span class="spacer" style="flex:1"></span><span class="note">' + rows.length + " element" +
         (rows.length === 1 ? "" : "s") + "</span></div>";
       html += '<div class="list">' + rows.map(function (r) {
-        var drawn = r.id && r.placed ? "also on " + esc(r.placed) : "described, not drawn";
         return '<div class="row" data-el="' + esc(r.id) + '" data-auto="1">' +
           '<div class="actions"><span class="mono note">' + esc(r.id) + "</span>" +
-          "<strong>" + esc(r.element) + "</strong><span class='note'>· " + drawn + "</span></div>" +
+          "<strong>" + esc(r.element) + "</strong>" +
+          '<span class="note">· ' + (r.placed ? "drawn on: " + esc(r.placed) : "described, not drawn") + "</span></div>" +
           '<div class="msg">' + esc(r.text) + "</div>" +
           (r.sizes ? '<span class="note">sizes: ' + esc(r.sizes) + "</span>" : "") +
           (r.behavior ? '<span class="note">behavior: ' + esc(r.behavior) + "</span>" : "") +
@@ -105,13 +109,11 @@
     return wrap;
   }
 
-  /* ---------- attach review affordances to every element ---------- */
+  /* ---------- attach review affordances ---------- */
   var placed = {};
-  // The inventory sheet holds one card per row, so those cards carry data-auto: simulated state
-  // changes and bar layout must never reach them, or "what the mockup shows" stops matching
-  // "what the inventory says".
-  function instances(id) {
-    return (placed[id] || []).filter(function (el) { return !el.dataset.auto; });
+  function screenOf(el) {
+    var s = el.closest(".screen");
+    return s ? s.dataset.tab : "";
   }
   function decorate(el) {
     if (el.dataset.decorated) return;
@@ -127,7 +129,7 @@
     (placed[id] = placed[id] || []).push(el);
     var row = BY_ID[id];
     if (!row) { el.dataset.status = "UNKNOWN"; return; }
-    var tab = el.closest(".screen") ? el.closest(".screen").dataset.tab : "";
+    var tab = screenOf(el);
     if (tab && tab !== "inventory" && !row.placed) row.placed = tab;
     el.setAttribute("title", row.element + " — " + (row.text || ""));
   }
@@ -135,18 +137,21 @@
     Array.prototype.forEach.call((root || document).querySelectorAll("[data-el]"), decorate);
   }
   decorateAll();
+  // The persistent bar and nav are the same element on every screen; count one instance per screen.
+  function instances(id, screen) {
+    return (placed[id] || []).filter(function (el) {
+      return !el.dataset.auto && (!screen || screenOf(el) === screen);
+    });
+  }
 
-  /* ---------- status painting ---------- */
+  /* ---------- status ---------- */
   function statusOf(id) { return (review[id] && review[id].status) || (BY_ID[id] && BY_ID[id].status) || "PROPOSED"; }
   function paint() {
     Object.keys(placed).forEach(function (id) {
       placed[id].forEach(function (el) {
         el.dataset.status = statusOf(id);
         var lab = el.querySelector(":scope > .el-label");
-        if (lab) {
-          var edited = review[id] && (review[id].status || review[id].note);
-          lab.textContent = id + (edited ? " •" : "");
-        }
+        if (lab) lab.textContent = id + ((review[id] && (review[id].status || review[id].note)) ? " •" : "");
       });
     });
     var counts = {};
@@ -159,7 +164,7 @@
     document.getElementById("d-progress").textContent = "reviewed " + done + " of " + ROWS.length;
   }
 
-  /* ---------- selection + drawer ---------- */
+  /* ---------- drawer ---------- */
   var current = null;
   function select(id) {
     current = id;
@@ -170,19 +175,19 @@
     var r = BY_ID[id];
     var empty = document.getElementById("d-empty"), form = document.getElementById("d-form");
     if (!r) {
-      empty.textContent = id + " is drawn in the mockup but has no row in docs/review/WEB.md. That is a defect in the " +
-        "inventory or the mockup — it should be reported, not approved.";
+      empty.innerHTML = "<code>" + esc(id) + "</code> mockup-e ache, kintu <code>docs/review/WEB.md</code>-e tar row nei. " +
+        "Eta inventory ba mockup er defect — accept na kore report korun.";
       empty.hidden = false; form.hidden = true; return;
     }
     empty.hidden = true; form.hidden = false;
-    document.getElementById("d-id").textContent = r.id;
+    document.getElementById("d-id").textContent = r.id + " · " + r.element;
     document.getElementById("d-region").textContent = r.region + " — " + (r.region_title || "");
     document.getElementById("d-element").textContent = r.element;
     document.getElementById("d-content").textContent = r.text || "—";
-    document.getElementById("d-sizes").textContent = r.sizes || "no size claim yet (fill this in — the 360px case is the binding one)";
-    document.getElementById("d-behavior").textContent = [r.behavior, r.placement ? "placement: " + r.placement : ""].filter(Boolean).join(" · ") || "—";
-    var st = document.getElementById("d-status");
-    st.value = statusOf(id);
+    document.getElementById("d-sizes").textContent = r.sizes || "size claim nei — 360px case ta bhor e likhun";
+    document.getElementById("d-behavior").textContent =
+      [r.behavior, r.placement ? "placement: " + r.placement : ""].filter(Boolean).join(" · ") || "—";
+    document.getElementById("d-status").value = statusOf(id);
     document.getElementById("d-note").value = (review[id] && review[id].note) || "";
     document.getElementById("d-row").textContent = rowMarkdown(id);
     var tier = document.getElementById("d-tier");
@@ -206,57 +211,58 @@
   }
 
   document.addEventListener("click", function (ev) {
+    var goto = ev.target.closest("[data-goto]");
+    if (goto) { ev.preventDefault(); activate(goto.dataset.goto); }
     var el = ev.target.closest("[data-el]");
-    if (!el) return;
-    if (stage.dataset.picking !== "on" && !ev.altKey) return;
-    if (el.closest(".drawer")) return;
-    // no preventDefault: the mock's own controls (details, checkboxes) must still work, a
-    // review click is additive, not a replacement.
+    if (!el || el.closest(".drawer") || el.closest(".review-chrome")) return;
+    // no preventDefault: the mock's own controls (details, checkboxes) must still work
     select(el.dataset.el);
   });
 
-  document.addEventListener("change", function (ev) {
-    if (ev.target.id === "d-status") {
-      if (!current) return;
-      review[current] = review[current] || {};
-      review[current].status = ev.target.value;
-      if (!review[current].note) delete review[current].note;
-      if (!Object.keys(review[current]).length) delete review[current];
-      save(); paint(); document.getElementById("d-row").textContent = rowMarkdown(current);
-    }
+  document.getElementById("d-status").addEventListener("change", function (ev) {
+    if (!current) return;
+    review[current] = review[current] || {};
+    review[current].status = ev.target.value;
+    prune(current); save(); paint();
+    document.getElementById("d-row").textContent = rowMarkdown(current);
   });
   document.getElementById("d-note").addEventListener("input", function (ev) {
     if (!current) return;
     review[current] = review[current] || {};
     review[current].note = ev.target.value;
-    if (!ev.target.value && !review[current].status) delete review[current];
-    save(); paint(); document.getElementById("d-row").textContent = rowMarkdown(current);
+    prune(current); save(); paint();
+    document.getElementById("d-row").textContent = rowMarkdown(current);
   });
+  function prune(id) {
+    var rv = review[id];
+    if (rv && !rv.note && (!rv.status || rv.status === (BY_ID[id] && BY_ID[id].status))) delete review[id];
+  }
 
-  document.getElementById("d-next").addEventListener("click", function () {
+  document.getElementById("d-next").addEventListener("click", function () { step(1); });
+  document.getElementById("d-prev").addEventListener("click", function () { step(-1); });
+  function step(dir) {
     var idx = current ? ROWS.findIndex(function (r) { return r.id === current; }) : -1;
     for (var i = 1; i <= ROWS.length; i++) {
-      var r = ROWS[(idx + i) % ROWS.length];
-      if (statusOf(r.id) === "PROPOSED") {
-        reveal(r); select(r.id); return;
-      }
+      var r = ROWS[(idx + dir * i + ROWS.length * 40) % ROWS.length];
+      if (dir > 0 && statusOf(r.id) === "PROPOSED") { reveal(r); select(r.id); return; }
+      if (dir < 0) { reveal(r); select(r.id); return; }
     }
-    document.getElementById("d-progress").textContent = "every row has a decision — copy the review out";
-  });
+    document.getElementById("d-progress").textContent = "sob row te-i kono na kono noddho ache — “Copy my edits” chanun";
+  }
   function reveal(r) {
-    var els = placed[r.id] || [];
-    if (!els.length) return;
-    var screen = els[0].closest(".screen");
+    var el = (placed[r.id] || []).filter(function (e) { return !e.dataset.auto; })[0] || (placed[r.id] || [])[0];
+    if (!el) return;
+    var screen = el.closest(".screen");
     if (screen) activate(screen.dataset.tab);
-    if (els[0].scrollIntoView) els[0].scrollIntoView({ block: "center", inline: "nearest" });
+    if (el.scrollIntoView) el.scrollIntoView({ block: "center", inline: "nearest" });
   }
 
   function copy(text, done) {
-    var ta, ok = false;
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(function () { done(true); }, function () { fallback(); });
     } else fallback();
     function fallback() {
+      var ok = false, ta;
       try {
         ta = document.createElement("textarea");
         ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
@@ -268,66 +274,56 @@
   }
   function showInDrawer(text, label) {
     var box = document.getElementById("d-row");
-    box.textContent = text;
     document.getElementById("d-form").hidden = false;
     document.getElementById("d-empty").hidden = true;
-    if (box.scrollIntoView) box.scrollIntoView({ block: "nearest" });
+    box.textContent = text;
     if (label) document.getElementById("d-progress").textContent = label;
+    if (box.scrollIntoView) box.scrollIntoView({ block: "nearest" });
   }
-  document.getElementById("d-copy").addEventListener("click", function () {
-    if (!current) return;
-    copy(rowMarkdown(current), function (ok) {
-      document.getElementById("d-progress").textContent = ok ? "row copied — paste it over the old row in WEB.md" : "clipboard blocked; the row is shown below to select";
-      if (!ok) showInDrawer(rowMarkdown(current));
+  document.getElementById("export").addEventListener("click", function () {
+    var text = exportReview();
+    copy(text, function (ok) {
+      if (ok) document.getElementById("d-progress").textContent = "copy hoyeche — WEB.md-e paste korun";
+      else showInDrawer(text, "clipboard block — niche theke select kore nin");
     });
+  });
+  document.getElementById("download").addEventListener("click", function () {
+    try {
+      var blob = new Blob([exportReview() + "\n"], { type: "text/markdown" });
+      var a2 = document.createElement("a");
+      a2.href = URL.createObjectURL(blob);
+      a2.download = "crabby-web-review.md";
+      document.body.appendChild(a2); a2.click();
+      setTimeout(function () { URL.revokeObjectURL(a2.href); a2.remove(); }, 500);
+    } catch (e) { showInDrawer(exportReview(), "download block — niche select korun"); }
+  });
+  document.getElementById("reset").addEventListener("click", function () {
+    if (!confirm("Apnar local status/note bad debo? WEB.md kichu change hoy nai.")) return;
+    review = {}; save(); paint();
+    if (current) select(current);
   });
 
   function exportReview() {
-    var changed = ROWS.filter(function (r) {
-      var rv = review[r.id];
-      return rv && (rv.status || rv.note);
-    });
-    if (!changed.length) return "No changes yet. Tap an element, set a status, or write a note — this button then gives paste-ready rows.";
+    var changed = ROWS.filter(function (r) { var rv = review[r.id]; return rv && (rv.status || rv.note); });
+    if (!changed.length) return "Ekhono kichu bodlao ni. Element e click korun → status/note → ei button paste-ready row debe.";
     var lines = ["", "Owner review pass — " + changed.length + " of " + ROWS.length +
       " rows changed. Each block below replaces the row of the same ID in `docs/review/WEB.md`.", ""];
     var byRegion = {};
     changed.forEach(function (r) { (byRegion[r.region] = byRegion[r.region] || []).push(r); });
     Object.keys(byRegion).forEach(function (region) {
-      lines.push("### " + region + " — " + (byRegion[region][0].region_title || ""));
-      lines.push("");
+      lines.push("### " + region + " — " + (byRegion[region][0].region_title || ""), "");
       byRegion[region].forEach(function (r) { lines.push(rowMarkdown(r.id)); });
       lines.push("");
     });
-    var questions = changed.filter(function (r) { return statusOf(r.id) === "?"; });
-    if (questions.length) {
+    var qs = changed.filter(function (r) { return statusOf(r.id) === "?"; });
+    if (qs.length) {
       lines.push("### Blocking questions");
-      questions.forEach(function (r) { lines.push("- " + r.id + " (" + r.element + "): " + ((review[r.id] || {}).note || "no note given")); });
-      lines.push("");
+      qs.forEach(function (r) { lines.push("- " + r.id + " (" + r.element + "): " + ((review[r.id] || {}).note || "note nei")); });
     }
     return lines.join("\n");
   }
-  document.getElementById("export").addEventListener("click", function () {
-    var text = exportReview();
-    copy(text, function (ok) {
-      if (!ok) showInDrawer(text, "clipboard blocked — select the text below and copy it manually");
-      else document.getElementById("d-progress").textContent = "review copied (" + text.split("\n").length + " lines)";
-    });
-  });
-  document.getElementById("download").addEventListener("click", function () {
-    var blob = new Blob([exportReview() + "\n"], { type: "text/markdown" });
-    var a2 = document.createElement("a");
-    a2.href = URL.createObjectURL(blob);
-    a2.download = "crabby-web-review.md";
-    document.body.appendChild(a2); a2.click();
-    setTimeout(function () { URL.revokeObjectURL(a2.href); a2.remove(); }, 500);
-  });
-  document.getElementById("reset").addEventListener("click", function () {
-    if (!confirm("Discard your local statuses and notes? WEB.md itself is untouched.")) return;
-    review = {}; save(); paint();
-    if (current) select(current);
-  });
 
-  /* ---------- viewport / theme / density ---------- */
+  /* ---------- chrome controls ---------- */
   function seg(id, attr, after) {
     var box = document.getElementById(id);
     box.addEventListener("click", function (ev) {
@@ -339,17 +335,14 @@
       after(b.dataset[attr]);
     });
   }
-  seg("viewport", "v", function (v) { stage.dataset.viewport = v; layoutBar(); });
+  seg("viewport", "v", function (v) { stage.dataset.viewport = v; layoutBars(); });
   seg("theme", "t", function (t) { document.documentElement.dataset.theme = t; });
   seg("density", "d", function (d) { document.documentElement.dataset.density = d; });
-  document.getElementById("picking").addEventListener("change", function (ev) {
-    stage.dataset.picking = ev.target.checked ? "on" : "off";
-  });
   document.getElementById("labels").addEventListener("change", function (ev) {
     stage.dataset.labels = ev.target.checked ? "on" : "off";
   });
   ["sim-vault", "sim-offline", "sim-tunnel", "sim-firstrun"].forEach(function (id) {
-    document.getElementById(id).addEventListener("change", function () { layoutBar(); runStates(); });
+    document.getElementById(id).addEventListener("change", function () { runStates(); layoutBars(); });
   });
 
   function activate(name) {
@@ -365,104 +358,120 @@
     if (b) activate(b.dataset.tab);
   });
 
-  /* ---------- W1-A: the bar at 360px, live ---------- */
+  /* ---------- W1-A live: the bar at 360px, on every screen ---------- */
+  var BAR_ITEMS = ["W1-01", "W1-02", "W1-03", "W1-04", "W1-05", "W1-06", "W1-07", "W1-08", "W1-09"];
   var ESCAPERS = { "W1-07": "sim-vault", "W1-04": "sim-offline" };
-  function inlineAt360() {
+  function layoutBars() {
+    var narrow = stage.dataset.viewport === "phone";
     var keep = ["W1-01", "W1-02", "W1-03", "W1-05", "W1-06"];
     Object.keys(ESCAPERS).forEach(function (id) {
       if (document.getElementById(ESCAPERS[id]).checked) keep.push(id);
     });
-    return keep;
-  }
-  function layoutBar() {
-    var narrow = stage.dataset.viewport === "phone";
-    var keep = inlineAt360();
-    var collapsed = [];
-    ["W1-01", "W1-02", "W1-03", "W1-04", "W1-05", "W1-06", "W1-07", "W1-08", "W1-09"].forEach(function (id) {
-      var hid = narrow && keep.indexOf(id) < 0;
-      instances(id).forEach(function (el) { el.hidden = hid; });
-      if (hid) collapsed.push(id);
-    });
-    var btn = document.getElementById("more-btn");
-    if (btn) btn.hidden = !narrow;
-    var sheet = document.getElementById("more-sheet");
-    if (sheet) {
-      var items = collapsed.filter(function (v, i, arr) { return arr.indexOf(v) === i; }).map(function (id) {
-        return '<div class="row" data-el="' + id + '"><strong>' + esc(BY_ID[id] ? BY_ID[id].element : id) + "</strong>" +
-          '<span class="note">' + esc(BY_ID[id] ? BY_ID[id].text : "") + "</span></div>";
+    Array.prototype.forEach.call(document.querySelectorAll(".screen"), function (screen) {
+      var collapsed = [];
+      BAR_ITEMS.forEach(function (id) {
+        var hid = narrow && keep.indexOf(id) < 0;
+        // only the chips inside the bar collapse; the tunnel banner shares W1-06 and is a
+        // page-level element, so it must not be hidden by bar arithmetic
+        instances(id, screen.dataset.tab).filter(function (el) { return el.closest(".bar"); })
+          .forEach(function (el) { el.hidden = hid; });
+        if (hid) collapsed.push(id);
       });
-      var escaped = ["W1-04", "W1-07"].filter(function (id) { return keep.indexOf(id) >= 0; });
-      if (narrow && escaped.length) items.push('<div class="row"><span class="note note--warn">forced out of this sheet into the bar: ' +
-        escaped.join(", ") + " — the state itself changes what you can trust on screen</span></div>");
-      sheet.innerHTML = items.join("") || '<div class="row"><span class="note">nothing is collapsed at this width</span></div>';
-      decorateAll(sheet);
-    }
-    var fr = document.getElementById("sim-firstrun").checked;
-    instances("W-O1").forEach(function (el) { el.hidden = !fr; });
+      var btn = screen.querySelector("[data-more]");
+      if (btn) btn.hidden = !narrow;
+      var sheet = screen.querySelector(".more-sheet");
+      if (sheet) {
+        sheet.innerHTML = collapsed.length ? collapsed.map(function (id) {
+          var r = BY_ID[id];
+          return '<div class="row" data-el="' + id + '"><strong>' + esc(r ? r.element : id) + "</strong>" +
+            '<span class="note">' + esc(r ? r.text : "") + "</span></div>";
+        }).join("") : '<div class="row"><span class="note">ei width e kichu collapse hoy nai</span></div>';
+        if (narrow) {
+          var escaped = ["W1-04", "W1-07"].filter(function (id) { return keep.indexOf(id) >= 0; });
+          if (escaped.length) {
+            var warn = document.createElement("div");
+            warn.className = "row";
+            warn.innerHTML = '<span class="note note--warn">sheet theke bar e oranto: ' + escaped.join(", ") +
+              " — ei duitor ortho screen er upor bhorsha bodle</span>";
+            sheet.appendChild(warn);
+          }
+        }
+        decorateAll(sheet);
+        sheet.hidden = true;
+      }
+    });
+    instances("W-O1").forEach(function (el) {
+      el.hidden = !document.getElementById("sim-firstrun").checked;
+    });
   }
-  var moreBtn = document.getElementById("more-btn");
-  if (moreBtn) {
+  document.addEventListener("click", function (ev) {
+    var btn = ev.target.closest("[data-more]");
+    if (!btn) return;
+    ev.stopPropagation();
+    var sheet = btn.closest(".screen").querySelector(".more-sheet");
+    if (sheet) sheet.hidden = !sheet.hidden;
+  });
+  // one sheet per screen, right under the bar
+  Array.prototype.forEach.call(document.querySelectorAll("[data-more]"), function (btn) {
     var sheet = document.createElement("div");
-    sheet.id = "more-sheet";
-    sheet.className = "list";
+    sheet.className = "list more-sheet";
     sheet.dataset.el = "W1-11";
     sheet.hidden = true;
-    moreBtn.parentNode.appendChild(sheet);
-    moreBtn.addEventListener("click", function (ev) {
-      ev.stopPropagation();
-      sheet.hidden = !sheet.hidden;
-    });
-  }
+    btn.parentNode.parentNode.insertBefore(sheet, btn.parentNode.nextSibling);
+  });
+
   function runStates() {
     var vault = document.getElementById("sim-vault").checked;
     var offline = document.getElementById("sim-offline").checked;
     var tunnel = document.getElementById("sim-tunnel").checked;
-    instances("W1-06").forEach(function (el) {
-      el.dataset.tone = tunnel ? "tunnel" : "off";
-      el.innerHTML = '<span class="chip__dot"></span>tunnel: ' + (tunnel ? "k7x-abcd" : "off") + '<span class="el-label">W1-06</span>';
+    Array.prototype.forEach.call(document.querySelectorAll('.bar .chip[data-el="W1-06"],.bar .chip[data-el="W1-07"],.bar .chip[data-el="W1-04"]'), function (el) {
+      var id = el.dataset.el;
+      if (id === "W1-06") {
+        el.dataset.tone = tunnel ? "tunnel" : "off";
+        el.innerHTML = '<span class="chip__dot"></span>tunnel: ' + (tunnel ? "k7x-abcd" : "off") + '<span class="el-label">W1-06</span>';
+      } else if (id === "W1-07") {
+        el.dataset.tone = vault ? "err" : "ok";
+        el.innerHTML = '<span class="chip__dot"></span>vault: ' + (vault ? "locked" : "unlocked") + '<span class="el-label">W1-07</span>';
+      } else {
+        el.dataset.tone = offline ? "err" : "info";
+        el.innerHTML = '<span class="chip__dot"></span>' + (offline ? "offline · last seen 21:44" : "reconnecting") +
+          '<span class="el-label">W1-04</span>';
+      }
     });
-    instances("W1-07").forEach(function (el) {
-      el.dataset.tone = vault ? "err" : "ok";
-      el.innerHTML = '<span class="chip__dot"></span>vault: ' + (vault ? "locked" : "unlocked") + '<span class="el-label">W1-07</span>';
+    instances("W6-13").forEach(function (el) {
+      if (el.classList.contains("chip") || el.tagName === "BUTTON") el.textContent = offline ? "live tail: paused (2 deferred)" : "live tail: on";
+      else el.textContent = offline ? "paused — 2 events deferred" : "live tail";
     });
-    instances("W1-04").forEach(function (el) {
-      el.dataset.tone = offline ? "err" : "info";
-      el.innerHTML = '<span class="chip__dot"></span>' + (offline ? "offline · last seen 21:44" : "reconnecting") + '<span class="el-label">W1-04</span>';
+    Array.prototype.forEach.call(document.querySelectorAll(".banner[data-el='W1-06']"), function (b) {
+      b.hidden = !tunnel;
+      b.innerHTML = "This page is reachable through the tunnel (<code>k7x-abcd</code>). Ja approve korben sheita ei phone-e cholbe. " +
+        '<button class="btn btn--ghost" data-el="W13-06" data-goto="access">turn off</button><span class="el-label">W1-06</span>';
+      decorate(b);
     });
-    instances("W6-13").forEach(function (el) { el.textContent = offline ? "paused — 2 events deferred" : "live tail"; });
-    var banner = document.getElementById("tunnel-banner");
-    if (!banner) {
-      banner = document.createElement("p");
-      banner.id = "tunnel-banner";
-      banner.className = "note el";
-      banner.dataset.el = "W1-06";
-      banner.style.cssText = "margin:0;padding:6px 12px;background:color-mix(in srgb,var(--tunnel-on) 14%,transparent);border-bottom:1px solid var(--line)";
-      banner.innerHTML = "This page is reachable through the tunnel (<code>k7x-abcd</code>). Anything you approve here runs on the phone. <span class=\"el-label\">W1-06</span>";
-      screensEl.parentNode.insertBefore(banner, screensEl);
-      decorate(banner);
-    }
-    decorateAll(banner.parentNode);
-    banner.hidden = !tunnel;
   }
 
-  /* keyboard: j/k walk the elements of the active screen, a/d/x/? set decisions */
+  /* keyboard: j/k walk the open screen, a/d/x/? decide */
   document.addEventListener("keydown", function (ev) {
     if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
-    if (ev.key === "Escape") { Array.prototype.forEach.call(document.querySelectorAll('.el[data-selected="true"]'), function (el) { el.dataset.selected = "false"; }); return; }
+    if (ev.key === "Escape") {
+      Array.prototype.forEach.call(document.querySelectorAll('.el[data-selected="true"]'), function (el) { el.dataset.selected = "false"; });
+      Array.prototype.forEach.call(document.querySelectorAll(".more-sheet"), function (s) { s.hidden = true; });
+      return;
+    }
     var list = Array.prototype.filter.call(
       document.querySelectorAll('.screen[data-active="true"] [data-el]'),
-      function (el) { return !el.hidden && el.offsetParent; });
+      function (el) { return !el.hidden && !el.closest(".more-sheet") && el.offsetParent; });
     var idx = current ? list.findIndex(function (el) { return el.dataset.el === current; }) : -1;
     if (ev.key === "j" || ev.key === "k") {
       ev.preventDefault();
       var nxt = list[Math.max(0, Math.min(list.length - 1, idx + (ev.key === "j" ? 1 : -1)))];
       if (nxt) { select(nxt.dataset.el); if (nxt.scrollIntoView) nxt.scrollIntoView({ block: "nearest" }); }
     } else if (current && "adx".indexOf(ev.key) >= 0) {
-      var map = { a: "ACCEPTED", d: "EDIT", x: "CUT" };
       review[current] = review[current] || {};
-      review[current].status = map[ev.key];
-      save(); paint(); document.getElementById("d-row").textContent = rowMarkdown(current);
-      var next = list[idx + 1]; if (next) { select(next.dataset.el); if (next.scrollIntoView) next.scrollIntoView({ block: "nearest" }); }
+      review[current].status = { a: "ACCEPTED", d: "EDIT", x: "CUT" }[ev.key];
+      prune(current); save(); paint();
+      var next = list[idx + 1];
+      if (next) { select(next.dataset.el); if (next.scrollIntoView) next.scrollIntoView({ block: "nearest" }); }
     } else if (current && ev.key === "?") {
       review[current] = review[current] || {};
       review[current].status = "?";
@@ -471,6 +480,6 @@
     }
   });
 
-  paint(); layoutBar(); runStates();
+  paint(); layoutBars(); runStates();
   if (ROWS.length) select(ROWS[0].id);
 })();

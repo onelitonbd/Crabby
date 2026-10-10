@@ -9,11 +9,11 @@ code, and is never referenced by a runtime. When the inventories are approved th
 
 | File | What it is |
 | --- | --- |
-| `build.py` | parses the inventory tables, then writes `web.html`; fails if the mockup references an element the inventory does not define, or leaves a row unplaced |
+| `build.py` | parses the inventory tables, then writes `crabby-web-ui.html`; fails if the mockup references an element the inventory does not define, or leaves a row unplaced |
 | `shell.html` | the drawn screens — markup only, no invented element names (each carries `data-el="<inventory ID>"`) |
 | `tokens.css` | semantic tokens, placeholders until `docs/DESIGN_SYSTEM.md` is regenerated from approved elements |
 | `app.js` | selection, drawer, viewport/theme/density toggles, review notes, export |
-| `web.html` | **generated, committed for convenience** — the file to open. Regenerate with the command below; do not hand-edit |
+| `crabby-web-ui.html` | **generated, committed for convenience** — the file to open (one file: inline CSS, inline data, no assets). Regenerate with the command below; do not hand-edit |
 
 ```
 python3 docs/review/mockups/build.py

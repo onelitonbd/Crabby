@@ -12,7 +12,7 @@
 > **IDs:** `W` = Web · region number · element number. Quote an ID when you want to change one thing.
 >
 > **How to review this file:** `python3 docs/review/mockups/build.py` then open
-> `docs/review/mockups/web.html` (see `docs/review/mockups/README.md`). Every element in that page is one row here,
+> `docs/review/mockups/crabby-web-ui.html` (see `docs/review/mockups/README.md`). Every element in that page is one row here,
 > and clicking it shows the row. Changing a status in the page does not change this file: the page exports
 > paste-ready rows, and `build.py` refuses to build if the two ever disagree about what exists.
 >
@@ -259,6 +259,7 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | W12-06 | Retention controls | event and history retention, `docs/DATA_AND_MEMORY.md` §7-§8 | PROPOSED |
 | W12-07 | Reset / export config | sanitized export; plaintext config never contains a key | PROPOSED |
 | W12-08 | Language | UI copy strings; Bengali first-class, not an afterthought | PROPOSED |
+| W12-09 | Section navigation | sub-tabs: general · providers · models · tools · access · logs | PROPOSED |
 
 ### Region W13 — Access (`/settings/access`)
 
@@ -317,8 +318,8 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | Context & memory | W7, W8 | 16 | yes |
 | Providers/models/tools | W9, W10, W11 | 25 | yes; deferred states included  |
 | Extensions | W-E | 12 | yes, incl. quarantined and lock notice |
-| Settings/access/logs | W12, W13, W14 | 23 | yes  |
+| Settings/access/logs | W12, W13, W14 | 24 | yes  |
 | Onboarding/global | W-O | 10 | yes |
-| **Total** | **17 regions** | **160 elements** | — |
+| **Total** | **17 regions** | **161 elements** | — |
 
-Owner review surface: 160 rows to read, edit, cut, or approve. Nothing in this file is optional by size.
+Owner review surface: 161 rows to read, edit, cut, or approve. Nothing in this file is optional by size.

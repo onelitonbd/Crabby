@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Serve the review mockup so it can be opened from another device, e.g. a phone on the LAN.
 
-    python3 docs/review/mockups/serve.py            # http://0.0.0.0:8080/  -> web.html
+    python3 docs/review/mockups/serve.py            # http://0.0.0.0:8080/  -> crabby-web-ui.html
     python3 docs/review/mockups/serve.py 8080
 
 Loopback-only by intent for normal use: pass a bind address if you really want it reachable, and remember that
@@ -24,7 +24,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802 - stdlib name
         if self.path in ("/", "/index.html"):
-            self.path = "/web.html"
+            self.path = "/crabby-web-ui.html"
         return super().do_GET()
 
 

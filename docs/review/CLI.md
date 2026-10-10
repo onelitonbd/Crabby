@@ -264,6 +264,25 @@ terminal has to be able to reach them too. They are also the commands a script w
 
 ---
 
+## 9A. Sessions
+
+The grammar's `session` noun exists for one reason beyond compaction: `chat --session <id>` continues a session but
+cannot *find* one. Without `session ls` the only way to resume on a phone is to remember an id, which is how people
+end up with forty sessions they cannot tell apart.
+
+### Region C11 — Session commands
+
+| ID | Element | Content | Sizes | Behavior | Status |
+| --- | --- | --- | --- | --- | --- |
+| C11-01 | session ls | id, title, last activity, state word, model, origin interface | 1 line each | `--quiet` prints ids only; sorted by last activity, not by creation, because that is the order a person remembers in (`GET /sessions`) | PROPOSED |
+| C11-02 | session new | `crabby session new [--title "…"]` | one line | prints the id and the command to use it (`crabby chat --session <id>`) — a created thing you cannot address is a bug | PROPOSED |
+| C11-03 | session show | title, turns, tasks, budget, pinned items | ≤12 lines | the union of what `context show` and `task ls` say about one session; `--json` gives the session object | PROPOSED |
+| C11-04 | session rename | `crabby session rename <id> "title"` | one line | writes through `PATCH /sessions/{id}`, so the Web title and the TUI list change with it, not after it | PROPOSED |
+| C11-05 | no session delete | the deletion verb stays where it is | one line | `history delete-session` is the only path, so there is exactly one command that destroys history and one place to look for it; the absence is the decision, not an oversight | PROPOSED |
+| C11-06 | bare crabby chat | which session it uses | one line | a fresh one each time, with its id printed on the last line — silently continuing the most recent session would let a script append to a conversation it never opened | PROPOSED |
+
+---
+
 ## 10. The scripting contract
 
 ### Region C-S — What another program may rely on
@@ -305,7 +324,7 @@ v1 (cheap, impossible to drift once generated), skip the man page.
 | Data | C9 | 9 | T2 export, propagation count, no unredacted view |
 | Context, compaction, tools | C10 | 5 | pin/unpin, compaction disclosure, deferred tools listed |
 | Scripting contract | C-S | 14 | idempotency, signals, timeouts, dry run |
-| **Total** | **13 regions** | **143 elements** | — |
+| **Total** | **14 regions** | **149 elements** | — |
 
 Every `C` element above has to exist for the parity test to pass: if a capability is in `docs/INTERFACES_AND_API.md`
 §8 and there is no row here, this file is wrong, not the matrix.

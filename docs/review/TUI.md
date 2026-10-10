@@ -156,9 +156,29 @@ from Termux, so this belongs with the M0 device measurements (O-002), not with t
 
 ---
 
+## 3A. Sessions
+
+> `docs/INTERFACES_AND_API.md` §7.2 names "session switcher" as a required TUI view; region T16 is what makes that a
+> thing with parts (F-10).
+
+### Region T16 — Session switcher
+
+| ID | Element | Content | Sizes | Behavior | Status |
+| --- | --- | --- | --- | --- | --- |
+| T16-01 | Switcher overlay | all sessions of this identity, newest activity first | ≤10 rows, then scroll | `s` opens it from any pane; inside the composer `s` stays a literal (T3-04 is the rule that decides this) | PROPOSED |
+| T16-02 | Row content | title, relative last activity, `running`/`awaiting approval` state word | 40 columns: title truncated in the middle, never the state word | the state word is the reason a user switches, so it wins the space fight | PROPOSED |
+| T16-03 | Current session | marked with `>` and the word `current` | 1 line | both, because the marker alone is 1 column of ambiguity in a 40-column frame | PROPOSED |
+| T16-04 | Overlay-local keys | `Enter` switch · `n` new · `t` title · `d` delete | one hint line | `d` denies outside this overlay and deletes inside it, exactly as `a` does in approvals; the hint line is the authority (T3-01) | PROPOSED |
+| T16-05 | Rename | title edit on the row, no separate dialog | one line | writes `PATCH /sessions/{id}`; the same write as the status line's title, so one of them cannot be stale | PROPOSED |
+| T16-06 | Delete confirm | counts turns and tasks, then asks for the title typed back | 3 lines | T3, and the typed word is the title, not `y` — at 40 columns a mistyped selection is plausible | PROPOSED |
+| T16-07 | Switch while a task runs | what the frame says afterwards | one line | the task keeps running and its events stop rendering; returning re-reads state from the Gateway rather than replaying a buffer (the same reconciliation as T4-13) | PROPOSED |
+| T16-08 | Session id line | the id of the highlighted session, on its own line | one line | long-press selectable (T2-09); a session that cannot be named has to be addressable in the CLI | PROPOSED |
+
+---
+
 ## 4. Approvals
 
-### Region T-A — The modal, the only thing allowed to steal focus
+### Region T-A — Approvals: the modal, the only thing allowed to steal focus
 
 | ID | Element | Content | Sizes | Behavior | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -372,6 +392,7 @@ promise a terminal cannot keep has to be narrowed in words, not silently.
 
 | Screen | Regions | Elements | Every state defined? |
 | --- | --- | --- | --- |
+| Sessions | T16 | 8 | switch mid-task, typed-delete count, id selectable |
 | App frame | T1, T2, T3 | 24 | resize, below-minimum, startup, reconnect, dumb terminal |
 | Chat | T4, T5 | 25 | loading, streaming, stall, approval in list, error, reconnect, narrow |
 | Tasks | T6, T7 | 22 | empty, no-bulk, cancel phases, checkpoint, ladder, 40-column drop order |
@@ -382,7 +403,7 @@ promise a terminal cannot keep has to be narrowed in words, not silently.
 | Settings/access/logs | T13, T14, T15 | 25 | diff-before-apply, redaction, paging, color-tier escape hatch |
 | Capability rules | T-C | 12 | this region is the degraded-state contract |
 | Onboarding | T-O | 10 | skip, gateway down, unknown input, help |
-| **Total** | **19 regions** | **185 elements** | — |
+| **Total** | **20 regions** | **193 elements** | — |
 
 Two things this file must satisfy before `docs/UI_UX_SPEC.md` is regenerated from it (per D-055): every `Sizes`
 cell states the 40-column outcome, and every open question here has an owner decision.

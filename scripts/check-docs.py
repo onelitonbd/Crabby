@@ -401,6 +401,58 @@ def main() -> int:
     for cmd in sorted(tg_inv - tg_spec):
         problems.append(f"docs/review/TELEGRAM.md: command /{cmd} is proposed here but absent from §7.4's list")
 
+
+    # 11. a screen that has no region has no elements, and an element-less screen is deleted by the next
+    #     regeneration pass (`docs/UI_UX_SPEC.md` §2.2 and the TUI required views in `docs/INTERFACES_AND_API.md`
+    #     §7.2 are the list of things that must survive). This rule exists because the Sessions screen had zero
+    #     rows in all four inventories until F-10 — nothing else in the check could see it.
+    SCREEN_ALIASES = {
+        "Chat": r"message list|composer|chat",
+        "Tasks": r"task list|tasks",
+        "Task detail": r"task detail",
+        "Approvals": r"approval",
+        "Sessions": r"session",
+        "Context": r"context",
+        "Memory": r"memory",
+        "Providers": r"provider",
+        "Models": r"model",
+        "Tools": r"\btool",
+        "Extensions": r"extension",
+        "Config": r"settings|config",
+        "Logs / Audit": r"logs|audit",
+        "Access": r"access",
+        "Onboarding": r"onboarding|first.run|first run",
+    }
+    spec_doc = bodies.get(ROOT / "docs" / "UI_UX_SPEC.md", "")
+    web = bodies.get(ROOT / "docs" / "review" / "WEB.md", "")
+    web_titles = " ".join(re.findall(r"^#{2,4} Region [A-Z]{1,2}(?:\d+|-[A-Z]) \u2014 (.*)$", web, flags=re.M)).lower()
+    sec22 = re.search(r"^### 2\.2 Screens\n(.*?)\n### ", spec_doc, flags=re.S | re.M)
+    screens = re.findall(r"^\| \*\*([^|*]+)\*\* \|", sec22.group(1) if sec22 else "", flags=re.M)
+    if not sec22:
+        problems.append("scripts/check-docs.py: `docs/UI_UX_SPEC.md` §2.2 is missing or reshaped, so the screen "
+                        "check has nothing to read")
+    for screen in screens:
+        name = screen.strip()
+        pat = SCREEN_ALIASES.get(name)
+        if pat is None:
+            problems.append(
+                f"docs/UI_UX_SPEC.md §2.2 lists a screen {name!r} that docs/review/WEB.md cannot be checked "
+                f"against: add it to SCREEN_ALIASES in scripts/check-docs.py, or give the region its own title"
+            )
+        elif not re.search(pat, web_titles):
+            problems.append(f"docs/review/WEB.md: no region covers the {name!r} screen — an element-less screen "
+                            f"disappears when the spec is regenerated from these files")
+    tui = bodies.get(ROOT / "docs" / "review" / "TUI.md", "")
+    tui_titles = " ".join(re.findall(r"^#{2,4} Region T(?:\d+|-[A-Z]) \u2014 (.*)$", tui, flags=re.M)).lower()
+    views = re.search(r"Required views: (.*?)\n", iface, flags=re.S)
+    if views:
+        wanted = {"conversation": r"message list|chat", "task list": r"task list", "task detail": r"task detail",
+                  "approval prompt": r"approval", "tool activity": r"tool|message list",
+                  "session switcher": r"session", "provider/model picker": r"provider|model"}
+        for key, pat in wanted.items():
+            if key in views.group(1).lower() and not re.search(pat, tui_titles):
+                problems.append(f"docs/review/TUI.md: §7.2 requires {key!r} and no region covers it")
+
     if problems:
         print(f"✗ {len(problems)} documentation problem(s):")
         for prob in problems:

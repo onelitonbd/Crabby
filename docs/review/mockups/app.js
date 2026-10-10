@@ -17,6 +17,7 @@
   // they do in the real thing, so the review sees them in context instead of once.
   var SCREENS = [
     { tpl: "chat", label: "Chat" },
+    { tpl: "sessions", label: "Sessions" },
     { tpl: "tasks", label: "Tasks" },
     { tpl: "detail", label: "Task detail" },
     { tpl: "approvals", label: "Approvals" },

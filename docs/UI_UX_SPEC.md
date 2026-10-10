@@ -104,7 +104,8 @@ columns, never require them.
 - Streaming renders line-buffered, no re-layout of the whole screen per token (flicker on slow terminals is a real
   usability bug, not a cosmetic one).
 - Status line pinned at the bottom: model, tunnel, connection, pending approvals.
-- Keys: `Ctrl-C` cancel task (not quit); `Ctrl-Q` quit; `Esc` close pane/modal; `?` help; `↑↓` select;
+- Keys: `Ctrl-C` cancel task (not quit); `Ctrl-Q` quit; `Esc` close pane/modal; `?` help; `s` session switcher;
+  `↑↓` select;
   `Enter` open; `a` approve; `d` deny; `x` cancel task; `r` resume; `m` switch model.
 - Copy on Termux is via long-press selection; therefore ids and commands must fit on one short line so they are
   selectable without wrapping into uselessness.

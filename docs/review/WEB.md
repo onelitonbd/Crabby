@@ -56,6 +56,31 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 
 ---
 
+## 1A. Sessions (`/sessions`)
+
+> Added during the CLI/Telegram parity pass: `docs/UI_UX_SPEC.md` §2.2 has always listed a Sessions screen, and
+> `docs/INTERFACES_AND_API.md` §8 has always required "list/switch sessions" on every interface — but until this
+> region existed, nothing in the review said *how*. A screen with no elements is a screen that gets dropped when the
+> spec is regenerated from these files (F-10).
+
+### Region W15 — Session list, switching, and deletion
+
+| ID | Element | Content | Sizes | Behavior | Placement | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| W15-01 | Session row | title, last activity (relative), running-task badge, model in use | full width, 2 lines at 360px | the model shown is the effective one, including an override marker (W10-03) | list | PROPOSED |
+| W15-02 | Current-session marker | which row this tab is looking at | 1 char + label | word + mark, never color alone (`docs/DESIGN_SYSTEM.md` §5) | left of title | PROPOSED |
+| W15-03 | New session | creates one and switches to it | 44px target | `POST /sessions`; the new session starts empty and un-named, and the title becomes the first question asked in it | header, and in the nav `+` menu | PROPOSED |
+| W15-04 | Rename | inline edit of the title | ≤40 chars | the same control as the title in the status bar (W1-02) — one path, two entry points, never two dialogs; `PATCH /sessions/{id}` | row, on hover/long-press | PROPOSED |
+| W15-05 | Switch | tap a row to make it current | n/a | the stream follows the session, not the tab: events for the old one stop being rendered, and the row's badge updates from them | row | PROPOSED |
+| W15-06 | Switch while a task runs | what the confirmation says | ≤3 lines | says the task keeps running in the background and where to find it; a switch is never a cancel, and this is the sentence that makes that obvious | sheet | PROPOSED |
+| W15-07 | Delete | typed confirm with the count of turns and tasks it will remove | one line + input | T3, `history.deleteConversation`; the typed word is the session's title, not "yes" — deleting the wrong session is unrecoverable | row menu | PROPOSED |
+| W15-08 | Export | per-session export to file | 1 line | the same artifact as the Download button in a session (W14-05) and `history export` (T2); no second export path | row menu | PROPOSED |
+| W15-09 | Filter and search | text search over titles, plus a "has running task" filter | one line | search is local to the list; it is not a memory search, and the UI must not imply it is | above the list | PROPOSED |
+| W15-10 | Empty state | no other sessions yet | 2 lines | teaches the one command (`crabby chat "…"` starts a fresh session), per §2.3's rule about empty states | list | PROPOSED |
+| W15-11 | Origin of a session | which interface created it | one short word | `cli` / `tui` / `web` / `telegram`, same attribution the audit record carries — the list is where a user notices "this appeared on its own" | row, second line | PROPOSED |
+
+---
+
 ## 2. Chat screen (`/chat`)
 
 ### Region W3 — Message list
@@ -312,6 +337,7 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | Screen | Regions | Elements | Every state defined? |
 | --- | --- | --- | --- |
 | App shell | W1, W2 | 17 | W1 rows state degraded behavior; W2 trivial; containers listed as elements too |
+| Sessions | W15 | 11 | switch mid-task, typed-delete count, origin attribution |
 | Chat | W3, W4 | 26 | yes (§2.3 empty, streaming, reconnect, error) |
 | Tasks | W5, W6 | 19 | yes |
 | Approvals | W-A | 12 | yes, incl. `conflict` and expired |
@@ -320,6 +346,6 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | Extensions | W-E | 12 | yes, incl. quarantined and lock notice |
 | Settings/access/logs | W12, W13, W14 | 24 | yes  |
 | Onboarding/global | W-O | 10 | yes |
-| **Total** | **17 regions** | **161 elements** | — |
+| **Total** | **18 regions** | **172 elements** | — |
 
 Owner review surface: 161 rows to read, edit, cut, or approve. Nothing in this file is optional by size.

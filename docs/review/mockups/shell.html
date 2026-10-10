@@ -245,6 +245,35 @@ migrations/0002_tasks.sql       tasks, checkpoints
 </form>
 </script>
 
+<script type="text/plain" id="tpl-sessions">
+<header class="bar"><span class="brand">Sessions</span><span class="note">/sessions · list, switch, rename, delete, export</span>
+  <input class="btn" data-el="W15-09" value="search titles" style="flex:1 1 90px;min-width:0">
+  <button class="btn btn--primary" data-el="W15-03">new</button></header>
+<div class="list">
+  <div class="row" data-el="W15-01">
+    <div class="msg__meta"><span data-el="W15-02"><strong>&gt; current</strong> · Crabby planning</span>
+      <span class="chip" data-tone="ok">running · tsk_01HC9</span></div>
+    <p style="margin:var(--s1) 0">last activity 4 min ago · <code>gemini/gemma-3</code> <span class="note">(override on)</span></p>
+    <div class="actions"><button class="btn btn--ghost" data-el="W15-04">rename</button>
+      <button class="btn btn--ghost" data-el="W15-08">export</button>
+      <button class="btn btn--danger" data-el="W15-07">delete</button>
+      <span class="note" data-el="W15-11">origin: tui</span></div>
+  </div>
+  <div class="row" data-el="W15-05"><div class="msg__meta"><span>termsummary (tap = switch)</span>
+      <span class="chip" data-tone="warn">awaiting approval</span></div>
+    <p style="margin:var(--s1) 0">last activity yesterday · <code>auto</code></p>
+    <div class="actions"><span class="note">switch korle stream follow kore — purono task er events render hobe na, task cholte thakbe</span></div></div>
+  <div class="row" data-el="W15-06"><p class="note note--warn">“Crabby planning” e ekta task cholche. Switch korle:
+    <strong>task cholte thakbe</strong>, status bar e badge dekhaben, <code>tsk_01HC9</code> diye fireben. Cancel na.</p></div>
+  <div class="row" data-el="W15-07"><p class="note note--err">delete = T3 · 41 turns, 3 tasks, 1 checkpoint mislam
+    <strong>ochukonnno</strong> — typed confirm lagbe:</p>
+    <div class="actions"><input class="btn" value="Crabby planning" style="flex:1 1 140px;min-width:0">
+      <button class="btn btn--danger">type the title back</button></div></div>
+  <div class="row" data-el="W15-10"><p class="note">ar kono session nei —
+    <code>crabby chat "…"</code> theke start korun (not: ekhan theke)</p></div>
+</div>
+</script>
+
 <script type="text/plain" id="tpl-tasks">
 <header class="bar"><span class="brand">Tasks</span>
   <span class="chip" data-el="W5-01">all states ▾</span><span class="chip" data-el="W5-01">session: reconcile-migrations ▾</span></header>

@@ -263,6 +263,7 @@ pipeable and free of color when not a TTY.
 | Interfaces | `gateway start/stop/status`, `web open`, `telegram start`, `tui`, `tunnel on/off/status` |
 | Data | `history export`, `history delete-session`, `memory list/search/forget`, `logs`, `audit` |
 | Context | `context show <id>`, `context pin <id> [ref]`, `session compact <id>`, `tools ls` |
+| Sessions | `session ls`, `session new [--title "…"]`, `session show <id>`, `session rename <id> "…"`; deletion stays `history delete-session`, so there is one destructive verb |
 
 Rule: `crabby --help` and `crabby <noun> --help` are generated from the same contract that the Web UI and Telegram
 use, so a command cannot exist in one interface only (the D-005 test).
@@ -299,7 +300,7 @@ Adapter over grammY (P-009); translates Telegram updates into the same internal 
 
 - Commands, one per capability in §8 rather than a hand-picked subset: `/ask <text>`, `/task <objective>`, `/tasks`,
   `/watch <id>`, `/unwatch <id>`, `/cancel [id]`, `/resume <id>`, `/approve <id>`, `/deny <id>`, `/approvals`,
-  `/sessions`, `/new`, `/context`, `/compact`, `/model <provider/model>`, `/providers`, `/probe <model>`, `/tools`,
+  `/sessions`, `/new`, `/rename <n> <title>`, `/context`, `/compact`, `/model <provider/model>`, `/providers`, `/probe <model>`, `/tools`,
   `/memory`, `/ext`, `/config`, `/logs`, `/export`, `/delete <id>`, `/tunnel on|off`, `/status`, `/health`, `/help`.
   A command may not be dropped from this list to save typing: dropping one removes a capability from the interface,
   which is the D-005 test failing. What *is* Telegram's to choose is how little of it needs typing — inline keyboards
@@ -343,7 +344,7 @@ limitation **and** an accepted alternative interaction, which is what `ARCHITECT
 | Tunnel on/off | `POST/DELETE /tunnel` | `tunnel on/off` | status + action | settings | `/tunnel on` (T3 confirm) |
 | Pair / revoke client | `/auth…` | `auth pair/revoke` | settings | settings | revoke from a trusted local client only — a remote client must not be able to mint identities; **documented limitation with local-only alternative** |
 | History export | `POST /sessions/{id}/export` (`history.export`) | `history export` | export action | Download | `/export` as a file |
-| Delete conversation | `DELETE /sessions/{id}` | `history delete-session` | `d` | Delete | `/delete <id>` with typed confirm |
+| Delete conversation | `DELETE /sessions/{id}` | `history delete-session` | `d` | Delete | `/delete <n>` with the title typed back |
 
 Two entries deliberately carry a limitation instead of pretending to parity: minting identities from Telegram is a
 security hole, and pasting a URL on a phone is genuinely awkward. Both are recorded here so nobody "discovers"

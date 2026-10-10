@@ -1,6 +1,6 @@
 # Element Review — Index
 
-> Four files, 612 elements, one status per element. This is the gate in front of M0 (D-055, and `docs/ROADMAP.md`
+> Four files, 638 elements, one status per element. This is the gate in front of M0 (D-055, and `docs/ROADMAP.md`
 > §11 lists the open questions it raised). Nothing here is product code and nothing here is a summary: **these tables
 > are the spec review itself**, and `docs/UI_UX_SPEC.md` plus `docs/DESIGN_SYSTEM.md` get regenerated from them once
 > the statuses stop saying `PROPOSED`.
@@ -9,10 +9,10 @@
 
 | File | Surface | Regions | Elements | How to review it |
 | --- | --- | --- | --- | --- |
-| `WEB.md` | browser, 360px binding | 17 | 161 | `mockups/crabby-web-ui.html`, generated from the file — click any element, its row opens |
-| `TUI.md` | Termux, 40×24 binding | 19 | 185 | the rows themselves; a terminal cannot be judged honestly in a browser, and no HTML pretends to be one |
-| `CLI.md` | the pipe, not the terminal | 13 | 143 | rows; `--help` text is the mockup, and it does not exist until implementation |
-| `TELEGRAM.md` | a chat on a phone with a flaky connection | 11 | 123 | rows; the transport's limits are quoted as facts, the responses to them are the decisions |
+| `WEB.md` | browser, 360px binding | 18 | 172 | `mockups/crabby-web-ui.html`, generated from the file — click any element, its row opens |
+| `TUI.md` | Termux, 40×24 binding | 20 | 193 | the rows themselves; a terminal cannot be judged honestly in a browser, and no HTML pretends to be one |
+| `CLI.md` | the pipe, not the terminal | 14 | 149 | rows; `--help` text is the mockup, and it does not exist until implementation |
+| `TELEGRAM.md` | a chat on a phone with a flaky connection | 11 | 124 | rows; the transport's limits are quoted as facts, the responses to them are the decisions |
 
 `W`, `T`, `C`, `G` are the ID prefixes. A region is `W1`, `T-A`, `C10`, `G-S`; an element is `W4-08`, `T-A13`,
 `C-S09`, `G3-17`. Quote the ID when you want one thing changed — that is the whole reason the IDs exist.
@@ -46,7 +46,9 @@
 
 ## Current state
 
-612 elements, 0 approved. Four open questions are registered against the Web bar and the TUI/CLI surfaces
+638 elements, 0 approved. The count moved during this pass because the
+Sessions screen (`docs/UI_UX_SPEC.md` §2.2) and the session switcher (§7.2) turned out to have **zero** elements
+anywhere (F-10) — a screen with no rows is a screen that silently disappears when these files regenerate the spec. Four open questions are registered against the Web bar and the TUI/CLI surfaces
 (O-053…O-063); the platform numbers in `TELEGRAM.md` are quoted from the Bot API and are to be re-verified at
 implementation time. `CHANGELOG.md` is the only file `scripts/check-docs.py` still calls out as planned-but-unwritten,
 and it waits for the first release (`docs/ROADMAP.md` §11).

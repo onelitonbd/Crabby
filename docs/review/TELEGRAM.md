@@ -99,13 +99,14 @@ tools → data and settings → self-description.
 | G3-21 | /config | read a key, or set one | 2 lines | reads print the value with secrets `redacted`; a T3 change confirms in-chat with the diff shown before it is written, exactly like the Web | PROPOSED |
 | G3-22 | /logs | tail of the log, redacted | ≤4 096 chars | the newest lines with a truncation label (G2-03); the full file is fetched from the Web or CLI, not paged through a chat | PROPOSED |
 | G3-23 | /export | this session as a file | one file | the same artifact as `history export` and the Web download (T2, so a task-shaped action), sent as a document with the format in the caption | PROPOSED |
-| G3-24 | /delete | `/delete <n> yes` | one line | typed confirm required, because a chat has no undo affordance and an accidental tap would destroy the record — the friction is the design | PROPOSED |
+| G3-24 | /delete | `/delete <n>` then the session title typed back | 2 lines | same rule as Web W15-07 and TUI T16-06: the typed word is the **title**, not `yes`, because a chat has no undo affordance and the point of the friction is proving you meant *this* session | PROPOSED |
 | G3-25 | /tunnel | `/tunnel on`, `/tunnel off` | ≤3 lines | T3: says which identities become reachable before it does it, and confirms; the URL is printed as text, never as a link with a token (D-051) | PROPOSED |
 | G3-26 | /status | Gateway, vault, tunnel, queue, pending approvals | ≤8 lines | the phone version of `crabby status`, same facts, so a bug report from either reads the same | PROPOSED |
 | G3-27 | /health | reachable, and since when | one line | deliberately boring and safe to ask at any moment; it does not reveal anything about other chats | PROPOSED |
 | G3-28 | /help | every command, restrictions, and what cannot be done here | ≤2 messages | lists all 28 commands; states G7-03 and G3-16 as limitations; an undocumented command is worse than a missing one, and a documented one that is not implemented is a lie | PROPOSED |
 | G3-29 | unknown command | typo, or a command from another version | one line | names the closest real command — the one case where silence is not allowed here, because a real answer and "you are not on the allow-list" must not look identical | PROPOSED |
 | G3-30 | bare text, no command | a paragraph sent without a slash | n/a | treated as `/ask`, and the reply says it was treated as a question so the guess is visible instead of silent | PROPOSED |
+| G3-32 | /rename | `/rename <n> <title>`; bare `/rename` asks for the new title | one line | renames the session this chat points at (`PATCH /sessions/{id}`) — without it, rename exists on three interfaces and not here, which is a capability gap rather than a smaller screen | PROPOSED |
 | G3-31 | refused command | `/pair`, `/auth`, `/provider add` | one line | refused with the reason and the local alternative — the two documented limitations, surfaced in the interface that has them rather than left to be discovered | PROPOSED |
 
 ---
@@ -235,7 +236,7 @@ tools → data and settings → self-description.
 | --- | --- | --- | --- |
 | Access and pairing | G1 | 12 | blocked bot, deleted message, lost edit, two chats |
 | Message shape | G2 | 13 | split, truncation, escape fallback, long-target |
-| Commands | G3 | 31 | unknown command, bare text, refused command, one row per capability |
+| Commands | G3 | 32 | unknown command, bare text, refused command, one row per capability |
 | Approvals | G-A | 13 | conflict, expiry, double tap, no-keyboard fallback |
 | Progress | G4 | 9 | 429, stall, unwatch, silence-not-success |
 | Files and media | G5 | 8 | size limits, expiry, cleanup, caption limit |
@@ -243,7 +244,7 @@ tools → data and settings → self-description.
 | Identity and transport | G7, G-S | 17 | spoofing, injection, retention, enumeration, inbound flood |
 | Forced states | G-T | 8 | both sides down, partial delivery, offline user |
 | First run and help | G-O | 5 | unconfigured, read-only, limits discoverable |
-| **Total** | **11 regions** | **123 elements** | — |
+| **Total** | **11 regions** | **124 elements** | — |
 
 Nothing in this file may become a capability the other three interfaces lack, and nothing may be cut here to mean
 "less capable" — that is the parity rule, and `docs/INTERFACES_AND_API.md` §8 is where the two accepted limitations

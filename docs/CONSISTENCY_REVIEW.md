@@ -127,6 +127,29 @@ written. Found while wiring rule 10, not by the rule itself.
 A check that cannot fail is worse than no check, because it is trusted; both rules now print an error naming
 themselves if the tables they read are missing or reshaped.
 
+### F-10 — A whole screen had zero elements in every inventory
+**Severity: high, and it is the reason this review exists.** `docs/UI_UX_SPEC.md` §2.2 lists a **Sessions** screen
+("session list, rename, delete with typed confirm, export"), and `docs/INTERFACES_AND_API.md` §7.2 names a **session
+switcher** as a required TUI view. Both documents were written before D-055, and both were *correct* — yet the element
+inventories for Web, TUI, and CLI had **no region and no row** for any of it, and the CLI grammar had no `session`
+verbs at all beyond `chat --session <id>`. Since `docs/UI_UX_SPEC.md` is regenerated *from* the inventories, the next
+pass would have deleted the screen quietly and the parity matrix would have gone on claiming it.
+
+This is the exact failure D-055 was meant to prevent, approached from the other side: summarizing a spec into rows
+loses anything the summary never enumerated.
+
+**Resolution:** region **W15** (11 elements: list row, current marker, new, rename, switch, switching while a task
+runs, delete with the title typed back, export, search, empty state, origin interface), region **T16** (8 elements,
+40-column switcher), region **C11** (6 elements, `session ls/new/show/rename`, and the deliberate absence of a
+`session delete` so there is exactly one destructive verb), and `/rename` on Telegram (G3-32) so rename is not a
+three-interface capability. `docs/INTERFACES_AND_API.md` §7.1 gained a Sessions row and §7.4 gained `/rename`.
+Region T-A's heading now says "Approvals", because a heading that does not name its screen is how a screen goes
+missing twice.
+
+**Made structural:** rule 11 of `scripts/check-docs.py` reads the §2.2 screen table and the §7.2 required-view list and
+fails when no region title in `WEB.md` / `TUI.md` matches one. Negative-tested against the pre-fix `WEB.md`: it
+reports exactly `Sessions` and nothing else, so it is not a check that passes on everything.
+
 ## 3. Checks That Passed
 
 | Check | Result |
@@ -199,17 +222,17 @@ The remaining half of M-D. Each item is a yes/no, not a discussion:
 
 - [ ] `docs/review/README.md` — the index: what each file covers, how to answer, and which invariants the checker
       enforces.
-- [ ] `docs/review/WEB.md` — 161 elements. Reviewed through `docs/review/mockups/crabby-web-ui.html`, which is
+- [ ] `docs/review/WEB.md` — 172 elements over 18 regions. Reviewed through `docs/review/mockups/crabby-web-ui.html`, which is
       generated from that file, so an element that exists in one and not the other is a build error rather than a
       disagreement.
-- [ ] `docs/review/TUI.md` — 185 elements, every one of them answerable at 40 columns × 24 rows.
-- [ ] `docs/review/CLI.md` — 143 elements over 13 regions, with the pipe and the exit code as the binding case.
-- [ ] `docs/review/TELEGRAM.md` — 123 elements, where the transport's own limits are facts and the responses to them
+- [ ] `docs/review/TUI.md` — 193 elements over 20 regions, every one answerable at 40 columns × 24 rows.
+- [ ] `docs/review/CLI.md` — 149 elements over 14 regions, with the pipe and the exit code as the binding case.
+- [ ] `docs/review/TELEGRAM.md` — 124 elements, where the transport's own limits are facts and the responses to them
       are the decisions, and where every parity-matrix capability has a command of its own (F-08).
 - [ ] Only after statuses stop saying `PROPOSED`: regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from
       the approved rows, then re-run §7.
 
-612 elements, 0 approved as of this round. Nothing in this list is a formality: a row that reads "the small chip"
+638 elements, 0 approved as of this round. (The count grew from 590 while F-08…F-10 were being fixed: a screen with no rows is the most expensive kind of gap, because it costs nothing to notice.) Nothing in this list is a formality: a row that reads "the small chip"
 has as much standing as "the chat pane", and cutting it is a decision with an ID.
 
 When these are ticked, `docs/ROADMAP.md` §0 moves to "M-D complete" and M0 starts.

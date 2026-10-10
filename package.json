@@ -18,7 +18,10 @@
   "scripts": {
     "test": "node --test 'tests/**/*.test.ts' 'packages/**/*.test.ts' 'apps/**/*.test.ts'",
     "test:coverage": "node --test --experimental-test-coverage 'tests/**/*.test.ts' 'packages/**/*.test.ts' 'apps/**/*.test.ts'",
+    "test:unit": "node --test 'tests/unit/*.test.ts' 'packages/*/*.test.ts'",
     "test:integration": "node --test tests/integration/*.test.ts",
+    "test:security": "node --test 'tests/security/*.test.ts' 'packages/policy/*.test.ts' 'packages/providers/*.test.ts'",
+    "test:parity": "node scripts/parity.ts",
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -34,6 +37,7 @@
     "probe:p6": "node probes/p6.mjs",
     "probe:p7": "node probes/p7.mjs",
     "probe:results": "node probes/to-results.mjs",
-    "test:termux": "node probes/run.mjs --device"
+    "test:termux": "node probes/run.mjs --device",
+    "format:check": "biome format ."
   }
 }

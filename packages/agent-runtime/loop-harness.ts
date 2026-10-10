@@ -19,6 +19,10 @@
 //   - The executor records. It runs no filesystem, no network and no shell, and it declares only the tools a test gives
 //     it — which is the point: the loop offers the model nothing an executor cannot run.
 //
+// It also owns the §6 manager, wired to the same journal and the same subscriber as the loop, so a test can request a
+// cancellation from the outside the way an interface would and watch the loop honour it: `harness.cancel({ mode })` is
+// §6.1's step 1, and the run's outcome says whether the step in flight was finished or abandoned.
+//
 // Run it directly for the trace of one gated task, start to finish: `node packages/agent-runtime/loop-harness.ts`.
 import { pathToFileURL } from "node:url";
 import {
@@ -51,10 +55,11 @@ import {
   createApprovals,
   createMemoryApprovalStore,
 } from "./approvals.ts";
+import { type Cancellation, type CancellationMode, createCancellation } from "./cancellation.ts";
+import type { TaskJournal } from "./journal.ts";
 import {
   createLoop,
   type Loop,
-  type LoopJournal,
   type LoopLimits,
   type LoopOutcome,
   type LoopSubject,
@@ -130,6 +135,9 @@ export interface Harness {
   readonly states: TaskState[];
   readonly executions: Execution[];
   readonly provider: Provider & { readonly calls: FakeCall[] };
+  /** The §6 manager, wired to the same journal and subscriber as the loop, so a test can request a cancellation from
+   *  the outside the way an interface would and watch the loop honour it. */
+  readonly cancellation: Cancellation;
   task(): TaskRecord | undefined;
   eventsOfType(type: EventType): Event[];
   payloadOf(type: EventType): Record<string, unknown> | undefined;
@@ -142,6 +150,14 @@ export interface Harness {
     signal?: AbortSignal;
   }): Promise<LoopOutcome>;
   resume(run: SuspendedRun): Promise<LoopOutcome>;
+  /** §6.1's step 1 from the outside: record a request, and let the manager decide whether anything is in flight. */
+  cancel(input?: {
+    mode?: CancellationMode;
+    byClientId?: string;
+    via?: ClientInterface;
+    reason?: string;
+    at?: number;
+  }): ReturnType<Cancellation["request"]>;
   /** Answers through the arbiter the way `POST /api/v1/approvals/{id}/decision` does, and writes the event that route
    *  writes in the same transaction — so a trace from this harness has the same shape as one from the Gateway. */
   answer(approvalId: string, decision: ApprovalDecision, input?: AnswerInput): ApprovalResult;
@@ -194,7 +210,7 @@ function createMemoryJournal(input: {
   objective: string;
   clock: { now(): number };
 }): {
-  journal: LoopJournal;
+  journal: TaskJournal;
   events: Event[];
   states: TaskState[];
   task(): TaskRecord | undefined;
@@ -214,7 +230,7 @@ function createMemoryJournal(input: {
   let seq = 0;
   let counter = 0;
   let inTransaction = false;
-  const journal: LoopJournal = {
+  const journal: TaskJournal = {
     task: () => record,
     setState: (taskId, state, error) => {
       if (taskId !== record.id)
@@ -420,9 +436,15 @@ export function createHarness(options: HarnessOptions): Harness {
     }
     published.push(event);
   };
+  const cancellation = createCancellation({
+    journal: memory.journal,
+    publish: publishEvent,
+    now: clock.now,
+  });
   const loop = createLoop({
     journal: memory.journal,
     approvals: guardApprovals(approvals, memory.insideTransaction),
+    cancellation,
     provider,
     tools: tools.surface,
     platform: { isTermux: options.isTermux ?? false },
@@ -455,6 +477,7 @@ export function createHarness(options: HarnessOptions): Harness {
 
   const harness: Harness = {
     loop,
+    cancellation,
     approvals,
     taskId,
     sessionId,
@@ -475,9 +498,20 @@ export function createHarness(options: HarnessOptions): Harness {
         subject: subject(input.subject),
         ctx: ctxFor(input.subject),
         ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
+        // The manager's controller is what an `immediate` cancellation aborts; a test that supplies its own signal is
+        // testing the abort itself rather than §6's policy.
+        signal: input.signal ?? cancellation.signalFor(taskId),
       }),
     resume: (run) => loop.resume(run),
+    cancel: (input = {}) =>
+      cancellation.request({
+        taskId,
+        ...(input.mode === undefined ? {} : { mode: input.mode }),
+        ...(input.byClientId === undefined ? {} : { byClientId: input.byClientId }),
+        ...(input.via === undefined ? {} : { via: input.via }),
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+        ...(input.at === undefined ? {} : { at: input.at }),
+      }),
     answer: (approvalId, decision, input = {}) => {
       const answeredAt = input.at ?? clock.now();
       // One transaction for the answer and its event, which is what `POST /api/v1/approvals/{id}/decision` does: the row

@@ -32,9 +32,11 @@
 //   - **No retry ladder.** A provider error fails the task on the first error, and the event says that no retry was
 //     attempted. D-043's five attempts inside D-064's schedule and jitter, and the `provider.retry.*` events, are their
 //     own slice.
-//   - **No cancellation settle.** An abort moves the task to `cancelling` and stops, because §6.2 requires the record to
-//     say whether the operation was confirmed to stop and whether its effects are uncertain, and only §6's manager can
-//     know that. Entering `cancelled` without it is exactly what `transition()` refuses.
+//   - **No cancellation policy of its own** — that is `cancellation.ts`, added in the next slice (M2e). This loop supplies
+//     what only the party running a step can know: what was in flight, and whether the step reported back or was walked
+//     away from. It stops scheduling steps the moment a request is recorded (§6.1's step 2, and the MUST NOT that follows
+//     it), and an abort with no request behind it still stops at `cancelling`, because settling without one would be the
+//     runtime inventing a requester.
 //   - **No conversation store.** A suspended run carries its messages in process memory. That is honest rather than
 //     durable: after a restart §7.1 marks the task `interrupted` and §7.2 decides what may resume, and a loop that
 //     pretended to rebuild a conversation from the event log would be inventing §8's compaction.
@@ -46,12 +48,11 @@
 import {
   type ErrorClass,
   type Event,
-  type EventType,
   isTerminal,
   newId,
   type TaskRecord,
-  type TaskState,
 } from "@crabby/api-contracts";
+import { LIMITS_DEFAULTS } from "@crabby/core";
 import {
   availabilityFor,
   type ClientKind,
@@ -75,7 +76,9 @@ import {
   type ProviderToolSpec,
 } from "@crabby/providers";
 import type { ApprovalRecord, Approvals } from "./approvals.ts";
-import { type TransitionEvidence, transition } from "./transitions.ts";
+import type { CancellationEvidence, CancellationGate } from "./cancellation.ts";
+import { createPhaseWriter, type Emit, type TaskJournal } from "./journal.ts";
+import type { TransitionEvidence } from "./transitions.ts";
 
 /** §5.2's limits, priced by D-088. Each one is a `limits.*` key in `config.json` (D-074's override path), and the
  *  failure it produces names the limit and how to change it — §5.2's own sentence, "when a limit trips, the failure
@@ -89,17 +92,32 @@ export interface LoopLimits {
   /** D-074's "Provider — absolute" row, enforced here because §3.1 makes timeouts the runtime wrapper's job and not the
    *  adapter's. */
   readonly providerCallMs: number;
+  /** D-074's three priced tool classes, so a runner can hand the loop what `config.json` says instead of the defaults. */
+  readonly fsTimeoutMs: number;
+  readonly netFetchTimeoutMs: number;
+  readonly shellRunTimeoutMs: number;
   /** D-086's reading of §6.3's "repeated denial". */
   readonly refusalsBeforePause: number;
+  /** D-090: how long an `immediate` cancellation waits for a step that will not stop, before it stops waiting and records
+   *  §6.2's uncertainty instead. `finish-step` gets no second clock. */
+  readonly cancellationSettleMs: number;
   /** Per-tool deadlines in milliseconds, keyed by tool name — the `limits.*` overrides D-074 promises are editable in
    *  `config.json`. An override wins over the class default; a tool with neither runs under the caller's signal alone. */
   readonly toolDeadlines?: Readonly<Record<string, number>> | undefined;
 }
 
+/** D-088's and D-090's numbers, read out of `LIMITS_DEFAULTS` rather than restated: `config.json` is the override and
+ *  this is the default, so a second copy here is a number that drifts from the one `crabby config get limits` prints.
+ *  `refusalsBeforePause` is the exception, and deliberately: D-086's threshold is a policy floor rather than a timeout or
+ *  a budget, and §5.2's `limits.*` list is about the second kind. */
 export const LOOP_LIMITS: LoopLimits = {
-  stepsPerTask: 25,
-  toolCallsPerResponse: 2,
-  providerCallMs: 300_000,
+  stepsPerTask: LIMITS_DEFAULTS.stepsPerTask,
+  toolCallsPerResponse: LIMITS_DEFAULTS.parallelToolSteps,
+  providerCallMs: LIMITS_DEFAULTS.providerAbsoluteMs,
+  fsTimeoutMs: LIMITS_DEFAULTS.fsTimeoutMs,
+  netFetchTimeoutMs: LIMITS_DEFAULTS.netFetchTimeoutMs,
+  shellRunTimeoutMs: LIMITS_DEFAULTS.shellRunTimeoutMs,
+  cancellationSettleMs: LIMITS_DEFAULTS.cancellationSettleMs,
   refusalsBeforePause: 2,
 };
 
@@ -108,21 +126,18 @@ export const LOOP_LIMITS: LoopLimits = {
  *  recorded rather than filled in — a deadline invented for `memory.save` would be a number nobody decided and nobody
  *  could defend. An unpriced tool runs under the caller's signal alone, and its `tool.execution.started` event carries
  *  `deadlineMs: null` so a reader can see that no clock was set. */
-export function toolDeadlineMs(tool: string): number | undefined {
-  if (tool.startsWith("file.") || tool.startsWith("fs.")) return 10_000;
-  if (tool === "net.fetch") return 20_000;
-  if (tool === "shell.run") return 120_000;
+export function toolDeadlineMs(tool: string, limits: LoopLimits = LOOP_LIMITS): number | undefined {
+  if (tool.startsWith("file.") || tool.startsWith("fs.")) return limits.fsTimeoutMs;
+  if (tool === "net.fetch") return limits.netFetchTimeoutMs;
+  if (tool === "shell.run") return limits.shellRunTimeoutMs;
   return undefined;
 }
 
 /** The deadline that applies to one tool: D-074's class default, unless `config.json` overrode it for this tool. Kept
  *  beside the class table rather than inside it, because the override is a user's number and the class default is a
  *  decided one, and a reader should be able to see which of the two is in force. */
-export function deadlineFor(
-  tool: string,
-  overrides?: Readonly<Record<string, number>> | undefined,
-): number | undefined {
-  return overrides?.[tool] ?? toolDeadlineMs(tool);
+export function deadlineFor(tool: string, limits: LoopLimits = LOOP_LIMITS): number | undefined {
+  return limits.toolDeadlines?.[tool] ?? toolDeadlineMs(tool, limits);
 }
 
 /** What a tool execution owes the loop. `output` is the text the model sees next and the text the event carries;
@@ -151,30 +166,6 @@ export interface ToolRunContext {
 export interface ToolSurface {
   readonly specs: () => readonly ProviderToolSpec[];
   readonly run: (call: ToolCall, ctx: ToolRunContext) => Promise<ToolOutcome> | ToolOutcome;
-}
-
-export interface JournalEventInput {
-  readonly taskId: string;
-  readonly type: EventType;
-  readonly payload: Record<string, unknown>;
-  readonly at: number;
-  readonly correlationId?: string | undefined;
-}
-
-/** The loop's write side: four synchronous methods, because a transaction that spans an `await` is not a transaction
- *  here. `packages/storage` can implement this over `transact`/`setState`/`appendEvent` without distortion and a test
- *  can implement it over Maps — the same seam style as the arbiter's `ApprovalStore` (D-084). */
-export interface LoopJournal {
-  readonly task: (taskId: string) => TaskRecord | undefined;
-  /** Writes the state the loop has already checked against `transition()`; the error is the one `GET /tasks/{id}` shows. */
-  readonly setState: (
-    taskId: string,
-    state: TaskState,
-    error?: { code: string; message: string },
-  ) => void;
-  /** Appends and returns the event with its `seq`, so the caller publishes the frame that was actually stored. */
-  readonly append: (input: JournalEventInput) => Event;
-  readonly transact: <T>(body: () => T) => T;
 }
 
 /** Who is asking: `PolicySubject` minus the `taskId` the loop fills in from the task it is running. */
@@ -233,7 +224,14 @@ export type LoopOutcome =
       readonly code: string;
       readonly reason: string;
     }
-  /** §6's settle is not this slice: a cancellation was requested, the task is in `cancelling`, and nothing else moved. */
+  /** §6.1's step 6: the permitted work settled, the task is `cancelled`, and §6.2's evidence is on the record. */
+  | {
+      readonly kind: "cancelled";
+      readonly task: TaskRecord;
+      readonly evidence: CancellationEvidence;
+    }
+  /** An abort with no recorded request behind it: the task is in `cancelling` and this loop cannot settle it, because
+   *  §6.2's evidence is a fact about a cancellation and nobody asked for one. */
   | { readonly kind: "cancelling"; readonly task: TaskRecord; readonly reason: string }
   /** The loop declined to act and wrote nothing: a pending approval is not an approved one (§7.2), a terminal task does
    *  not resume (§4.1), an already-consumed approval is a duplicate `resume`. */
@@ -244,22 +242,8 @@ export type LoopOutcome =
       readonly reason: string;
     };
 
-/** Typed, per `docs/DEVELOPMENT.md` §4: a §6 `code`, never a string. Thrown only where the loop's own invariants broke —
- *  a task that vanished mid-run, or a state move the machine refused — because those are bugs in this file and not
- *  conditions a caller can be told how to fix. */
-export class LoopError extends Error {
-  readonly code: string;
-  readonly class: ErrorClass;
-  constructor(input: { code: string; message: string; class?: ErrorClass }) {
-    super(input.message);
-    this.name = "LoopError";
-    this.code = input.code;
-    this.class = input.class ?? "internal";
-  }
-}
-
 export interface LoopDeps {
-  readonly journal: LoopJournal;
+  readonly journal: TaskJournal;
   readonly approvals: Approvals;
   readonly provider: Provider;
   readonly tools: ToolSurface;
@@ -269,6 +253,11 @@ export interface LoopDeps {
   /** Called after each transaction commits, never inside one (§9's invariant, and the reason a stream cannot learn
    *  about a write that a rollback later took back). */
   readonly publish: (event: Event) => void;
+  /** §6.1's step 2 — stop scheduling new steps — needs a party that knows a cancellation was requested, and §6.2's
+   *  evidence needs a party that can record it. A runner wires the same `createCancellation` manager here and to its
+   *  callers. Without one the loop still refuses to act on a terminal task, and an abort stops at `cancelling` rather
+   *  than settling, because settling with no recorded request would be the runtime cancelling work on its own. */
+  readonly cancellation?: CancellationGate | undefined;
   readonly limits?: Partial<LoopLimits> | undefined;
   readonly now?: (() => number) | undefined;
 }
@@ -277,8 +266,6 @@ export interface Loop {
   start(input: RunInput): Promise<LoopOutcome>;
   resume(run: SuspendedRun): Promise<LoopOutcome>;
 }
-
-type Emit = (type: EventType, payload: Record<string, unknown>, at: number) => void;
 
 /** What one proposed call produced: either the run stops, or it continues with these messages. A union rather than an
  *  optional field, so a caller cannot continue after a prompt by forgetting to check one branch. */
@@ -344,64 +331,12 @@ export function createLoop(deps: LoopDeps): Loop {
   const { journal, approvals, provider, tools, publish } = deps;
 
   // ------------------------------------------------------------------ write phases
+  // The discipline — one transaction per phase, both halves of a state move, publishing after the commit, and never
+  // trusting a task record read before an `await` — is `journal.ts`'s, shared with the cancellation manager so that two
+  // modules writing task state cannot drift apart about how.
 
-  /** One transaction: every row and event this step owes, committed together and published after. The staged list is why
-   *  `publish` cannot be called from inside `body` — an event published before its commit is an event a rollback has to
-   *  retract, and §5.4 has no frame for taking one back. */
-  function phase<T>(taskId: string, correlationId: string | undefined, body: (emit: Emit) => T): T {
-    const staged: Event[] = [];
-    const emit: Emit = (type, payload, at) => {
-      staged.push(
-        journal.append({
-          taskId,
-          type,
-          payload,
-          at,
-          ...(correlationId === undefined ? {} : { correlationId }),
-        }),
-      );
-    };
-    const result = journal.transact(() => body(emit));
-    for (const event of staged) publish(event);
-    return result;
-  }
-
-  /** The machine is the only authority on whether a task may move (D-083), so the loop asks it and then writes both
-   *  halves of the answer: the state, and the event that carries it. A refusal here is a bug in this file, and it throws
-   *  *inside* the transaction so nothing is half-written. */
-  function move(
-    task: TaskRecord,
-    to: TaskState,
-    evidence: TransitionEvidence,
-    emit: Emit,
-    at: number,
-    record?: { error?: { code: string; message: string }; payload?: Record<string, unknown> },
-  ): void {
-    const result = transition(task.state, to, evidence);
-    if (!result.ok) {
-      throw new LoopError({
-        code: "loop.transition_refused",
-        message:
-          `the loop tried to move task ${task.id} from \`${result.from}\` to \`${result.to}\` and the state machine ` +
-          `refused: ${result.reason}`,
-      });
-    }
-    journal.setState(task.id, to, record?.error);
-    emit(result.event, { from: result.from, to: result.to, ...(record?.payload ?? {}) }, at);
-  }
-
-  /** Reads the record rather than trusting the one a caller carried here: a provider call is an `await`, and another
-   *  client can move a task during it (§4.1's states are the shared truth, not this loop's copy of them). */
-  function currentTask(taskId: string): TaskRecord {
-    const task = journal.task(taskId);
-    if (task === undefined) {
-      throw new LoopError({
-        code: "loop.task_missing",
-        message: `task ${taskId} is not in the journal; a pending approval is deleted with its task, and so is its run`,
-      });
-    }
-    return task;
-  }
+  const writer = createPhaseWriter({ journal, publish, now });
+  const { phase, move, currentTask } = writer;
 
   function fail(
     taskId: string,
@@ -411,15 +346,58 @@ export function createLoop(deps: LoopDeps): Loop {
     correlationId: string | undefined,
     extra: Record<string, unknown> = {},
   ): LoopOutcome {
-    const at = now();
-    const task = currentTask(taskId);
-    phase(taskId, correlationId, (emit) => {
-      move(task, "failed", {}, emit, at, {
-        error: { code, message: reason },
-        payload: { code, reason, class: errorClass, ...extra },
-      });
+    return {
+      kind: "failed",
+      ...writer.failTask(taskId, code, reason, errorClass, correlationId, extra),
+    };
+  }
+
+  /** §6.1's steps 2 and 6, and the reason the loop and the manager are two objects: only the party running a step knows
+   *  what was in flight when the request arrived, so the loop supplies §6.2's evidence, and only the party that recorded
+   *  the request may end the task, so the manager owns the write. Returns `undefined` when no cancellation was requested,
+   *  which keeps the call sites to one line each. */
+  function cancelledWith(state: RunState, evidence: CancellationEvidence): LoopOutcome | undefined {
+    const gate = deps.cancellation;
+    if (gate === undefined) return undefined;
+    const task = currentTask(state.input.taskId);
+    if (gate.requested(task.id) === undefined && task.state !== "cancelling") return undefined;
+    const settled = gate.settle({
+      taskId: task.id,
+      evidence,
+      correlationId: state.input.correlationId,
     });
-    return { kind: "failed", task: currentTask(taskId), code, reason };
+    if (settled.ok) return { kind: "cancelled", task: settled.task, evidence };
+    const after = currentTask(task.id);
+    // Someone else settled it first — a runner, a second interface — which is the same fact rather than an error.
+    if (after.state === "cancelled") return { kind: "cancelled", task: after, evidence };
+    return {
+      kind: "refused",
+      task: after,
+      code: `cancellation.${settled.code}`,
+      reason: settled.reason,
+    };
+  }
+
+  /** D-089's answer to §6.2's "that uncertainty MUST be recorded explicitly": a tool step was in flight, so its external
+   *  effect may already have happened, and no tool in this build declares `sideEffects` (§4.1's record fields are
+   *  `PENDING_RECORD_FIELDS`), so the runtime cannot tell a read from a send. Fail closed and say why. */
+  function toolEvidence(
+    outcome: ToolOutcome | undefined,
+    abandoned: boolean,
+    tool: string,
+  ): CancellationEvidence {
+    return {
+      // Confirmed termination means the operation reported that it stopped. A step the loop walked away from reported
+      // nothing, and §6.2 forbids resolving that by pretending it stopped.
+      terminated: outcome !== undefined && !abandoned,
+      effectsUncertain: true,
+      inFlight: "tool",
+      step: {
+        tool,
+        ...(outcome === undefined ? {} : { ok: outcome.ok }),
+        ...(outcome?.code === undefined ? {} : { code: outcome.code }),
+      },
+    };
   }
 
   function refused(
@@ -471,29 +449,33 @@ export function createLoop(deps: LoopDeps): Loop {
     deadlineMs: number | undefined,
     outer: AbortSignal | undefined,
     onTimeout: () => T,
-  ): Promise<T> {
+  ): Promise<{ value: T; abandoned: boolean }> {
     const timeout = deadlineMs === undefined ? undefined : AbortSignal.timeout(deadlineMs);
     const signal =
       outer !== undefined && timeout !== undefined
         ? AbortSignal.any([outer, timeout])
         : (outer ?? timeout ?? new AbortController().signal);
-    if (deadlineMs === undefined) return work(signal);
+    if (deadlineMs === undefined) return { value: await work(signal), abandoned: false };
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let settled = false;
+    let reported = false;
     const running = work(signal);
     try {
+      // `abandoned` is the difference §6.2 insists on: the runtime stopped *waiting*, which is not the same fact as the
+      // operation stopping. A caller that flattened the two would record a termination nobody confirmed.
       return await Promise.race([
         running.then((value) => {
-          settled = true;
-          return value;
+          reported = true;
+          return { value, abandoned: false };
         }),
-        new Promise<T>((resolve) => {
-          timer = setTimeout(() => resolve(onTimeout()), deadlineMs);
+        new Promise<{ value: T; abandoned: boolean }>((resolve) => {
+          timer = setTimeout(() => resolve({ value: onTimeout(), abandoned: true }), deadlineMs);
         }),
       ]);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
-      if (!settled) running.catch(() => undefined);
+      // The loser's rejection is swallowed on purpose: the abort was already signalled, and an unhandled rejection from a
+      // call this loop stopped waiting for would read as a crash.
+      if (!reported) running.catch(() => undefined);
     }
   }
 
@@ -501,7 +483,7 @@ export function createLoop(deps: LoopDeps): Loop {
     state: RunState,
     offered: readonly ProviderToolSpec[],
   ): Promise<ProviderTurn> {
-    return withDeadline(
+    const { value } = await withDeadline(
       async (signal) => {
         const result = await provider.generate(
           {
@@ -533,15 +515,28 @@ export function createLoop(deps: LoopDeps): Loop {
         );
       },
     );
+    return value;
   }
 
   async function runTool(
     call: ToolCall,
     taskId: string,
     outer: AbortSignal | undefined,
-  ): Promise<ToolOutcome> {
-    const deadlineMs = deadlineFor(call.tool, limits.toolDeadlines);
-    return withDeadline(
+  ): Promise<{ outcome: ToolOutcome; abandoned: boolean }> {
+    const priced = deadlineFor(call.tool, limits);
+    // D-090: an `immediate` request is §6.2's safety-critical override, so the runtime stops waiting for a step that will
+    // not stop even when the step's own class has no deadline — and records the uncertainty instead of claiming a
+    // termination nobody confirmed. `finish-step` gets no second clock: the step keeps the budget it was already given,
+    // which is the whole of §6.1's "when it can safely and reasonably do so".
+    const abandon =
+      deps.cancellation?.requested(taskId)?.mode === "immediate"
+        ? limits.cancellationSettleMs
+        : undefined;
+    const deadlineMs =
+      priced !== undefined && abandon !== undefined
+        ? Math.min(priced, abandon)
+        : (priced ?? abandon);
+    const { value, abandoned } = await withDeadline(
       async (signal) => tools.run(call, { taskId, signal, deadlineMs }),
       deadlineMs,
       outer,
@@ -550,10 +545,11 @@ export function createLoop(deps: LoopDeps): Loop {
         // D-074: "the outcome is reported as `timeout` — a distinct code, never `failure`", because "it took too long"
         // and "it did not work" need different responses — and §7.3 makes the difference matter, since a timed-out side
         // effect is reconciled rather than blindly retried.
-        output: `'${call.tool}' passed its ${deadlineMs} ms deadline (D-074) and was signalled to stop; whether its external effect already happened is not knowable from here`,
+        output: `'${call.tool}' passed its ${deadlineMs} ms deadline (D-074 for the class, D-090 for an immediate cancellation) and was signalled to stop; whether its external effect already happened is not knowable from here`,
         code: "timeout",
       }),
     );
+    return { outcome: value, abandoned };
   }
 
   /** The one place a tool runs, and the reason both paths that reach an executor come through it: two copies of "log the
@@ -573,6 +569,9 @@ export function createLoop(deps: LoopDeps): Loop {
     },
   ): Promise<{
     readonly outcome?: ToolOutcome;
+    /** True when the loop stopped waiting rather than the executor reporting: §6.2's distinction, carried to the party
+     *  that has to record it. */
+    readonly abandoned: boolean;
     readonly refusal?: { reason: string; code?: string };
   }> {
     const startedAt = now();
@@ -603,15 +602,16 @@ export function createLoop(deps: LoopDeps): Loop {
           args: input.call.args,
           ...(input.tier === undefined ? {} : { tier: input.tier }),
           ...(input.approvalId === undefined ? {} : { approvalId: input.approvalId }),
-          deadlineMs: deadlineFor(input.call.tool, limits.toolDeadlines) ?? null,
+          deadlineMs: deadlineFor(input.call.tool, limits) ?? null,
         },
         startedAt,
       );
       return {};
     });
-    if (begun.refusal !== undefined) return begun;
+    if (begun.refusal !== undefined) return { ...begun, abandoned: false };
 
-    const outcome = await runTool(input.call, state.input.taskId, state.input.signal);
+    const ran = await runTool(input.call, state.input.taskId, state.input.signal);
+    const outcome = ran.outcome;
     const doneAt = now();
     phase(state.input.taskId, state.input.correlationId, (emit) => {
       emit(
@@ -626,7 +626,7 @@ export function createLoop(deps: LoopDeps): Loop {
         doneAt,
       );
     });
-    return { outcome };
+    return { outcome, abandoned: ran.abandoned };
   }
 
   // ------------------------------------------------------------------ the gated action
@@ -749,6 +749,16 @@ export function createLoop(deps: LoopDeps): Loop {
     const task = currentTask(state.input.taskId);
     const correlationId = state.input.correlationId;
 
+    // §6.1's rule the table cannot carry: the runtime MUST NOT start another ordinary execution step merely because the
+    // previous one completed after cancellation was requested. The proposal is not logged, because policy was never asked
+    // about it and a `tool.call.proposed` with no decision behind it would be a claim this loop did not make.
+    const stopping = cancelledWith(state, {
+      terminated: true,
+      effectsUncertain: false,
+      inFlight: "none",
+    });
+    if (stopping !== undefined) return { stop: stopping };
+
     if (declaredSpec(proposed.name) === undefined) {
       // §3.1's third rule: a completion may propose tool calls, and only that. A name no executor declared has nothing
       // to run, and asking policy about it would produce an answer about a tool this build does not have.
@@ -810,6 +820,13 @@ export function createLoop(deps: LoopDeps): Loop {
 
     // ---- allowed: execute, through the one function that runs a tool
     const executed = await execute(state, { call, tier: decision.tier });
+    // §6.1's steps 3 to 6: the step that was already running was allowed to finish, its output is captured above by
+    // `execute`, and now the task is marked cancelled instead of looping for another round.
+    const settled = cancelledWith(
+      state,
+      toolEvidence(executed.outcome, executed.abandoned, call.tool),
+    );
+    if (settled !== undefined) return { stop: settled };
     const output = executed.outcome?.output ?? executed.refusal?.reason ?? "";
     return { messages: [...messages, toolMessage(proposed.id, output)], steps };
   }
@@ -828,6 +845,15 @@ export function createLoop(deps: LoopDeps): Loop {
         );
       }
 
+      // §6.1's step 2: no new execution step is scheduled for a task a cancellation was requested for. Nothing is in
+      // flight between rounds, so the evidence is the easy case — there was no operation to stop and no effect to doubt.
+      const stopping = cancelledWith(current, {
+        terminated: true,
+        effectsUncertain: false,
+        inFlight: "none",
+      });
+      if (stopping !== undefined) return stopping;
+
       const offered = offeredTools(current.subject);
       let turn: ProviderTurn;
       try {
@@ -843,7 +869,7 @@ export function createLoop(deps: LoopDeps): Loop {
           "limits.tool_calls_per_response",
           `the completion proposed ${turn.toolCalls.length} tool calls and the limit is ${limits.toolCallsPerResponse} ` +
             "(D-074's parallel tool steps in one task, priced as a per-response cap by D-088); change it with " +
-            "`crabby config set limits.toolCallsPerResponse`",
+            "`crabby config set limits.parallelToolSteps` — one key, because D-088 reused D-074's number rather than inventing a second one",
           "resource-limit",
           current.input.correlationId,
           { proposed: turn.toolCalls.length, limit: limits.toolCallsPerResponse },
@@ -914,7 +940,16 @@ export function createLoop(deps: LoopDeps): Loop {
       // §6.2 requires the record to say whether the operation was confirmed to stop and whether its effects may already
       // have happened. This loop knows neither — what was aborted is a provider call, not the tool whose side effect is
       // in question — so it moves to `cancelling` and stops, which is the half of §6.1 it can honestly do.
-      const reason = `the provider call was cancelled (${providerError.message}); §6's settle — whether the operation stopped, and whether its effects are uncertain — belongs to the cancellation manager, which is not in this build`;
+      // A completion request has no effect on the user's files or device beyond the provider having seen a prompt it was
+      // already sent, so D-089 records `effectsUncertain: false` here and `true` for a tool step — and `inFlight` travels
+      // with the event, so a reader who disagrees with that classification can see which one was made.
+      const settled = cancelledWith(state, {
+        terminated: true,
+        effectsUncertain: false,
+        inFlight: "provider",
+      });
+      if (settled !== undefined) return settled;
+      const reason = `the provider call was cancelled (${providerError.message}), and no cancellation was recorded for this task, so the runtime stops at \`cancelling\`: §6.2's evidence about whether the operation stopped is the cancellation manager's to produce, and this build has none wired to this run`;
       phase(taskId, state.input.correlationId, (emit) => {
         const task = currentTask(taskId);
         if (task.state !== "cancelling") move(task, "cancelling", {}, emit, at);
@@ -1012,6 +1047,16 @@ export function createLoop(deps: LoopDeps): Loop {
       messages: run.messages,
       steps: run.steps,
     };
+
+    // A cancellation outranks an answer: a suspended run has nothing in flight, so §6.1's step 3 has nothing to wait for
+    // and the task settles at once. The approval row is left as it stands — `pending` or `approved` — and expires inside
+    // D-064's window, because withdrawing it would need a sixth state the arbiter does not have.
+    const stopping = cancelledWith(state, {
+      terminated: true,
+      effectsUncertain: false,
+      inFlight: "none",
+    });
+    if (stopping !== undefined) return stopping;
 
     if (row.state === "pending") {
       if (at <= row.request.expiresAt) {
@@ -1159,6 +1204,11 @@ export function createLoop(deps: LoopDeps): Loop {
         messages: [...state.messages, toolMessage(run.toolCallId, reason)],
       });
     }
+    const settled = cancelledWith(
+      state,
+      toolEvidence(executed.outcome, executed.abandoned, run.call.tool),
+    );
+    if (settled !== undefined) return settled;
     return drive({
       ...state,
       messages: [...state.messages, toolMessage(run.toolCallId, executed.outcome.output)],

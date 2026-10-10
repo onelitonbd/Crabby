@@ -8,10 +8,11 @@
 > this file), most recently on 2026-10-10 — findings F-13…F-31 are from the six 2026-10-10 passes (the (R) round,
 > the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from),
 > F-32…F-36 from M1c's implementation pass, the first pass where a *generator* rather than a reader compared the
-> documents with the code, and F-37…F-43 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38), a rule
-> enforced without a document to cite (F-39), the checker's own arithmetic (F-40), and the three M2d's loop met when it
-> had to ask for numbers and vocabulary the plan had not priced (F-41…F-43). Every earlier finding has been re-checked
-> against the documents as they now stand.
+> documents with the code, and F-37…F-46 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38), a rule
+> enforced without a document to cite (F-39), the checker's own arithmetic (F-40), the three M2d's loop met when it had to
+> ask for numbers and vocabulary the plan had not priced (F-41…F-43), and the three M2e's cancellation manager met when it
+> had to write down an outcome §6.2 requires and the plan had not defined (F-44…F-46). Every earlier finding has been
+> re-checked against the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
 > a scratch pad: every finding below is either fixed with a decision ID, or explicitly listed as still open.
@@ -637,6 +638,18 @@ into `docs/DEVELOPMENT.md` §1's install row instead of being discovered by the 
 rule this file has been building since F-20 applies to a red you cannot reproduce: name it, date it, and record what
 was measured against it, because "could not reproduce" without the measurements is how a real race becomes folklore.
 
+**Second sighting, 2026-10-10, M2e, and this one has a named condition.** `npm test` answered `# tests 250 · # pass 249 ·
+# fail 1`, the failure being `a spawned gateway and a spawned cli (P-003)` — the same test, and the first red since the
+one above. What was different is measurable: the run was started *concurrently* with a second shell running
+`test:integration`, `test:security`, `biome`, `parity` and `docs:check`, so two suites were spawning processes and
+type-stripping TypeScript on the same cores at once. Re-run alone immediately afterwards, and twice more during the same
+slice, it was 250/250. So the budget that gave way is `waitForGatewayInfo`'s 25 s under roughly double load, which is a
+fact about the sandbox rather than about the Gateway — but it is the second time this specific test has been the one to
+fail, and the pattern is now worth stating: **the spawned-process legs are the ones that go red under load, and a red
+produced by running two suites at once is not evidence about the code.** The discipline that follows is the boring one —
+run the gates one at a time before a commit, which is what the M2 slices have done, and treat a red from a parallel run
+as unmeasured until it reproduces on its own.
+
 ### F-39 — A security rule enforced by code cited a section that does not state it, and the fix moved the rule and the sentence
 **Severity: high, because the rule was correct.** `packages/policy/evaluate.ts` refuses to queue a T3 approval for a
 Telegram client, and its comment and its user-facing message both cite `SECURITY.md` §6.2. §6.2's T3 row says
@@ -746,6 +759,52 @@ Recorded rather than fixed, for two reasons. Nothing in this build declares an `
 when the identity holds the grant) with this finding named in the assertion message, so the day someone adds the executor
 the test that goes red is the one that says why. It is the same shape as F-33 and F-34: two documents or two rows
 disagreeing, recorded visibly instead of resolved by inference.
+
+### F-44 — §6.2 said a per-tool duration was undecided while D-074's table priced three, and the code enforced them
+**Severity: low, and it was the code that made it visible.** `AGENT_RUNTIME.md` §6.2's last paragraph read: "Timeout
+thresholds remain a tuning value (the 64 KiB and temp-lifetime caps are decided in D-064; a per-tool duration is not)".
+D-074's table in `PROVIDERS_AND_TOOLS.md` §5.2 prices three per-tool durations — `fs.*` 10 s, `net.fetch` 20 s,
+`shell.run` 120 s — as "defaults with a named override path", and M2d's loop enforces exactly those three, citing D-074.
+A reviewer reading §6.2 would conclude the loop invented numbers, and the defensible action would be to delete the
+enforcement: F-39's shape again, with the code right and the sentence stale.
+
+The sentence was wrong, not the table, so the sentence moved: §6.2 now says the thresholds are defaults with an override
+path, names the three classes that are priced and the code that enforces them, and says plainly that the other forty-odd
+tools in §4.2 have no priced duration — which is F-41's third clause, and is why `toolDeadlineMs` returns `undefined` and
+the loop publishes `deadlineMs: null` instead of guessing. The general rule is F-27's, applied to a negative claim: a
+document saying a number is *not* decided is as checkable as one saying it is, and it goes stale in the opposite
+direction, by being overtaken rather than forgotten.
+
+### F-45 — §12's table cited D-074 for cancellation timeouts, and D-074 has no such row
+**Severity: low, one half fixed and one half left unpriced on purpose.** `AGENT_RUNTIME.md` §12's disposition table answers
+"Cancellation timeouts and escalation" with "§6; D-074" and adds "nothing structural; the numbers are `limits.*` keys".
+§6 states the requirement and no number; D-074's table has rows for provider timeouts, three tool classes, SQLite,
+extension overhead, parallel steps, provider concurrency and queue depth — and nothing for cancellation. So the citation
+resolved to a table that did not contain the thing cited, which is the F-14 class of defect one level down: not a section
+that moved, but a number that was never there.
+
+M2e had to answer it, and the answer is split rather than unified (D-090). The `immediate` override — §6.2's
+safety-critical path — is priced at `limits.cancellationSettleMs` = 5 s and has a row in §5.2's table, because an override
+that cannot bound a step which ignores its signal is not an override. The `finish-step` default is deliberately **not**
+priced: the step in flight keeps the deadline it was already given, and a cancellation clock beside a tool clock would give
+one step two deadlines. §5.2's paragraph about unpriced limits now names it, so the absence is a decision a reader can
+find rather than a hole a reviewer has to infer.
+
+### F-46 — §6.2 requires the uncertainty "on the task", and `TaskRecord` has no field for it
+**Severity: medium, open by choice, and the one debt M2e names instead of hiding.** §6.2: "Where an external action may
+already have taken effect when cancellation arrived …, that uncertainty MUST be recorded explicitly **on the task**".
+M2e records it durably, per task, in the `task.cancelled` event payload — `terminated`, `effectsUncertain`, `inFlight` and
+the step — which satisfies §5.2's recovery rule ("anything a client must act on must also be retrievable by polling
+`GET /tasks/{id}`") only in its weaker form: the poll that answers it is `GET /tasks/{id}/events`. A client reading the
+task record alone learns that the task was cancelled and not whether an external effect is in doubt, which is the fact
+§7.3 says must never be resolved by blindly re-executing.
+
+Not fixed in this slice because the honest fix is a schema change and not a sentence: `TaskRecord` would gain a
+`cancellation` object, `packages/storage` a migration to v3 with a column to hold it, `crabby task show` and
+`GET /tasks/{id}` a line each, and §4.1's tool-record vocabulary a decision about where `sideEffects` eventually comes
+from. That is a slice of its own with a review surface of its own, and doing it inside a cancellation slice would have put
+a migration and a contract change in the same commit as the behaviour they serve. §6.2 now says what is true today and
+what is owed, so the gap is in the document a reviewer reads rather than in a code comment.
 
 ## 3. Checks That Passed
 

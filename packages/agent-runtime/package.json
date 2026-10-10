@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@crabby/api-contracts": "0.0.0",
+    "@crabby/core": "0.0.0",
     "@crabby/policy": "0.0.0",
     "@crabby/providers": "0.0.0"
   }

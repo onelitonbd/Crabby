@@ -29,6 +29,12 @@ export const LimitsConfig = Type.Object(
     parallelToolSteps: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
     concurrentProviderRequests: Type.Optional(Type.Integer({ minimum: 1, maximum: 64 })),
     queuedTasksBeforeRefusal: Type.Optional(Type.Integer({ minimum: 1 })),
+    // D-088 priced the two limits `PROVIDERS_AND_TOOLS.md` §5.2 required and D-074's table did not carry, and D-090
+    // priced the safety-critical cancellation wait. All three are rows in §5.2's table, so all three are keys here —
+    // a failure message that tells a user to run `crabby config set limits.stepsPerTask` is a claim about this schema,
+    // and `additionalProperties: false` is what would make it false.
+    stepsPerTask: Type.Optional(Type.Integer({ minimum: 1 })),
+    cancellationSettleMs: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },
 );
@@ -57,6 +63,8 @@ export const LIMITS_DEFAULTS = {
   parallelToolSteps: 2,
   concurrentProviderRequests: 4,
   queuedTasksBeforeRefusal: 5,
+  stepsPerTask: 25,
+  cancellationSettleMs: 5_000,
 } as const satisfies LimitsConfig;
 
 export const DEFAULT_CONFIG: ConfigFile = { limits: { ...LIMITS_DEFAULTS } };

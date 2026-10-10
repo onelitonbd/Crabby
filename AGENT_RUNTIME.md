@@ -260,6 +260,26 @@ The runtime MUST:
 
 The runtime MUST NOT start another ordinary execution step merely because the current step completed after cancellation was requested.
 
+**Decided in M2 (D-089, D-090).** The six steps are `packages/agent-runtime/cancellation.ts` and the loop's cooperation
+with it, split the way this section splits them: the manager records the request and is what stops new work being
+scheduled (1, 2), the loop is what allows a step to finish and captures its output (3, 4) because only the party running
+the step knows whether it finished, and the manager writes the outcome once the loop reports (5, 6).
+
+**A request is recorded durably without a new table.** The task's state *is* the record that survives a restart —
+`cancelling`, which §7.1 turns into `interrupted` and §7.2 then refuses to resume into `running` — and the event log
+carries who asked, when, in which mode, and why. Only the `AbortController` for the run in flight is process memory,
+because a signal is not a fact about the task and there is nothing to recover. A second request for one task is the same
+fact relayed again and produces no second event, except when it escalates the mode, which §6.2 requires and the log
+records. Step 5's checkpoint half is named as absent in the settle event rather than omitted: a payload that said nothing
+would read as "there was nothing to save".
+
+**Two modes, because §6.2 requires both.** `finish-step` is this section's policy and the default: the step in flight
+keeps the deadline it was already given (D-074's per-tool number, or the provider's absolute ceiling) and gets no second
+clock. `immediate` is §6.2's safety-critical override: it aborts the in-flight call, and it bounds how long the runtime
+waits for a step that will not stop at `limits.cancellationSettleMs` (D-090) — after which it stops waiting and records
+the uncertainty rather than claiming a termination nobody confirmed. An `immediate` request over a recorded `finish-step`
+one escalates and is logged; the reverse is not a thing a second tap may do.
+
 ### 6.2 Cancellation limitations
 
 Some tools and external operations cannot be stopped immediately or may continue after Crabby stops waiting for them.
@@ -268,9 +288,28 @@ The runtime MUST distinguish between a cancellation request and confirmed termin
 
 Where an external action may already have taken effect when cancellation arrived (for example, a message that was already being sent), that uncertainty MUST be recorded explicitly on the task and MUST NOT be resolved by blindly re-executing the action.
 
+**What the two facts mean, decided in M2 (D-089).** §6.2 requires the distinction and does not say how a runtime is
+supposed to *know* either half, which is the question that had to be answered before a row could be written.
+`terminated` is true only when the operation **reported** that it stopped — an executor that returned after its signal, or
+a step that was never started. A step the runtime walked away from, because a deadline fired or an `immediate`
+cancellation stopped the waiting, is `terminated: false`: "we stopped waiting" is a fact about the runtime and this
+sentence is about the operation. `effectsUncertain` is true for **every tool step** that was in flight, because §4.1's
+tool record includes `sideEffects` and no tool in this build declares it (`PENDING_RECORD_FIELDS`), so the runtime cannot
+tell a read from a send and fails closed; a tool declaring `sideEffects: none` is the only thing that should ever make it
+false, and that is a change to make in the registry rather than in the manager. A **provider call** in flight is recorded
+as `effectsUncertain: false` — a completion request affects nothing on the user's device beyond the provider having seen a
+prompt it was already sent — and because that is a classification rather than a measurement, `inFlight` travels in the
+event payload beside both booleans, so a reader who disagrees can see which judgement was made.
+
+The evidence is written once, by the manager, into the `task.cancelled` event. §6.2's "recorded explicitly **on the
+task**" is not yet satisfied in the strict sense — `TaskRecord` has no field for it and adding one is a schema change
+(F-46) — and what is true today is the weaker, durable version: the fact is per-task, append-only, and retrievable by
+polling `GET /tasks/{id}/events`, which is §5.2's recovery rule. What is owed is the record channel, so a client reading
+only `GET /tasks/{id}` sees it.
+
 Safety-critical intervention MUST override the normal finish-current-step behavior when continuing an operation would create unacceptable harm or leak sensitive data.
 
-The definition of an atomic execution step is decided — it is the committed step boundary that D-065 resumes across and `SECURITY.md` §6.3 approves at — and the escalation mechanism is the tier ladder in `SECURITY.md` §6. Timeout thresholds remain a tuning value (the 64 KiB and temp-lifetime caps are decided in D-064; a per-tool duration is not), and that distinction is the point: an undecided number is a default to be measured, not a gap in the contract.
+The definition of an atomic execution step is decided — it is the committed step boundary that D-065 resumes across and `SECURITY.md` §6.3 approves at — and the escalation mechanism is the tier ladder in `SECURITY.md` §6. Timeout thresholds are defaults with a named override path rather than undecided: the 64 KiB and temp-lifetime caps are D-064's, three tool classes have durations in D-074's table (`fs.*` 10 s, `net.fetch` 20 s, `shell.run` 120 s) which `packages/agent-runtime` enforces, and the rest of §4.2's tools have no priced duration at all (F-41, F-44) — an unpriced tool runs under cancellation alone and its `tool.execution.started` event carries `deadlineMs: null` so the absence is visible instead of implied. That distinction is still the point: an undecided number is a default to be measured, not a gap in the contract, and inventing one for `memory.save` would be a number nobody decided and nobody could defend.
 
 ## 7. Automatic Recovery and Resume
 

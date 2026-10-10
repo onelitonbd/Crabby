@@ -446,10 +446,12 @@ interface:
 | Queued tasks | 5 | `task run` refuses past that, with the count in the message; a silently growing queue is a leak with good manners. |
 | Per-task steps | 25 | Tool calls through the gate, executed **or refused** (D-088). A budget that counted only executions would leave unbounded the loop `SECURITY.md` §6.3 forbids. |
 | Tool calls per completion | 2 | The parallel-steps row above, reused as a per-response cap rather than invented twice (D-088): a completion proposing three is asking for parallelism the device budget does not have. |
+| Cancellation settle (`immediate`) | 5 s | How long the runtime waits for a step that will not stop before it stops waiting and records `AGENT_RUNTIME.md` §6.2's uncertainty (D-090). `finish-step` gets no second clock: the step keeps the deadline it was given. |
 
-Three of the limits this section's opening sentence requires still have **no number**, and they are recorded rather than
-priced by guess (F-41): a per-task wall clock, which would have to exclude D-064's approval window because the two
-clocks are separate by D-074 and a task paused for a human is not a task that is running long; and a token budget and an
+Four of the limits this section's opening sentence requires still have **no number**, and they are recorded rather than
+priced by guess (F-41, F-45): a per-task wall clock, which would have to exclude D-064's approval window because the two
+clocks are separate by D-074 and a task paused for a human is not a task that is running long; a `finish-step` cancellation window,
+which is deliberately the step's own deadline rather than a second clock beside it (D-090); and a token budget and an
 optional cost ceiling, which both need `AGENT_RUNTIME.md` §8's context accounting and cannot be enforced before it
 exists. The per-tool deadlines below are enforced for the three classes this table prices — `fs.*`, `net.fetch`,
 `shell.run` — and a tool in no class runs under cancellation alone, with `deadlineMs: null` in its

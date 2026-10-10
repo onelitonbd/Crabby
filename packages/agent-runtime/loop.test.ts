@@ -4,6 +4,8 @@
 // sentence is what a reviewer reads when one of these goes red in a year's time.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { validate } from "@crabby/api-contracts";
+import { LIMITS_DEFAULTS, LimitsConfig } from "@crabby/core";
 import { type EvalContext, evaluate } from "@crabby/policy";
 import {
   LOOP_LIMITS,
@@ -808,6 +810,39 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
       seqs,
       "and it is monotone per task, which is what lets a client detect a gap without trusting the wall clock (§5.2)",
     );
+  });
+
+  it("reads its numbers out of config's defaults instead of keeping a second copy", () => {
+    assert.equal(LOOP_LIMITS.stepsPerTask, LIMITS_DEFAULTS.stepsPerTask);
+    assert.equal(
+      LOOP_LIMITS.toolCallsPerResponse,
+      LIMITS_DEFAULTS.parallelToolSteps,
+      "D-088 reused D-074's parallel-steps number as the per-response cap, so it is one key and not two that can drift",
+    );
+    assert.equal(LOOP_LIMITS.providerCallMs, LIMITS_DEFAULTS.providerAbsoluteMs);
+    assert.equal(LOOP_LIMITS.cancellationSettleMs, LIMITS_DEFAULTS.cancellationSettleMs);
+    assert.equal(toolDeadlineMs("file.read"), LIMITS_DEFAULTS.fsTimeoutMs);
+    assert.equal(toolDeadlineMs("net.fetch"), LIMITS_DEFAULTS.netFetchTimeoutMs);
+    assert.equal(toolDeadlineMs("shell.run"), LIMITS_DEFAULTS.shellRunTimeoutMs);
+    assert.equal(
+      LOOP_LIMITS.refusalsBeforePause,
+      2,
+      "D-086's threshold is the one number that is *not* a config key: §5.2's `limits.*` list is about timeouts and " +
+        "budgets, and a policy floor is neither",
+    );
+  });
+
+  it("names config keys that exist, because a failure message is an instruction", () => {
+    // F-30's rule turned on a message string: `crabby config set limits.nope` is refused by the schema's
+    // `additionalProperties: false`, so a limit-trip failure that told a user to run it would be a lie with a command in
+    // it. These are the three keys this package's messages name.
+    for (const key of ["stepsPerTask", "parallelToolSteps", "cancellationSettleMs"]) {
+      assert.equal(
+        validate(LimitsConfig, { [key]: 3 }).ok,
+        true,
+        `limits.${key} must be settable through the schema, because a loop failure tells the user to set it`,
+      );
+    }
   });
 
   it("refuses an arbiter write that is not inside a write phase, which is how the pairing rule is checked", async () => {

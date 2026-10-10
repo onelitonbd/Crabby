@@ -73,6 +73,7 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-053 | Paired-identity management (`auth.manage`) is available only to local clients. It is the one accepted asymmetry in the feature-parity matrix, recorded with its alternative path rather than hidden. | Accepted |
 | D-054 | `--restrict` removes capabilities from an identity; it never converts them into an approval the same restricted client must answer. | Accepted |
 | D-055 | Interface review is done element by element: every screen of every interface is written up as an element inventory (`docs/review/`) before `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are regenerated from it. All elements carry equal weight — size, cost, or how often they are seen never moves one to the bottom of the list. | Accepted |
+| D-056 | The review medium for an interface is a mockup generated from its inventory file (`docs/review/mockups/`), not a hand-drawn picture: every element shown must come from a row, must click back to that row, and must be able to carry a decision out of the mockup. The inventory stays the source of truth; a generated view cannot contradict it. A mockup is a review instrument, not implementation, and is never shipped. | Accepted |
 
 ## 3. Proposed Technical Choices
 
@@ -191,7 +192,7 @@ least once below. Adding a decision without naming its enforcer is a documentati
 | `docs/DATA_AND_MEMORY.md` (persistence, memory, deletion) | D-017, D-018, D-019, D-020, D-021 |
 | `docs/INTERFACES_AND_API.md` (API surface, parity) | D-005, D-030, D-048, D-049, D-051, D-052, D-053 |
 | `docs/UI_UX_SPEC.md` + `docs/DESIGN_SYSTEM.md` (presentation) | D-005, D-045, D-046, D-052 |
-| `docs/review/*.md` (element inventories, per D-055) | D-005, D-045, D-046, D-052, D-055 |
+| `docs/review/*.md` (element inventories, per D-055/D-056) | D-005, D-045, D-046, D-052, D-055, D-056 |
 | `docs/ROADMAP.md` + `docs/DEVELOPMENT.md` (sequencing, workflow) | D-016, D-034, D-050, D-051 |
 | `AGENTS.md` (agent contract) | D-013, D-014, D-016, D-026, D-034, D-038, D-040, D-043, D-044, D-052 |
 
@@ -207,10 +208,16 @@ Per D-055, interface review proceeds as element inventories. An element counts a
 
 | File | Surfaces covered | Elements | Approved | Remaining |
 | --- | --- | --- | --- | --- |
-| `docs/review/WEB.md` | 15 regions of the Web UI | 143 | 0 | 143 |
+| `docs/review/WEB.md` | 17 regions of the Web UI | 160 | 0 | 160 |
 | `docs/review/TUI.md` | planned | — | — | — |
 | `docs/review/CLI.md` | planned | — | — | — |
 | `docs/review/TELEGRAM.md` | planned | — | — | — |
+
+Review medium (D-056): `python3 docs/review/mockups/build.py` renders `docs/review/WEB.md` into
+`docs/review/mockups/web.html` — one self-contained file, no network, no CDN. The build fails if the mockup
+references an element the inventory does not define, or if the inventory has a row the mockup cannot place, so
+the picture cannot drift from the document. Decisions made in the mockup leave it as paste-ready rows; nothing
+the mockup stores counts until it is written back into the `.md`.
 
 After all four are reviewed: regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from the accepted
 inventories, then re-run `docs/CONSISTENCY_REVIEW.md` (a spec written from approved elements cannot contradict them).
@@ -315,7 +322,7 @@ D-033 (`termux-api` tiers) accepted and propagated.
 
 | Counter | Value |
 | --- | --- |
-| Accepted decisions | 54 (D-001…D-054) |
+| Accepted decisions | 56 (D-001…D-056) |
 | Proposed technical choices | 10 (P-001…P-010) |
 | Open / needs-validation items | 52 tracked; closed as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033 (O-006 stays open until M0 P5 measures). Remaining blockers are device measurements, not opinions: O-002, O-006, O-051 |
 | Planning docs written | 16 — includes `docs/CONSISTENCY_REVIEW.md` (M-D record) |
@@ -323,6 +330,7 @@ D-033 (`termux-api` tiers) accepted and propagated.
 | Planning docs remaining | 0 (M-D review is the last step) |
 
 Run `python3 scripts/check-docs.py` after editing any planning document; it verifies ID references,
-cross-references, section anchors, capability coverage, and that no document claims an implementation exists., plus O-001…O-017 as listed above.
+cross-references, section anchors, capability coverage, traceability of every accepted decision to a document that
+enforces it, the element counts in `docs/review/`, and that no document claims an implementation exists.
 
 **Implementation remains out of scope until the planning documents and required decisions have been reviewed.**

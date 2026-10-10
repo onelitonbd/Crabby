@@ -52,6 +52,39 @@ def text(p: Path) -> str:
     return p.read_text(encoding="utf-8")
 
 
+REVIEW_STATUSES = {"PROPOSED", "ACCEPTED", "EDIT", "CUT", "?"}
+# A review row ID is `<prefix><region>-<element>` (`W1-04`) or, for a named region,
+# `<prefix>-<letter><element>` (`W-A1`); both grammars appear in `docs/review/WEB.md`.
+REVIEW_ROW_RE = re.compile(r"^\|\s*([A-Z]{1,2}(?:\d+-\d+|-[A-Z]\d+))\s*\|(.*)\|\s*$")
+REVIEW_REGION_RE = re.compile(r"^#{2,4} Region ([A-Z]{1,2}(?:\d+|-[A-Z]))\b", re.M)
+
+
+def region_of(eid: str) -> str:
+    m = re.match(r"^([A-Z]{1,2})(?:(\d+)|-([A-Z]))", eid)
+    return f"{m.group(1)}{m.group(2) or ('-' + m.group(3))}" if m else ""
+
+
+def inventory(body: str) -> list[tuple[str, str, str]]:
+    """(id, status, region) for every element row in a review inventory.
+
+    Region membership is decided by the last `Region <ID>` heading seen, so an element row that
+    wandered out from under its heading is a finding rather than an invisible row.
+    """
+    out: list[tuple[str, str, str]] = []
+    region = ""
+    for line in body.splitlines():
+        m = REVIEW_REGION_RE.match(line)
+        if m:
+            region = m.group(1)
+            continue
+        m = REVIEW_ROW_RE.match(line.strip())
+        if not m:
+            continue
+        cells = [c.strip() for c in m.group(2).split("|")]
+        out.append((m.group(1), cells[-1], region))
+    return out
+
+
 def defined_ids(decisions: str) -> dict[str, str]:
     """Rows like `| D-001 | ... |` in the decision register define those IDs."""
     out: dict[str, str] = {}
@@ -201,6 +234,102 @@ def main() -> int:
                 problems.append(f"DECISIONS.md: traceability map names missing document {fname}")
     elif d_ids:
         problems.append("DECISIONS.md: section 4A traceability map is missing")
+
+    # 8. element inventories (`docs/review/*.md`): every row needs a region, a status from the
+    #    fixed set, and a unique ID; the file's own coverage table and the section 4B progress row
+    #    must equal the rows that actually exist. D-055 makes review measurable, which only means
+    #    something if the counts cannot drift away from the file they describe.
+    review_dir = ROOT / "docs" / "review"
+    prog_rows: dict[str, list[str]] = {}
+    progress = re.search(r"## 4B\..*?\n## \d", bodies[decisions_path], flags=re.S)
+    if progress:
+        for line in progress.group(0).splitlines():
+            m = re.match(r"^\|\s*`docs/review/([A-Z_]+\.md)`\s*\|(.*)\|\s*$", line)
+            if m:
+                prog_rows[m.group(1)] = [c.strip() for c in m.group(2).split("|")]
+    if review_dir.is_dir():
+        for f in sorted(review_dir.glob("*.md")):
+            body = text(f)
+            rows = inventory(body)
+            if not rows:
+                continue
+            where = f"docs/review/{f.name}"
+            heads = re.findall(REVIEW_REGION_RE, body)
+            by_region: dict[str, int] = {}
+            for rid, st, region in rows:
+                by_region[region] = by_region.get(region, 0) + 1
+                if st not in REVIEW_STATUSES:
+                    problems.append(
+                        f"{where}: row {rid} status {st!r} is not one of "
+                        + ", ".join(sorted(REVIEW_STATUSES))
+                    )
+                if region not in heads:
+                    problems.append(f"{where}: row {rid} sits under no `Region` heading")
+            ids = [r[0] for r in rows]
+            for dup in sorted({i for i in ids if ids.count(i) > 1}):
+                problems.append(f"{where}: element ID {dup} is defined twice")
+            for h in heads:
+                if not by_region.get(h):
+                    problems.append(f"{where}: region {h} has a heading but no element rows")
+                elif region_of(ids[heads and 0][0]) and h not in {region_of(i) for i in ids}:
+                    problems.append(f"{where}: region {h} is declared but holds no rows")
+            for line in body.splitlines():
+                m = re.match(r"^\|\s*\*{0,2}[^|]+\*{0,2}\s*\|\s*([A-Z][^|]*?)\s*\|\s*(\d+)\s*\|", line)
+                if m and re.match(r"^[A-Z]{1,2}(?:\d+|-[A-Z])$", m.group(1).split(",")[0].strip()):
+                    want = sum(by_region.get(r.strip(), 0) for r in m.group(1).split(","))
+                    if str(want) != m.group(2):
+                        problems.append(
+                            f"{where}: coverage row {m.group(1)!r} claims {m.group(2)} elements, the regions have {want}"
+                        )
+            total = re.search(
+                r"\|\s*\*\*Total\*\*\s*\|\s*\*\*(\d+) regions?\*\*\s*\|\s*\*\*(\d+) elements\*\*", body
+            )
+            if total:
+                if int(total.group(1)) != len(heads):
+                    problems.append(
+                        f"{where}: coverage table claims {total.group(1)} regions, file has {len(heads)}"
+                    )
+                if int(total.group(2)) != len(rows):
+                    problems.append(
+                        f"{where}: coverage table claims {total.group(2)} elements, file has {len(rows)}"
+                    )
+            approved = sum(1 for _i, st, _r in rows if st == "ACCEPTED")
+            cells = prog_rows.get(f.name)
+            if cells is None:
+                problems.append(f"DECISIONS.md section 4B has no progress row for {where}")
+            else:
+                want = [str(len(rows)), str(approved), str(len(rows) - approved)]
+                if cells[1:4] != want:
+                    problems.append(
+                        f"DECISIONS.md section 4B: {where} should read {cells[0]} | {' | '.join(want)}"
+                        f" (found: {len(rows)} rows, {approved} accepted)"
+                    )
+
+    # 9. the counter table in DECISIONS.md must be read off the register, not remembered: the
+    #    same numbers have drifted twice by hand.
+    n_acc = sum(1 for k, v in defined.items() if k.startswith("D-") and "Accepted" in v)
+    n_pro = sum(1 for k in defined if k.startswith("P-"))
+    n_open = sum(1 for k in defined if k.startswith("O-"))
+    last_acc = max((k for k in defined if k.startswith("D-")), default="D-000")
+    last_pro = max((k for k in defined if k.startswith("P-")), default="P-000")
+    first_acc = min((k for k in defined if k.startswith("D-")), default="D-001")
+    wants = {
+        "Accepted decisions": f"{n_acc} ({first_acc}…{last_acc})",
+        "Proposed technical choices": f"{n_pro} ({'P-001'}…{last_pro})",
+    }
+    for label, want in wants.items():
+        m = re.search(rf"^\|\s*{re.escape(label)}\s*\|([^|\n]*)\|", bodies[decisions_path], flags=re.M)
+        if not m:
+            problems.append(f"DECISIONS.md: counter row {label!r} is missing")
+        elif m.group(1).strip() != want:
+            problems.append(f"DECISIONS.md: counter {label!r} reads {m.group(1).strip()!r}, register says {want!r}")
+    for label, want in [
+        ("Open / needs-validation items", f"{n_open} tracked"),
+        ("Planning docs written", f"{len(files)} —"),
+    ]:
+        m = re.search(rf"^\|\s*{re.escape(label)}\s*\|([^|\n]*)\|", bodies[decisions_path], flags=re.M)
+        if m and not m.group(1).strip().startswith(want):
+            problems.append(f"DECISIONS.md: counter {label!r} should start with {want!r}")
 
     if problems:
         print(f"✗ {len(problems)} documentation problem(s):")

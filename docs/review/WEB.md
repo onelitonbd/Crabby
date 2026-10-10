@@ -11,6 +11,11 @@
 >
 > **IDs:** `W` = Web · region number · element number. Quote an ID when you want to change one thing.
 >
+> **How to review this file:** `python3 docs/review/mockups/build.py` then open
+> `docs/review/mockups/web.html` (see `docs/review/mockups/README.md`). Every element in that page is one row here,
+> and clicking it shows the row. Changing a status in the page does not change this file: the page exports
+> paste-ready rows, and `build.py` refuses to build if the two ever disagree about what exists.
+>
 > **Cross-cutting rule inherited from `docs/UI_UX_SPEC.md`:** a capability that exists anywhere must be present here,
 > and every element must have a defined loading, empty, error, and degraded state (`docs/UI_UX_SPEC.md` §8).
 
@@ -31,12 +36,14 @@
 | W1-07 | Vault chip | `locked` / `unlocked` | icon+word | tap → unlock dialog; locks the whole T2/T3 surface with a reason, not a spinner (`SECURITY.md` §7) | right | PROPOSED |
 | W1-08 | Resource chip | memory / storage / queue pressure, plain numbers | hidden below 480px, reachable from menu | tap → status screen | right | PROPOSED |
 | W1-09 | Version + update note | `v0.x.y` | 12px | tap → copy; shows only the fact that a newer tag exists, no auto-update (D-050) | right | PROPOSED |
+| W1-10 | Status bar container | the bar itself: horizontal padding, wraps to a second line rather than truncating chip text, honours the top safe-area inset, and stays rendered while a route transition is in flight | one line ≥480px, two lines below | wraps, never ellipsis-fills; tapping empty bar space does nothing | full width | PROPOSED |
+| W1-11 | Overflow "more" sheet | the bar items that did not fit, each with its full text, plus a marker on any item that has escaped the sheet into the bar (locked vault, offline) | full-height sheet, one item per row, 44px rows | opened from the trailing `⋯`; keeps the same tap targets as the inline chips; closes on `Esc` and on choosing an item | from the right, under W1-10 | PROPOSED |
 
-**Open question W1-A:** mobile bar at 360px cannot show nine items. Proposal: show W1-02, W1-03, W1-05, W1-06 inline
-and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet — with the caveat that a *locked vault* and
+**Open question W1-A:** mobile bar at 360px cannot show nine chips. Proposal: show W1-02, W1-03, W1-05, W1-06 inline
+and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — with the caveat that a *locked vault* and
 *offline* must force themselves out of the sheet, because both change what the user can trust on screen.
 
-## Region W2 — Bottom navigation (mobile) / left rail (≥960px)
+### Region W2 — Bottom navigation (mobile) / left rail (≥960px)
 
 | ID | Element | Items | Behavior | Status |
 | --- | --- | --- | --- | --- |
@@ -45,6 +52,7 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet — with the 
 | W2-03 | Nav badge | approvals count on Tasks, extension suspension count on Extensions | zero = hidden | PROPOSED |
 | W2-04 | Keyboard shortcuts | `g c` chat, `g t` tasks, `g e` extensions, `g s` settings, `n` new | documented in `?` help; desktop affordance, never required on mobile | PROPOSED |
 | W2-05 | Safe-area handling | respects notched-device insets | bottom bar and modal actions only | PROPOSED |
+| W2-06 | Nav container | bottom bar on mobile, left rail at ≥960px | safe-area bottom inset; never overlaps the composer (W4-11); focus order tab → page content; badge clipping is defined, not accidental | PROPOSED |
 
 ---
 
@@ -68,6 +76,7 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet — with the 
 | W3-12 | Date/session separators | only when >30min gap | caption | anchors for scroll restore | PROPOSED |
 | W3-13 | Scroll affordance | "new content ↓" when the user scrolled up during streaming | floating | clicking never loses the reading position permanently | PROPOSED |
 | W3-14 | Reconnect reconciliation | after a gap, changed messages get a brief highlight and a note says what changed while disconnected | per row | driven by `GET /tasks/{id}`, not by replayed events alone (D-049) | PROPOSED |
+| W3-15 | Message list container | the scroll box that holds W3-01 … W3-14: scroll restore to the last read row, stick-to-bottom only when already at the bottom, windowing above ~200 rows | height = viewport − status bar − composer | new content while scrolled up raises W3-13 instead of moving the viewport; reading position survives reload and reconnect | PROPOSED |
 
 ### Region W4 — Composer
 
@@ -83,6 +92,7 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet — with the 
 | W4-08 | Queue indicator | "queued 2" while a task runs; send queues rather than interrupts | tap → list and reorder or drop | PROPOSED |
 | W4-09 | Character/token estimate | approximate context usage of the draft | estimate labeled as estimate (O-031) | PROPOSED |
 | W4-10 | Bengali input | composition-safe; no submit on `Enter` while composing | tested on a phone keyboard, not assumed | PROPOSED |
+| W4-11 | Composer container | docked above the nav bar, grows to 8 lines then scrolls, keeps focus while the stream updates | never covers the last message row; survives route changes within a session (draft is per session) | PROPOSED |
 
 ---
 
@@ -120,6 +130,8 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet — with the 
 ---
 
 ## 4. Approvals (`/approvals`)
+
+### Region W-A — Approvals queue and card internals
 
 | ID | Element | Content | Status |
 | --- | --- | --- | --- |
@@ -214,6 +226,8 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet — with the 
 
 ## 7. Extensions (`/extensions`)
 
+### Region W-E — Extensions surface
+
 | ID | Element | Content | Status |
 | --- | --- | --- | --- |
 | W-E1 | Installed list | id, kind, version, source tier, verdict chip, enabled state | PROPOSED |
@@ -275,6 +289,8 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet — with the 
 
 ## 9. Onboarding & global surfaces
 
+### Region W-O — Onboarding and global surfaces
+
 | ID | Element | Content | Status |
 | --- | --- | --- | --- |
 | W-O1 | First-run wizard | the six steps of `docs/UI_UX_SPEC.md` §5, each with its one-line security consequence | PROPOSED |
@@ -294,15 +310,15 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet — with the 
 
 | Screen | Regions | Elements | Every state defined? |
 | --- | --- | --- | --- |
-| App shell | W1, W2 | 14 | W1 rows state degraded behavior; W2 trivial |
-| Chat | W3, W4 | 24 | yes (§2.3 empty, streaming, reconnect, error) |
+| App shell | W1, W2 | 17 | W1 rows state degraded behavior; W2 trivial; containers listed as elements too |
+| Chat | W3, W4 | 26 | yes (§2.3 empty, streaming, reconnect, error) |
 | Tasks | W5, W6 | 19 | yes |
 | Approvals | W-A | 12 | yes, incl. `conflict` and expired |
 | Context & memory | W7, W8 | 16 | yes |
-| Providers/models/tools | W9, W10, W11 | 24 | yes; deferred states included |
+| Providers/models/tools | W9, W10, W11 | 25 | yes; deferred states included  |
 | Extensions | W-E | 12 | yes, incl. quarantined and lock notice |
-| Settings/access/logs | W12, W13, W14 | 22 | yes |
+| Settings/access/logs | W12, W13, W14 | 23 | yes  |
 | Onboarding/global | W-O | 10 | yes |
-| **Total** | **15 regions** | **143 elements** | — |
+| **Total** | **17 regions** | **160 elements** | — |
 
-Owner review surface: 143 rows to read, edit, cut, or approve. Nothing in this file is optional by size.
+Owner review surface: 160 rows to read, edit, cut, or approve. Nothing in this file is optional by size.

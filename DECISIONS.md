@@ -92,6 +92,8 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-072 | **Host API version policy for extensions and skills.** Accepted (R). The manifest already carries `hostApi` (min and max) and `capabilities`; what was missing is the policy those fields mean, and it is now: host API versions are **one decimal pair, `major.minor`, declared for the whole surface rather than per capability**. `minor` bumps for additive changes — a new optional method, a new field in a result — and a bundle with `max-host-api` set below the running minor still loads; `major` bumps for anything that changes a signature, a meaning, or a security-relevant default, and a bundle whose `min-host-api` exceeds the host **refuses to load** with `ext_host_api_unsupported`, naming both versions in the message. v1 ships exactly one major (`1.x`) and never two at once: a plugin system that supports two live majors is a maintenance promise this project cannot keep, and an honest refusal costs one message. Deprecation is a three-step ladder with a floor of one release between steps — `@deprecated` marker plus the replacement's name in a minor, a warning line in `ext check-compat` and in the load report in the next minor, removal at the following major — and because the release changelog is deliberately not written until the first release, the *authoritative* deprecation record is `ext check-compat`'s output — a command every interface can run, not a file nobody is promised yet. Skills without a manifest take `1.0` implicitly; a converted skill records the resolved pair in its conversion report (D-039) so "what did this assume when it was imported" is answerable years later. | Accepted (R) |
 | D-073 | **Memory provenance instead of memory confidence scores.** Accepted (R). No model-generated float is stored as a confidence value: a number nobody can calibrate becomes a number somebody will trust. Each memory carries **provenance instead** — how it was learned (`stated` by the user, `confirmed` by an outcome, `inferred` from a pattern), the source references it came from, the count of independent sources, and a last-confirmed timestamp — and the coarse rank is displayed as a word, never a percentage. Conflict rule: for the same key, a newer `stated` supersedes an older `stated`, while `inferred` never overrides `stated` and cannot delete it; a conflict that is not resolvable by those two lines is **shown** in the memory view as two entries with their timestamps, matching the deletion rule in D-065 — the system does not quietly edit its own past. Extraction triggers are exactly two, and only the first is on by default: the explicit user act (`remember`, in all four interfaces), and an auto-extraction step that must be **off by default** and, when enabled, surfaces each candidate as a diff the user can refuse before it is written (D-046's approval floor; a memory written silently is a personality change nobody approved). The numeric threshold for when an `inferred` memory is promoted to a stored one is deliberately not chosen here, and the procedure for choosing it is: tune in M2 against the acceptance list recorded in `docs/review/`, one number per rule, each with the case that motivated it — not against a benchmark nobody will run (the same standard D-065 applies to compaction). | Accepted (R) |
 | D-074 | **Timeout and concurrency defaults.** Accepted (R). Decided as *defaults with a named override path*, because waiting for a phone to learn what a request timeout should be is the wrong dependency. Provider calls: connect 10 s, first token 60 s, idle stream 45 s (a stream that goes quiet is dead, not slow), absolute 300 s. `fs.*` 10 s; `net.fetch` 20 s total; `shell.run` 120 s wall clock, killed as a group so a child does not outlive its parent, and the outcome is reported as `timeout` — a distinct code, never `failure`, because "it took too long" and "it did not work" need different responses. SQLite busy timeout 5 s. Extension and MCP calls inherit their tool class's timeout plus 5 s of adapter overhead, so a slow plugin cannot be blamed on the tool or the host. Concurrency: 2 tool steps in parallel inside one task, 4 concurrent provider requests per Gateway, 5 queued tasks before `task run` refuses with a count (a queue that grows silently on a phone is a memory leak with good manners). Every one of these is a `limits.*` key in `config.json`, visible through `crabby config get limits`, editable through the same screen as the caps in D-064 (W11-07), and an approval that ages out mid-step follows D-064's expiry rather than the tool timeout — the two clocks are different and must stay that way in the logs. Timeouts are not retried blindly: only the retryable classes in `PROVIDERS_AND_TOOLS.md` §3.5 re-enter the ladder. | Accepted (R) |
+| D-075 | **The element review is executed under delegation, with its criteria printed.** Accepted (R). The owner could not review 650 element rows and asked for the reviewer's own judgment instead, so the gate in D-055 is satisfied by a delegated pass rather than by waiting — and a gate satisfied by delegation is only honest if the criteria are inspectable, because "reviewed" without a method is the word that means nothing. The pass checked every row against the constraint its own interface already owes: thin rows (a claim too short to build), duplicate element labels, citations of element ids that no inventory defines, citations of API routes that `docs/INTERFACES_AND_API.md` does not define, rows still naming a technology the register killed, open questions raised in an inventory with no answer block, Telegram rows exceeding the transport's own recorded numbers, TUI rows summing past 40 columns or promising `Shift+Enter` or Indic grid alignment, and Web rows relying on hover or on hue alone. The scan is `scripts/review-scan.py`, committed, so the pass is repeatable by anyone rather than a story about a good afternoon. Outcome: 650 rows to `ACCEPTED`, **zero cut** (a cut would move a capability out of an interface and force a parity edit in the same breath), and **three rows corrected**: two carried hand-typed numbers that had quietly gone stale (`/help` claiming 28 commands where region G3 defines 32; `docs/review/WEB.md`'s review-surface line claiming 161 rows when 179 were open — F-22), and one was a genuine fork, `/help` specified in two regions with two different limitation citations, now split into a catalogue row and a first-run invite (F-23). What the delegation did *not* buy: the eight `O-` rows that need a device stay open, `ACCEPTED` here means "reviewed against the recorded rules", not "the owner likes it", and `AGENTS.md` §1 tells an implementer to raise a discrepancy rather than quietly deviate. | Accepted (R) |
+| D-076 | **Owner review moves to the implementation step.** Accepted (R). Review continues, just not as a 650-row table: the owner reviews one implemented unit when it exists — a screen, a command, a bot behavior — and answers by row. Per step: the reviewer presents the running thing plus the element IDs it implements; an answer becomes a code change *and* an inventory-row change in the same commit, so the document never describes a build that stopped existing; no answer means the summary says `unreviewed` and the step stays reversible; and nothing in this protocol lets an agent mark a row `EDIT` or `CUT` on the owner's behalf, because that is taste, and taste is the one thing the delegation explicitly did not transfer. This is what makes D-075's blanket `ACCEPTED` safe to build against: the statuses say "implementable as written", not "final". | Accepted (R) |
 
 ## 3. Proposed Technical Choices
 
@@ -214,7 +216,7 @@ least once below. Adding a decision without naming its enforcer is a documentati
 
 | Enforced by | Decisions |
 | --- | --- |
-| `DECISIONS.md` itself (register governance, review status) | D-059 |
+| `DECISIONS.md` itself (register governance, review status) | D-059, D-075, D-076|
 | `PROJECT_BRIEF.md` (product scope, platforms, principles) | D-001, D-002, D-003, D-004, D-016, D-017, D-019, D-021 |
 | `ARCHITECTURE.md` (structure, contracts, platform) | D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-015, D-032, D-045, D-048, D-049, D-050, D-053, D-060, D-066, D-068, D-069, D-070|
 | `AGENT_RUNTIME.md` (execution lifecycle) | D-018, D-022, D-023, D-024, D-025, D-026, D-027, D-028, D-029, D-044, D-074|
@@ -224,9 +226,9 @@ least once below. Adding a decision without naming its enforcer is a documentati
 | `docs/DATA_AND_MEMORY.md` (persistence, memory, deletion) | D-017, D-018, D-019, D-020, D-021, D-065, D-073|
 | `docs/INTERFACES_AND_API.md` (API surface, parity) | D-005, D-030, D-048, D-049, D-051, D-052, D-053, D-057, D-058, D-063, D-067, D-069|
 | `docs/UI_UX_SPEC.md` + `docs/DESIGN_SYSTEM.md` (presentation) | D-005, D-045, D-046, D-052, D-057, D-058, D-061, D-062, D-068 |
-| `docs/review/*.md` (element inventories, per D-055/D-056) | D-005, D-045, D-046, D-052, D-055, D-056, D-057, D-058, D-059, D-061, D-063|
+| `docs/review/*.md` (element inventories, per D-055/D-056) | D-005, D-045, D-046, D-052, D-055, D-056, D-057, D-058, D-059, D-061, D-063, D-075|
 | `docs/ROADMAP.md` + `docs/DEVELOPMENT.md` (sequencing, workflow) | D-016, D-034, D-050, D-051, D-060, D-066, D-069, D-070|
-| `AGENTS.md` (agent contract) | D-013, D-014, D-016, D-026, D-034, D-038, D-040, D-043, D-044, D-052 |
+| `AGENTS.md` (agent contract) | D-013, D-014, D-016, D-026, D-034, D-038, D-040, D-043, D-044, D-052, D-076|
 
 Rules: a decision may be enforced by several documents but must be enforced by at least one; the enforcing document
 states the behavior and this register records the status; and no document restates a rule it does not own — which is
@@ -241,10 +243,10 @@ Per D-055, interface review proceeds as element inventories. An element counts a
 
 | File | Surfaces covered | Elements | Approved | Remaining |
 | --- | --- | --- | --- | --- |
-| `docs/review/WEB.md` | 19 regions of the Web UI | 185 | 6 | 179 |
-| `docs/review/TUI.md` | 21 regions of the TUI | 203 | 12 | 191 |
-| `docs/review/CLI.md` | 15 regions of the CLI | 158 | 6 | 152 |
-| `docs/review/TELEGRAM.md` | 11 regions of the Telegram interface | 129 | 1 | 128 |
+| `docs/review/WEB.md` | 19 regions of the Web UI | 185 | 185 | 0 |
+| `docs/review/TUI.md` | 21 regions of the TUI | 203 | 203 | 0 |
+| `docs/review/CLI.md` | 15 regions of the CLI | 158 | 158 | 0 |
+| `docs/review/TELEGRAM.md` | 11 regions of the Telegram interface | 129 | 129 | 0 |
 
 Review medium (D-056): `python3 docs/review/mockups/build.py` renders `docs/review/WEB.md` into
 `docs/review/mockups/crabby-web-ui.html` — one self-contained file, no network, no CDN. The build fails if the mockup
@@ -252,20 +254,30 @@ references an element the inventory does not define, or if the inventory has a r
 the picture cannot drift from the document. Decisions made in the mockup leave it as paste-ready rows; nothing
 the mockup stores counts until it is written back into the `.md`.
 
-All four inventories exist: 185 Web + 203 TUI + 158 CLI + 129 Telegram = 675 elements, and the review is the gate
-before `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are regenerated from them. 25 rows left `PROPOSED` in the
+All four inventories exist: 185 Web + 203 TUI + 158 CLI + 129 Telegram = 675 elements, and their review was the gate
+before `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` could be regenerated from them. That gate is closed (D-075),
+and the regeneration itself is scheduled at `docs/ROADMAP.md` M0 P8 so it follows the measurements that can still
+change a row. 25 rows were left `PROPOSED` in the
 (R) round of 2026-10-10, and one row was added by it — T-A14, the approval queue walk that D-061 makes necessary.
 The rule the round held itself to: a row was flipped only when the one thing blocking it was an open question that
 D-060…D-068 has now answered, and the row names its decision inline, so rejecting a decision puts its rows back
-with one search. Nothing was flipped for looking obviously fine. The remaining 650 wait on the owner looking at the
-screens, which is what the mockup is for; `docs/review/DECISION-QUEUE.md` is the veto surface for the rest.
+with one search. Nothing was flipped for looking obviously fine. The remaining 650 were then reviewed under delegation
+(D-075) on 2026-10-10, when the owner said they had no time to read a table of 650 rows and asked for the pass to be
+run per the reviewer's own recommendations: every row is `ACCEPTED` now, `Remaining` is zero, and the criteria the pass
+applied are printed in `docs/review/README.md` rather than summarized here, because a gate that cannot be re-run is a
+claim. Two rows were corrected by that pass — both for carrying a hand-typed count that had gone stale (F-22) — and
+nothing was cut, so no capability lost an interface and §8 of `docs/INTERFACES_AND_API.md` needed no edit. Review did
+not end, it moved: D-076 puts it at each implementation step, where the owner sees a running screen instead of a row.
 
 An open question written in an inventory is not left inside the inventory: each one that changes what gets built is
 registered as an `O-` row in section 4 (the Web, TUI and CLI questions became O-053…O-063, and all eleven are closed by D-061…D-067; the measurements they were entangled with are not — O-006 and O-051 on repaint cost still gate rows like T-C6 and the transcript caps that hang off it (T4-05, T15-08), which is why those rows stay labelled as unvalidated instead of approved), so review progress and
 unresolved questions are counted in the same register as everything else.
 
-After all four are reviewed: regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from the accepted
-inventories, then re-run `docs/CONSISTENCY_REVIEW.md` (a spec written from approved elements cannot contradict them).
+All four inventories are reviewed, so the regeneration gate is open: `docs/UI_UX_SPEC.md` and
+`docs/DESIGN_SYSTEM.md` are now to be written *from* the accepted rows, then `docs/CONSISTENCY_REVIEW.md` re-run (a
+spec written from approved elements cannot contradict them). That pass is scheduled as `docs/ROADMAP.md` M0 P8 and is
+document work, not new design: it is listed there so nobody implements M1 against a spec that is one round behind the
+inventories it is supposed to come from.
 
 ## 5. Database Evaluation Record
 
@@ -367,12 +379,13 @@ D-033 (`termux-api` tiers) accepted and propagated.
 
 | Counter | Value |
 | --- | --- |
-| Accepted decisions | 74 (D-001…D-074) |
+| Accepted decisions | 76 (D-001…D-076) |
 | Proposed technical choices | 10 (P-001…P-010) |
 | Open / needs-validation items | 65 tracked (63 from the (R) round plus O-064 and O-065 registered while finalizing), 50 of them closed by D-060…D-068 in the (R) round of 2026-10-10; closed earlier as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033. O-023 is closed by D-032 under the wording "Accepted in D-032" rather than "Closed by" — the phrasing a count-by-hand pass misreads, so `scripts/count-inventory.py --register-counters` prints the ids it could not classify instead of a bare number. Six items carry work and each has its closing protocol in `docs/review/DECISION-QUEUE.md` §2 rather than a vague promise: four open rows (O-006 and O-051 need a phone render, O-008 needs real extensions, O-052 is a post-v1 design question) and two with one measured clause left (O-001, O-002: a clean Termux build and a WAL torture). The row count stays 63 because a closed question keeps its number — otherwise a register that renumbers itself cannot be cited by a document that was written against it |
 | Planning docs written | 16 — includes `docs/CONSISTENCY_REVIEW.md` (M-D record) |
 | Custom endpoint / fallback decisions | D-041…D-047 accepted this round |
-| Finalization round (D-071…D-074) | The four questions still answerable without a phone: skill frontmatter, host API versioning, memory provenance, timeout and concurrency defaults |
+| Finalization round (D-071…D-076) | The four questions still answerable without a phone — skill frontmatter, host API versioning, memory provenance, timeout and concurrency defaults — plus the delegated element review (D-075) and the review protocol that keeps it honest (D-076) |
+| Element review (`docs/review/`) | 675 of 675 rows `ACCEPTED`: 25 by D-059's narrow exception, 650 by the delegated pass in D-075; `Remaining` is 0 and review continues per step (D-076) |
 | Planning docs remaining | 0 (M-D review is the last step) |
 
 **The `P-` table, honestly counted.** Four of the ten rows are Accepted (P-001, P-002, P-005, P-009), three are
@@ -395,7 +408,8 @@ the evidence behind it, and rejecting one sends that row back to `Proposed` or `
 neighbours — the veto path is in `docs/review/DECISION-QUEUE.md`. The owner's authority is unchanged: **(R)** says how
 a row got here, not that it is untouchable.
 
-Run `python3 scripts/check-docs.py` after editing any planning document. It verifies ID references, cross-references,
+Run `python3 scripts/check-docs.py` after editing any planning document (and `python3 scripts/review-scan.py` after
+editing an inventory — the two overlap on purpose, since the second one's rules are the first one's evidence). It verifies ID references, cross-references,
 section anchors, capability coverage, traceability of every accepted decision to a document that enforces it, the
 element counts in `docs/review/`, the §8 counters and the §2.3 palette ratios, that an open-questions list names the
 decision owning each line (rule 15), that Markdown tables are rectangular (rule 16), and that no document claims an

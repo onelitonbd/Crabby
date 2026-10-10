@@ -61,8 +61,9 @@ is written — a memory written silently is a personality change nobody approved
 **What stays open is one number:** the promotion threshold for `inferred` entries, tuned in M2 against the reviewed
 acceptance list (`docs/review/`), one value per rule with the case that motivated it. Memory categories and the
 user-facing controls are not open in the same sense: they are specified by the inventories (`docs/review/WEB.md`
-regions W7/W8, `docs/review/TUI.md` region T9) and await the owner's element review (D-055), a different status from
-undecided.
+regions W7/W8, `docs/review/TUI.md` region T9), which were reviewed under delegation on 2026-10-10 (D-075) and are
+reviewed again per implemented screen (D-076). "Specified and awaiting a look" was never "undecided", and now it is
+neither: those rows are accepted specifications.
 
 ### 2.4 Memory Search
 

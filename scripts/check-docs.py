@@ -678,6 +678,82 @@ def main() -> int:
                     )
 
 
+    # 18. a count written inside `docs/review/` must equal the count the rows produce (F-22). An inventory is read by
+    #     a generator as well as a human, so "lists all 28 commands" in a row is not prose, it is a second copy of a
+    #     table — and the second copy was stale in two files while their coverage tables were correct.
+    review_files = [p for p in files if p.parent.name == "review" and p.stem in {"WEB", "TUI", "CLI", "TELEGRAM"}]
+    for path in review_files:
+        body = text(path)
+        rows = inventory(body)
+        heads = re.findall(REVIEW_REGION_RE, body)
+        defined_commands = len({m.group(1) for m in re.finditer(r"^\|\s*[A-Z][A-Z0-9-]*\s*\|\s*(/[a-z][a-z0-9-]*)\s*\|", body, re.M)})
+        approved = sum(1 for _i, st, _r in rows if st == "ACCEPTED")
+        for m in re.finditer(r"\b(\d{1,4}) (?:slash )?commands\b", body):
+            if defined_commands and int(m.group(1)) != defined_commands:
+                problems.append(
+                    f"{path.relative_to(ROOT)}: says {m.group(1)} commands, the file defines {defined_commands}"
+                )
+        for m in re.finditer(r"\b(\d{1,4}) rows to read\b", body):
+            want = len(rows) - approved
+            if int(m.group(1)) != want:
+                problems.append(
+                    f"{path.relative_to(ROOT)}: says {m.group(1)} rows await review, {want} are not `ACCEPTED`"
+                )
+        for m in re.finditer(r"\*\*(\d+) regions\*\*", body):
+            if int(m.group(1)) != len(heads):
+                problems.append(
+                    f"{path.relative_to(ROOT)}: a coverage row claims {m.group(1)} regions, the file has {len(heads)}"
+                )
+
+
+    # 18b. and an element count quoted *outside* `docs/review/` is the same second copy in a more dangerous place: a
+    #      summary document is what a reader trusts. `docs/UI_UX_SPEC.md` had "Web 161, TUI 185, CLI 138, Telegram 106"
+    #      for three rounds after those files grew (F-24). Any such number must be one the inventories produce today.
+    inv_sizes = {}
+    for stem in ("WEB", "TUI", "CLI", "TELEGRAM"):
+        f = review_dir / f"{stem}.md"
+        if f.is_file():
+            inv_sizes[stem] = len(inventory(text(f)))
+    valid = {str(sum(inv_sizes.values()))} | {str(v) for v in inv_sizes.values()}
+    iface_re = re.compile(r"\b(Web|TUI|CLI|Telegram)\s+(\d{2,4})(?=[,\s)]|$)")
+    bare_re = re.compile(r"\b(\d{2,4})\s+elements\b")
+    for path, body in bodies.items():
+        if "review" in path.relative_to(ROOT).parts or path.name == "DECISIONS.md":
+            continue
+        def stale(matches) -> list[str]:
+            out = []
+            for m in matches:
+                # a *region* row count is a different fact and cannot drift the same way: it is written next to the
+                # region it counts, and "region W15 (11 elements: …)" must not read as a claim about WEB.md's size
+                if re.search(r"region\b[^.\n]{0,24}$", body[max(0, m.start() - 40):m.start()], re.I):
+                    continue
+                if m.group(1) not in valid:
+                    out.append(m.group(1))
+            return out
+
+        def iface_stale(matches):
+            out = []
+            for m in matches:
+                if re.search(r"region\b[^.\n]{0,24}$", body[max(0, m.start() - 40):m.start()], re.I):
+                    continue
+                # strict only when the sentence says what is being counted, so "Web 1024" (a breakpoint) is not read
+                # as a row count — but "Web 161, TUI 185 … elements" is, even when 185 belongs to a different file
+                ahead = body[m.start():body.find(".", m.end()) + 1 if "." in body[m.end():m.end() + 120] else m.end() + 120]
+                if not re.search(r"\b(elements?|rows?)\b", ahead, re.I):
+                    continue
+                want = str(inv_sizes.get(m.group(1).upper(), ""))
+                if m.group(2) != want:
+                    out.append(m.group(2))
+            return out
+
+        quoted = iface_stale(iface_re.finditer(body)) + stale(bare_re.finditer(body))
+        for num in sorted(set(quoted)):
+            problems.append(
+                f"{path.relative_to(ROOT)}: quotes {num} elements where the inventories hold "
+                f"{', '.join(f'{k} {v}' for k, v in sorted(inv_sizes.items()))} (total {sum(inv_sizes.values())}) — a "
+                f"summary document is what a reader trusts, so point at `docs/review/` instead of restating a count"
+            )
+
     if problems:
         print(f"✗ {len(problems)} documentation problem(s):")
         for prob in problems:

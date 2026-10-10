@@ -9,25 +9,30 @@
 ## 0. Current Position
 
 ```
-Documentation ────────────────────────────► [YOU ARE HERE: M-D review] ─► M0 ─► M1 ─► M2 ─► …
+Documentation ────────────────────────────► [M-D complete · YOU ARE HERE: awaiting the go-ahead for M0] ─► M0 ─► M1 ─► M2 ─► …
  PROJECT_BRIEF ✓   ARCHITECTURE ✓   AGENT_RUNTIME ✓   SECURITY ✓   EXTENSIONS ✓
- PROVIDERS_AND_TOOLS ✓   DECISIONS ✓ (74 accepted · 10 proposed · 65 tracked, 8 open)   README ✓
+ PROVIDERS_AND_TOOLS ✓   DECISIONS ✓ (76 accepted · 10 proposed · 65 tracked, 8 open)   README ✓
  docs/  DATA_AND_MEMORY ✓   INTERFACES_AND_API ✓   UI_UX_SPEC ✓   DESIGN_SYSTEM ✓
         ROADMAP ✓   DEVELOPMENT ✓            AGENTS.md ✓
 ```
 
 All 16 planning documents now exist. What remains in this phase:
 
-01. The **element-by-element interface review** required by D-055 (`docs/review/`), starting with the Web UI —
-    the owner reviews every screen and every element, with equal weight given to small and large ones.
+01. ~~The **element-by-element interface review** required by D-055~~ — **done 2026-10-10 under delegation**
+    (D-075): all 675 rows in `docs/review/` are `ACCEPTED`, with the criteria and the scan in
+    `docs/review/README.md`, and review continues per implementation step (D-076) rather than as a table.
 02. `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are **regenerated from the approved inventories** rather than
-    hand-edited, so the spec cannot drift from what was actually agreed.
-03. Closing or consciously deferring the remaining implementation-blocking decisions in §11.
+    hand-edited, so the spec cannot drift from what was actually agreed. This is deliberately the *last* M0 task
+    (P8 below) and not an M-D one: M0 P5 and P3 can still change TUI and storage rows, and regenerating a spec from
+    numbers that are about to be measured would produce a document that needs regenerating again the same week.
+03. Closing or consciously deferring the remaining implementation-blocking decisions in §11 — eight `O-` rows carry
+    work, each with its measurement named, and none of them blocks starting M0.
 
-Implementation has not started. M-D (documentation close-out) is **in progress**: its mechanical half is written up
-in `docs/CONSISTENCY_REVIEW.md`, and four of the six original blockers were closed this round (D-048…D-051). M0 is
-the phase that closes the rest, because those remaining items are measurements, not opinions — it stays gated on
-the owner's go-ahead.
+Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
+is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
+records findings F-01…F-24 with what each one changed. M0 is the phase that closes what remains, because those items
+are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
+probes, not writing more documents.
 
 ## 1. Phase M-D — Documentation close-out
 
@@ -38,7 +43,7 @@ the owner's go-ahead.
 | Entry | This document, `docs/DEVELOPMENT.md`, `AGENTS.md` written. |
 | Work | Cross-document review of all planning files; resolve terminology drift; verify every acceptance criteria list is checkable; ensure each open decision has an owner-visible status. Element-by-element review of the four interfaces (`docs/review/`, D-055) with the single-file Web mockup as the review instrument (D-056). The (R) round of 2026-10-10 recorded the answers to everything research could settle (D-059…D-068) and left the rest as measurements. |
 | Exit | `python3 scripts/check-docs.py` clean — which now also means the §4B review counts and the §2.3 palette ratios are recomputed rather than asserted; `python3 scripts/count-inventory.py --markdown` agrees with `DECISIONS.md` §4B; every `Accepted` decision reflected in the document that enforces it; no document claims implementation; and every item still open in §11 is open because it needs a device, real extensions, or a post-v1 design (not because nobody reached it). |
-| Left to the owner | The 650 `PROPOSED` element rows: a question of judgement about how a screen reads, which no research settles. Work them in `docs/review/mockups/crabby-web-ui.html`; `docs/review/DECISION-QUEUE.md` is the veto surface for the 25 rows the (R) round moved. |
+| Reviewed under delegation | The 650 rows that were `PROPOSED` (D-075, criteria and exceptions in `docs/review/README.md`, re-runnable with `python3 scripts/review-scan.py`). The judgement half now happens per implemented step (D-076), where the owner sees a screen instead of a row — that is the trade, and it is recorded rather than implied. The owner's own wording for the trade: review arrives while the work is in progress, one step at a time, and the changes follow. `docs/review/mockups/crabby-web-ui.html` and `docs/review/DECISION-QUEUE.md` stay the surfaces for it — the mockup because a screen should be seen as a screen, the queue because a veto has to be one row wide. |
 | Deliberately not here | Any product code, any package, any dependency installation. |
 
 ## 2. Phase M0 — Termux validation prototype
@@ -55,10 +60,13 @@ the phase that prevents an expensive rewrite; `ARCHITECTURE.md` §22 makes it an
 | P5 | TUI candidate at 40 columns — Ink 8 (P-010), with the `node:readline` fallback as a control | Renders; token-by-token streaming holds ≤4 fps repaint without dropping input; **`Ctrl+J` inserts a newline on Termux**, and whether `Shift+Enter` can be negotiated after a `CSI ? u` query is *recorded*, not assumed (D-061 decided the design so this measurement can only widen the hint text, never rewrite it); `Ctrl-C` maps to cancel not quit; 8-color fallback usable with every state word readable; Bengali pasted into the composer truncates at a cluster boundary and does not shift the frame (D-062); no native build step. Result decides OpenTUI's deferral (O-051) and Ink's adoption (O-006) |
 | P6 | Background behavior | Document what Android does to a long-running Termux process (wakelock requirement, kill under pressure) and whether recovery is adequate |
 | P7 | Hostile extension probe (informs O-008) | Attempt `fs`/`net`/`child_process` access from a restricted candidate; record what is and is not enforceable |
+| P8 | Spec regeneration (document task, not a probe) | Regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from the accepted inventories (D-075), then re-run `python3 scripts/check-docs.py` and `docs/CONSISTENCY_REVIEW.md` §7. It sits here, not in M-D, because P3 and P5 can change rows the specs would otherwise be written from |
 
 Exit: each probe has a written result (pass / fail / platform-specific) recorded in `DECISIONS.md`, and every
-`Proposed` choice it touched becomes `Accepted`, changes, or is explicitly rejected. A failure here is a *good
-outcome* — it is why the phase exists.
+`Proposed` choice it touched becomes `Accepted`, changes, or is explicitly rejected; P8's regenerated specs are part
+of the exit, because a phase that measures things and then leaves the spec behind has measured nothing. A failure here
+is a *good* outcome — it is why the phase exists. Each step that ships after M0 carries its own owner review
+(D-076), so the review D-075 delegated continues where it can actually be done.
 
 ## 3. Phase M1 — Contracts and skeleton
 
@@ -191,7 +199,7 @@ Blocking means the shape of code depends on it, so guessing would be expensive:
 | O-001, O-002 (`better-sqlite3` on Termux) | Storage abstraction and migrations depend on the driver's build behaviour on a phone; the driver itself is chosen (D-066), so what is left is the measurement, not the decision |
 | O-006 / O-051 (TUI: Ink 8 pending measurement) | P-010 stays Proposed until M0 P5 measures repaint cost; the TUI workstream waits on the result, not on a preference. Everything the measurement could change about *layout* is already decided (D-061), so a negative result costs a renderer, not a redesign |
 | O-008 (extension isolation) | Deliberately open (D-038 keeps v1 free of third-party executable code), and it gates nothing before M4 |
-| The 650 undecided rows in `docs/review/` | Rows still `PROPOSED` because they need the owner to look at them, not research. They block regenerating `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from approved elements — M-D work — and they do not block running the M0 probes |
+| ~~The 650 undecided rows in `docs/review/`~~ — **closed by D-075** | Reviewed under delegation on 2026-10-10; they no longer block regeneration, which is scheduled as P8 so it happens after the measurements that could change a row. Owner review continues per step (D-076). Regenerating the two spec documents from approved elements is M-D work, and it never blocked running the M0 probes |
 
 **Closed during M-D (2026-10-09):** O-004 transport → D-048 (SSE + HTTP, no WebSocket in v1); O-010 replay →
 D-049 (per-task `seq`, count-bounded window, gap + reconcile-by-GET); O-012 install path → D-050; O-019

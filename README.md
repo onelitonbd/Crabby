@@ -25,21 +25,43 @@ tools, memory, skills, plugins, and permission-controlled execution — all behi
 | [`PROVIDERS_AND_TOOLS.md`](PROVIDERS_AND_TOOLS.md) | Provider adapters, capability flags, tool contract, initial tool set with risk tiers. |
 | [`EXTENSIONS.md`](EXTENSIONS.md) | Extension kinds, the skill format, validation gate, what may not run in v1. |
 | [`docs/INTERFACES_AND_API.md`](docs/INTERFACES_AND_API.md) | The contract all four interfaces share: auth, routes, events, errors, and the parity matrix. |
-| [`docs/UI_UX_SPEC.md`](docs/UI_UX_SPEC.md) | Interaction rules per surface, states, accessibility, first run. Regenerated from `docs/review/` once the element review is done. |
+| [`docs/UI_UX_SPEC.md`](docs/UI_UX_SPEC.md) | Interaction rules per surface, states, accessibility, first run. The element review is complete (D-075); this file is regenerated from `docs/review/` at `docs/ROADMAP.md` M0 P8, after the probes that could still change a row. |
 | [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md) | Tokens, type, spacing, color tiers, motion. §2.3 holds the palette with its measured contrast. |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phases M0–M6, entry and exit conditions, and which open items block which phase. |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Environment, scripts, testing, CI, release and Termux development rules. |
-| [`docs/review/`](docs/review/README.md) | **The gate in front of M0:** 675 elements across the four interfaces, one status per row, reviewed element by element (D-055). `docs/review/mockups/crabby-web-ui.html` is the Web UI as one file, generated from the inventory. |
-| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-21), what it could not verify, and the owner's checklist. |
+| [`docs/review/`](docs/review/README.md) | **M-D's element gate, now closed:** 675 elements across the four interfaces, every row reviewed (D-055, D-075) — the criteria and the scan are in that index, and review continues one implementation step at a time (D-076). `docs/review/mockups/crabby-web-ui.html` is the Web UI as one file, generated from the inventory. |
+| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-24), what it could not verify, and the owner's checklist. |
 | [`AGENTS.md`](AGENTS.md) | The rules a coding agent works under, including the forbidden shortcuts. |
 
 `python3 scripts/check-docs.py` lints this planning set — decision-ID references, cross-links, section anchors,
 capability coverage, the review-progress counts, the palette's contrast arithmetic, and the rule that no planning
 document may claim an implementation exists. `python3 scripts/count-inventory.py` prints the numbers §4B of
-`DECISIONS.md` states, so progress is pasted rather than remembered.
+`DECISIONS.md` states, so progress is pasted rather than remembered, and `python3 scripts/review-scan.py` re-runs the
+element-review criteria a row at a time whenever an inventory changes.
 
 `CHANGELOG.md` and `LICENSE` are the two files this set deliberately does not have yet: the first is written at the
 first release, the second at the moment code is distributed.
+
+## Before implementation starts
+
+Nothing in this repository needs another planning document. What is scheduled, in order:
+
+01. **Owner go-ahead for M0** (`docs/ROADMAP.md` §2) — seven Termux probes plus one document task. They are cheap, they
+    are throwaway, and each one can invalidate a decision by name instead of by surprise: `P1` Node baseline, `P2`
+    Fastify bind, `P3` `better-sqlite3` build and WAL torture, `P4` the Web build, `P5` Ink 8 at 40×24, `P6` Android
+    background behavior, `P7` hostile extension, `P8` regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from
+    the accepted inventories.
+02. **Then M1** (contracts and skeleton), and from there every step that ships carries its own owner review:
+    the running screen or command plus the element IDs it implements, one unit at a time (`D-076`). An answer becomes a
+    code change *and* an inventory-row change in the same commit; no answer is recorded as `unreviewed`, never as
+    accepted.
+03. **Eight tracked questions stay open until a device or a real user answers them**: O-001, O-002 (driver build, WAL),
+    O-006, O-051 (terminal rendering on a phone), O-008 (extension isolation), O-064 (signing), O-065 (Termux
+    sandbox), and O-052 (remembered approvals, post-v1 by choice). Each states the measurement that closes it.
+
+The element review (675 rows in `docs/review/`) is complete: 25 rows moved by D-059's narrow exception and 650 by the
+delegated pass in D-075, whose criteria and re-runnable scan live in `docs/review/README.md`. To reopen any of it —
+one row at a time, then `python3 scripts/count-inventory.py --markdown`, paste, `python3 scripts/check-docs.py`.
 
 ## Non-negotiable principles
 

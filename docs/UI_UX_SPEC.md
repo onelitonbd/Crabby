@@ -6,10 +6,11 @@
 > **Design case:** a 360×800 phone browser and a ~40-column Termux terminal. Desktop is the same product with
 > more room, never a different product (D-005).
 >
-> **Review status:** this document is a summary draft. Per D-055 the authoritative review happens element by element
-> in `docs/review/`; once every element is approved, this file and `docs/DESIGN_SYSTEM.md` are regenerated from those
-> inventories. Until then, treat the tables below as an index, not as an approved spec. As of this round all four
-> inventories are drafted — Web 161, TUI 185, CLI 138, Telegram 106 elements — and none is approved yet.
+> **Review status:** the element inventories in `docs/review/` are complete and every row in them is approved
+> (D-055, D-075), so this document is now the *lagging* one: it is regenerated from those rows at `docs/ROADMAP.md`
+> M0 P8, after the probes that can still change a row. Until that pass, treat the tables below as an index, not as a
+> spec — and when it disagrees with `docs/review/`, `docs/review/` is right. Element counts are not repeated here
+> either: the last time this header listed them, the numbers were three rounds stale and nobody could tell.
 
 ## 1. Principles
 

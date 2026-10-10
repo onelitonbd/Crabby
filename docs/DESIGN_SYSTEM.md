@@ -3,10 +3,12 @@
 > **Document status:** Planning draft. Tokens are proposed values, chosen for legibility on phone screens and in
 > terminals — not a brand exercise. Screen structure belongs to `docs/UI_UX_SPEC.md`.
 >
-> **Review status:** per D-055 this file is regenerated from the element inventories in `docs/review/` once those are
-> approved; the palette and type values below are candidates until that pass, **except §2.3**, whose values were
-> measured and accepted on 2026-10-10 (D-068 closing O-044, O-045, O-046). Type sizes and spacing rhythm are still
-> candidates: they need the phone in front of them (O-006), and no arithmetic can substitute for that.
+> **Review status:** the element inventories in `docs/review/` are approved (D-075), so this file's regeneration pass is
+> unblocked and scheduled at `docs/ROADMAP.md` M0 P8 — deliberately after M0, because the type scale and the spacing
+> rhythm are the parts a phone can still change (O-006) and regenerating before measuring would only schedule the same
+> work twice. **§2.3 is not a candidate**: its palette values were measured and accepted on 2026-10-10 (D-068, closing
+> O-044, O-045, O-046) and the checker recomputes their contrast on every run. Everything else below is what the
+> approved rows imply today; where it disagrees with `docs/review/`, `docs/review/` wins.
 
 ## 1. Principles
 

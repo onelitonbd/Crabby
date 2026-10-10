@@ -27,6 +27,12 @@ build something the roadmap has not unlocked, say so and propose the smallest un
 An open decision staying open is *correct behavior*, not unfinished work. Inventing a settled answer is the single
 most damaging thing an agent can do to this repository.
 
+**The one thing that is already decided: an element row.** Every row in `docs/review/*.md` is `ACCEPTED` after the
+delegated review pass (D-075), so a row is a specification to implement, not a proposal to re-litigate — and not a
+license to invent either. If the row turns out to be wrong in practice, implement what it says, then raise the
+discrepancy as a review item for the owner (D-076); changing behavior quietly and leaving the row behind produces a
+document that describes an app nobody is building.
+
 ## 2. Hard architecture rules
 
 01. **One core.** CLI, TUI, Web UI, and Telegram are clients of shared services. Never implement an agent loop,
@@ -89,6 +95,10 @@ most damaging thing an agent can do to this repository.
 6  Update documents in the same commit if behavior, a contract, or a decision moved.
 7  Summarize: what changed, what it does NOT do yet, which open decisions remain, what you did not test
    and why (especially anything Termux-only).
+8  Offer the step for owner review (D-076) — the running screen, command, or bot, not a document, and one
+   reviewable unit at a time. If the owner answers, apply the answer to the code and to the element row in the
+   same change. If the owner has no time, say "unreviewed" in the summary and keep the step reversible; never
+   record an unreviewed step as accepted, and never mark an inventory row EDIT on the owner's behalf.
 ```
 
 Commit as `type(scope): imperative summary` (`docs/DEVELOPMENT.md` §6). No unrelated formatting churn in a behavior
@@ -122,7 +132,7 @@ commit; no `--no-verify`.
 | "Add `child_process.exec` inline in the route handler" | Bypasses the tool registry, tiers, and audit entirely |
 | "Skip the migration, the schema is early" | Users' phones already hold data the first time they run it |
 | "Ship Web only; the TUI can match later" | Parity is the phase gate (`docs/ROADMAP.md` M3) |
-| "Mark O-xxx decided so work can proceed" | The owner decides. Report the blocker instead |
+| "Mark O-xxx decided so work can proceed" | The owner decides. Report the blocker instead. The D-059/D-075 delegation covers questions answerable from documents and the element inventories; it has never covered an `O-` row that needs a device, and it does not cover a security decision at all |
 
 ## 8. Termux realities
 
@@ -135,7 +145,8 @@ one, say so explicitly in your summary — do not describe unverified Termux beh
 
 A change is done when: tests express the requirement and pass; boundaries are intact (dependency direction, policy
 engine, storage abstraction, capability vocabulary); documents and `DECISIONS.md` agree with the code; parity and
-platform implications are stated; and the summary names what remains open. "It compiles" is not a definition of
+platform implications are stated; the step has been offered for owner review or the summary records that it was not
+(D-076); and the summary names what remains open. "It compiles" is not a definition of
 done, and neither is "the feature exists in one interface".
 
 ## 10. When you are unsure

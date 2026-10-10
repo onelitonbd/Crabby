@@ -82,6 +82,10 @@ for those four exactly as it does for these.
 
 ## 3. What the (R) round did *not* decide
 
-Nothing about how a screen looks. The 650 rows still `PROPOSED` in `docs/review/` are the owner's to review against
-`docs/review/mockups/crabby-web-ui.html`, and no decision in `DECISIONS.md` §2 substitutes for that: an (R) row settles
-a *question*, and a `PROPOSED` row is a *choice someone has to like*. Those are different statuses on purpose.
+Nothing about how a screen looks — until the owner said they had no time to look, and delegated it (D-075). The 650
+rows that were `PROPOSED` have since been reviewed against each interface's own constraints and are now `ACCEPTED`,
+with the criteria and the two rows the pass changed printed in `docs/review/README.md`. That closes the *question* half
+of the review and not the *taste* half: an (R) row settles a question, and a `PROPOSED` row was a choice someone had to
+like. What D-075 changes is when the liking happens. It now happens at implementation, one screen at a time, while
+there is something real to look at — which is the deal the delegation came with, recorded as D-076 so a future turn
+cannot quietly forget it and treat the inventories as final.

@@ -5,7 +5,7 @@
 > documents, it needs the two things a plan cannot supply: the element review, and the seven M0 measurements.
 >
 > **Reviewed:** 22 documents (16 planning at `*.md` and `docs/*.md`, 4 element inventories, the review index and
-> this file), most recently on 2026-10-10 — findings F-13…F-21 are from the two 2026-10-10 passes (the (R) round and
+> this file), most recently on 2026-10-10 — findings F-13…F-24 are from the three 2026-10-10 passes (the (R) round and
 > the finalization round), so every earlier finding has been re-checked against the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
@@ -366,6 +366,67 @@ re-checked headlessly after the fix.
 **Lesson kept:** when a document is a *source* for a tool, its grammar is an interface. Lint the shape at the source,
 because a tolerant parser turns a formatting typo into shipped UI text with no signal anywhere.
 
+### F-22 — Two counts inside the inventories had gone stale, and no check could see either
+**Severity: medium, mechanical.** The delegated element review (D-075) went row by row against each interface's own
+recorded constraints, and the things it found were not opinions: `docs/review/TELEGRAM.md` G3-28 said `/help` "lists
+all 28 commands" while region G3 defines **32** — a help screen built from that row would have quietly omitted four
+commands, including ones the file itself documents elsewhere — and `docs/review/WEB.md` closed with "161 rows to read,
+edit, cut, or approve" when 179 were open, a sentence written before the Sessions and Jobs additions (F-10, F-11)
+changed the file's own size. Both are the F-20 class one level down: a number typed into a row instead of read from the
+table the row belongs to. The checker could not see either one, because it verified the *coverage* tables and the §4B
+progress rows, and these two numbers lived in ordinary prose inside a row.
+
+**Resolution:** both rows now point at their source of truth instead of restating a count ("the row count of region G3
+is the source, never a number typed into this cell"), and **rule 18** of `scripts/check-docs.py` closes the class: a
+statement inside `docs/review/` of the form "*N* commands / elements / regions / rows to read" is compared with the
+value computed from the file, and a mismatch fails. The status legend in all four inventories was corrected in the same
+pass, because after D-075 `ACCEPTED` no longer means "the owner typed it" — leaving that sentence standing would have
+made the register's most-used status lie about its own provenance.
+
+**Lesson kept:** an inventory is a specification *and* a data source, so its numbers have to be derived, not recalled.
+This is the third round running that found a hand-typed count that had drifted (F-17, F-20, F-22), which is why the
+response each time is a rule and not just an edit.
+
+### F-23 — One row was not a row but a second copy of another, and the copies disagreed
+**Severity: medium.** `scripts/review-scan.py` flags an element name that appears twice in a file, because two rows for
+one element is how a specification forks. Three of the four flags were correct UI vocabulary (`Delete` on two screens
+is two Deletes), but `docs/review/TELEGRAM.md` had `/help` in region G3 *and* in region G-O — two rows for one message,
+each naming a different limitation as the one help must state (G7-03 + G3-16 in one, G7-03 + G6-06 in the other), and
+G3-16 is a symptom of G6-06 rather than a separate limit. An implementer reading either file would build either
+variant, and both would pass review against the inventory, which is the property that makes a contradiction worth
+finding rather than a difference of taste.
+
+**Resolution:** the two rows now own different things — G3-28 is the catalogue and states limitations by the row that
+owns each rule; G-O03 is the first-run invite, capped at five lines, and defers to G3-28 instead of restating it. The
+duplicate-label flag stays in the scan as a *report*, not a failure: it needs a reader, and pretending otherwise would
+have the checker reject `Delete`.
+
+**Lesson kept:** inventories allow the same word twice, but not the same *message* twice. When a name repeats, the
+question is never "is this label unique" but "does one thing here have two definitions".
+
+### F-24 — The two summary documents were three rounds behind the files they summarize, and quoted their sizes wrong
+**Severity: medium.** Closing the review meant updating the documents the review feeds, and reading them found the
+drift the checker cannot see. `docs/UI_UX_SPEC.md`'s header announced that all four inventories were drafted, listed
+each one's size, and added *"and none is approved yet"*. Every part of that sentence was stale: F-10, F-11 and F-12 had
+added 24, 18 and 23 rows to three of the files since those sizes were typed, and "none is approved yet" had stopped
+being true twice — 25 rows moved in the (R) round, the remaining 650 in D-075. The header quoted counts it had no way to
+see, which is the whole defect; F-22 and F-20 were the same shape one level up. `docs/DESIGN_SYSTEM.md` carried the same tense problem: its
+review status said the file *will be* regenerated "once those are approved", with no mention that the palette section
+had already been measured and accepted, so a reader could conclude §2.3 was provisional when rule 13 treats it as
+binding arithmetic. Neither header was checked by anything: rule 8 verifies the inventories' own coverage tables and
+`DECISIONS.md` §4B, and the four numbers in this sentence were a *fifth* copy, in the document a newcomer reads first.
+
+**Resolution:** both headers now say what is approved, which pass is scheduled where, and — the part that prevents a
+repeat — they refuse to restate counts: `docs/UI_UX_SPEC.md` no longer lists per-file sizes at all, and both headers
+state the precedence rule ("where it disagrees with `docs/review/`, `docs/review/` wins"), which is the sentence an
+index needs and a number is not. **Rule 18** was widened to make the class mechanical: any "*N* elements" or
+"Web *N* … elements" claim outside `docs/review/` must equal the number the inventories produce today (strict per
+interface when the sentence names the unit, so a 1024px breakpoint is not mistaken for a row count), and region-level
+counts are exempt because they belong to the region beside them.
+
+**Lesson kept:** a summary document is the most trusted and least checked thing in a repository. If it quotes numbers
+it cannot see, delete the numbers and keep the precedence rule.
+
 ## 3. Checks That Passed
 
 | Check | Result |
@@ -385,6 +446,9 @@ because a tolerant parser turns a formatting typo into shipped UI text with no s
 | The section 8 counters and the `P-` row arithmetic are printed by a tool, not remembered | ✓ (`scripts/count-inventory.py --register-counters`) |
 | `allowed-tools` in an imported skill cannot grant a privilege | ✓ (D-071, `EXTENSIONS.md` §4.3 — F-19) |
 | Markdown tables are rectangular, so a generator reads the same row a human does | ✓ (rule 16, added because of F-21; 4 pre-existing rows fixed) |
+| A count written inside `docs/review/` equals the count the file's rows produce | ✓ (rule 18, added because of F-22) |
+| A count quoted by a summary document equals what the inventories hold today | ✓ (rule 18 widened because of F-24; negative-tested with three planted wrong figures) |
+| Every element row satisfies its own interface's recorded constraints | ✓ (`scripts/review-scan.py`, run as the D-075 pass: 675 rows, 0 cuts, 2 corrections) |
 
 ## 4. Requirements Coverage From `PROJECT_BRIEF.md`
 
@@ -451,46 +515,34 @@ Being explicit, because "reviewed" must not quietly mean "verified":
     layout rule (code units vs grapheme clusters vs cells, in Node 22), which is enough to decide how truncation must
     work and nowhere near enough to claim a terminal will agree about widths.
 
-## 6. Owner Verification Checklist
+## 6. Owner Verification — delegated, and what that changed
 
-The remaining half of M-D. Each item is a yes/no, not a discussion:
+The second half of M-D was always going to be yours, and on 2026-10-10 you said you had no time for it and asked for
+the reviewer's own judgment instead, with review arriving while the work is in progress (D-075, D-076). So the
+checklist below is no longer a gate in front of M0. It is a **spot-check list you can use any time, including after
+implementation has started**, and each item has a one-line veto path because a delegated answer is only tolerable if
+undoing it is cheap:
 
-- [ ] Read `PROJECT_BRIEF.md` §13 (principles) and confirm nothing there has drifted from the intent.
-- [ ] Confirm `D-052` (no remembered approvals in v1) — it changes day-to-day feel, not just architecture.
-- [ ] Confirm `D-053` (client management is local-only) as an accepted parity exception.
-- [ ] Sanity-check `docs/ROADMAP.md` §1: is M0 (throwaway Termux probes) genuinely wanted before M1, or is one probe
-      (`P3` driver, `P5` TUI) enough to proceed?
-- [ ] Read `AGENTS.md` §7 (forbidden shortcuts) as the rules you actually want enforced on every future coding turn.
-- [ ] Read `docs/review/DECISION-QUEUE.md` and veto anything in the (R) round you disagree with, one row at a time
-      (D-059), and veto D-071…D-074 the same way if any of the four was answered wrong. Eight `O-` rows carry work —
-      O-001/O-002 (a phone build), O-006/O-051 (a phone render), O-008 (real extensions), O-052 (post-v1 by choice),
-      O-064 (signing) and O-065 (Termux sandbox) — and none of them is open out of habit: each states the measurement
-      that closes it.
-- [ ] Decide whether the (R) round's *process* is the pattern you want: a delegated answer recorded with its evidence
-      and marked `(R)` beats an unmarked assumption, but it does move work from "asked" to "reviewed after". If you
-      would rather every item were asked first, say so and D-059 goes back to `Proposed`.
-- [ ] Verify `docs/INTERFACES_AND_API.md` §8's two documented limitations are acceptable rather than gaps to fill.
+| Item | Where it lives | If you disagree |
+| --- | --- | --- |
+| The 675 element rows, all now `ACCEPTED` | `docs/review/*.md`, reviewed against the criteria in `docs/review/README.md` | Set the row back to `PROPOSED` or `EDIT`, then `python3 scripts/count-inventory.py --markdown` → paste into `DECISIONS.md` §4B → `python3 scripts/check-docs.py` |
+| The 650-row pass and what it changed (2 rows, 0 cuts) | `docs/review/README.md` "Delegated review outcome" | Re-run `python3 scripts/review-scan.py`; the scan is the criteria, so a disagreement is usually a row the scan cannot see (taste), which is exactly what D-076 keeps for you |
+| D-059…D-076, every `(R)` decision | `docs/review/DECISION-QUEUE.md` §1–§3, one row per recommendation | Flip that `D-` row to `Proposed`, revert the inventory rows in its "flips" column, re-run the checker |
+| `PROJECT_BRIEF.md` §13 principles still describe the product you want | the brief | Say which principle moved; a principle change is not a row edit, it re-weights decisions |
+| `D-052` (no remembered approvals in v1) and `D-053` (client management is local-only) | `SECURITY.md` §6.3, `docs/INTERFACES_AND_API.md` §8 | These two change how the product *feels*; they are the two rows in this set most worth a look before M1 |
+| Whether M0 is genuinely wanted as seven probes, or two (`P3`, `P5`) are enough | `docs/ROADMAP.md` §2 | Say so and §2 shrinks; M0 exists to be argued with |
+| `AGENTS.md` §7 as the rules you want enforced on every coding turn | `AGENTS.md` | Any rule there that you would not enforce is a rule to delete, not to soften |
+| `docs/INTERFACES_AND_API.md` §8's two documented limitations | that section | They are limitations, not gaps; if you want them closed, that is a new `O-` row |
 
-**And the element-review gate added during M-D (D-055/D-056), which comes first:**
+**What delegation did not do:** it did not close the eight `O-` rows that need a device (O-001, O-002, O-006, O-008,
+O-051, O-052, O-064, O-065), it did not make any `(R)` row unreviewable, and it did not move an element row to `EDIT`
+or `CUT` on your behalf — the pass cut nothing, so no capability lost an interface and the parity matrix needed no
+edits. `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are regenerated at M0 P8 rather than now, on purpose: M0 P3
+and P5 can still change rows, and regenerating a spec from numbers that are about to be measured would produce a
+document that needs regenerating again inside a week.
 
-- [ ] `docs/review/README.md` — the index: what each file covers, how to answer, and which invariants the checker
-      enforces.
-- [ ] `docs/review/WEB.md` — 185 elements over 19 regions. Reviewed through `docs/review/mockups/crabby-web-ui.html`, which is
-      generated from that file, so an element that exists in one and not the other is a build error rather than a
-      disagreement.
-- [ ] `docs/review/TUI.md` — 203 elements over 21 regions, every one answerable at 40 columns × 24 rows.
-- [ ] `docs/review/CLI.md` — 158 elements over 15 regions, with the pipe and the exit code as the binding case.
-- [ ] `docs/review/TELEGRAM.md` — 129 elements, where the transport's own limits are facts and the responses to them
-      are the decisions, and where every parity-matrix capability has a command of its own (F-08).
-- [ ] Only after statuses stop saying `PROPOSED`: regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from
-      the approved rows, then re-run §7.
-
-675 elements, 25 decided as of this round — the 25 are the rows whose only blocker was an open question the (R) round
-answered; the other 650 wait on the owner, not on research. The count grew from 590 while F-08…F-10 were being fixed,
-because a screen with no rows is the most expensive kind of gap — it costs nothing to notice. That is also why a screen
-named in an inventory has the same standing as "the chat pane": cutting one is a decision with an ID, never an edit.
-
-When these are ticked, `docs/ROADMAP.md` §0 moves to "M-D complete" and M0 starts.
+M-D's mechanical half is complete and the human half is delegated, so `docs/ROADMAP.md` §0 no longer waits on this
+file: M0 can start on the owner's go-ahead, and the element reviews happen against running screens (D-076).
 
 ## 7. Re-Review Rule
 

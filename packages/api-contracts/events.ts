@@ -44,6 +44,13 @@ export const EVENT_TYPES = [
   "tool.execution.blocked",
   "approval.requested",
   "approval.answered",
+  // The row's fifth state had no event until M2d's loop consumed one: `answered` was doing double duty for "the user
+  // approved" and "the runtime used it", so a client filtering on `approval.answered` saw two frames for one decision
+  // and could not tell which had happened (docs/CONSISTENCY_REVIEW.md F-42). A state change without its own event is
+  // the defect AGENT_RUNTIME.md §5.1 calls "a lie in progress", and `consumed` is a state (§6.3's `scope: once` mark,
+  // D-052), so it gets one. Deliberately not in `ACTIONABLE_EVENT_TYPES`: §5.2's rule is about events a client must
+  // act on, and nobody acts on a consumption — the action it authorized is already running.
+  "approval.consumed",
   "approval.expired",
   "approval.re-requested",
   "provider.retry.scheduled",

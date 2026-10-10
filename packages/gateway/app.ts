@@ -6,9 +6,11 @@
 // and who may do it" and `GET /api/v1/tools` publishes that registry, but no route grants anything, because "an
 // interface may request, display, and relay; it may never grant" (`SECURITY.md` §6.1) would break at the first attempt
 // if a Gateway endpoint could wave a T3 through. The approval queue and its two §4.3 routes are in this build, and
-// they only *answer*: nothing here opens a request. The caller that opens one is M2's runtime loop, which is the party
-// that calls `policy.evaluate` and hands the result to the arbiter (D-084); until that loop exists a task that needs an
-// approval has no way to get one, and this build says so in `crabby status` rather than pretending otherwise. And there is no second listener: §2's loopback default is what
+// they only *answer*: nothing here opens a request, and no route drives a task. The party that opens one exists —
+// `packages/agent-runtime/loop.ts` calls `policy.evaluate` and hands the result to the arbiter (D-084, D-086) — but it
+// has no tools to run, no provider adapter to call and no runner here to start it, so a task created over HTTP is still
+// recorded and read back while nothing moves it, and `docs/ROADMAP.md` §4 names the three. Wiring a route to the loop
+// against the fake provider would be the demo this phase has refused to ship. And there is no second listener: §2's loopback default is what
 // `listen` is given, and `crabby gateway start` refuses a non-loopback host until pairing has something to protect.
 
 import { createApprovals } from "@crabby/agent-runtime";

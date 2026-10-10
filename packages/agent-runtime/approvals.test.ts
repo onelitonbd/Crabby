@@ -151,6 +151,14 @@ test("an approval is consumed by the action it bound, exactly once", () => {
   const used = h.consume(record.id);
   assert.ok(used.ok, JSON.stringify(used));
   assert.equal(used.ok && used.record.state, "consumed");
+  // The consumption is a state of the row, so it gets an event of its own. Until M2d's loop consumed one, `consume`
+  // returned `approval.answered` and a client watching the stream saw that frame twice for one decision — the first from
+  // whoever recorded the answer, the second from the runtime spending it — with nothing to tell the two apart (F-42).
+  assert.equal(
+    used.ok && used.event,
+    "approval.consumed",
+    "one event per state change, and `consumed` is a state (§6.3's `scope: once` mark)",
+  );
 
   const again = h.consume(record.id, T0 + 3_000);
   assert.ok(!again.ok);

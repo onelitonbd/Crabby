@@ -84,7 +84,7 @@ the F-08/F-10/F-11 pattern this set has been built to refuse.
 | `queued` | `planning`, `awaiting_approval`, `cancelling`, `failed`, `interrupted` | §3.1's Plan → Execute is the reason `running` is not reachable from here: nothing executes without a plan, even a one-step plan. A task may need approval before its first step, so `awaiting_approval` is |
 | `planning` | `awaiting_approval`, `running`, `cancelling`, `failed`, `interrupted` | The plan is what the executor consumes; `completed` is unreachable because a plan that finished describing work has not done it |
 | `awaiting_approval` | `running`, `planning`, `cancelling`, `failed`, `interrupted` | `running` only on an answer naming the action it approves (§5.3, D-052's `once` scope); `planning` because a denial that leaves other work possible re-plans rather than dies (§5.5, D-043's ladder) |
-| `running` | `completed`, `failed`, `cancelling`, `interrupted` | The only edge into `completed` in the whole table, and §6.1's step 6 is why `cancelled` is reached through `cancelling` and never from here |
+| `running` | `completed`, `awaiting_approval`, `failed`, `cancelling`, `interrupted` | The only edge into `completed` in the whole table, and §6.1's step 6 is why `cancelled` is reached through `cancelling` and never from here. `awaiting_approval` is D-087's amendment, and M2d's loop is what made it unavoidable: §5's rule 1 evaluates *every* action, so a task that executed one step and then meets a gated one must be able to ask again — as the table stood, a second approval in one task had no legal representation and the only way to request one was to fail or interrupt the task |
 | `cancelling` | `cancelled`, `failed`, `interrupted` | No `completed`: §6.1 allows the current step to finish, capture its output, and then **marks the task cancelled**, which is how a cancellation stays a cancellation. No return to `running`: "the runtime MUST NOT start another ordinary execution step merely because the current step completed after cancellation was requested" |
 | `completed`, `failed`, `cancelled` | — | Terminal and absorbing. §4.1's "distinguish successful completion from cancellation, failure, and incomplete execution" is only true at the end of a task's life if nothing moves it afterwards; a retry is a new task with its own history, not a resurrection |
 | `interrupted` | `queued`, `planning`, `awaiting_approval`, `running`, `cancelling`, `failed` | §7.1 restores "the latest valid task state" and §7.2 decides which of these is reachable for a given task: `running` is legal **only** when the recovery record carries a still-valid approval covering the step, which is why the edge exists in the table and is refused by the runtime otherwise. `completed` is not an option — a task that was interrupted did not complete |
@@ -188,6 +188,60 @@ The risk tiers and their per-tool assignment are decided (`SECURITY.md` §6, `PR
 once *across a restart* (`SECURITY.md` §17) — while approval **reuse** ("remember this") is decided as absent in v1
 (D-052); the two were one word in this paragraph until the table existed, and the sentence is now split so the second
 meaning cannot be read as the first. Policy configuration is one file in one format, `config.json`, whose schema is the artifact `crabby config schema --json` prints (D-060). What remains open in this area is a number, not a design: the timeout thresholds and escalation tuning that M2 sets against real usage. `SECURITY.md` owns the policy and threat-model definition.
+
+### 5.2 The loop that asks
+
+The arbiter answers; something has to ask. `packages/agent-runtime/loop.ts` is that something, and it lives in this
+package for the reason in D-003 — a rule the Gateway owns is a rule only the Gateway can follow. Per action it runs
+`PROVIDERS_AND_TOOLS.md` §4.4's pipeline in order (schema validation → capability check → tier/approval → execution),
+and the six rules above are its behaviour rather than its aspirations: it evaluates before executing (1), the request it
+opens carries §6.3's fields because `packages/policy` builds them (2), the request keeps its task and its binding (3),
+one approval is spent on one action (4), a denial is respected *and the model is told what was refused* so it can plan
+around a fact instead of guessing why nothing happened (5), and the action is re-evaluated at the moment of execution
+(6).
+
+Four properties of that last rule are worth stating, because each is a way the loop could have been written more
+conveniently and less safely:
+
+- **The approval is consumed before the action runs, never after.** The other order buys nothing — a failed execution
+  still spent its `once` (D-052) — and it costs a duplicate side effect if the process dies in between, which is what
+  §7.3 forbids. `consumed` is a state of the row, so it carries an event of its own rather than reusing `answered`.
+- **Policy is asked again at the moment of execution instead of being trusted from the moment the prompt was built.**
+  Two things can change while a prompt is open: the identity's grants — a `crabby auth revoke` landing mid-prompt has to
+  be honoured by *this* execution — and the tier, because §8's re-check after resolution means a path that resolves
+  outside the workspace is not the action that was signed. In both cases the signed row is left **unspent**: it expires
+  inside D-064's window, and per D-084 an approval the runtime never ran is not a refusal, so it does not count toward
+  the ladder below.
+- **A transaction is synchronous, so no effect happens inside one.** Each write phase commits a state and its events
+  together, and the provider call and the tool execution happen *between* phases — §5.1's pairing rule, and the reason a
+  stream never learns about a write that a rollback took back.
+- **The model is offered only the tools policy has cleared for this identity**, which is §4.4's rule applied to the offer
+  list and not only to the call: a model told about a tool its identity cannot use proposes it, and the user is then
+  shown a refusal for something they were never able to ask for. The withheld reasons are ordered by whether the reader
+  can act on them — no Termux on this device, and not shipped in this release, come before a grant the user could add,
+  because a reason that suggests a repair which cannot work is worse than no reason.
+
+**The ladder.** `SECURITY.md` §6.3 requires that repeated denial of the same class pause the task and surface it to the
+user rather than loop, and prices no number; D-086 prices it at **two refusals of the same tool in one task**. The
+arbiter reports the count and the loop decides what the count means, which is D-084's split kept intact. A pause is not
+a tenth state — the nine states of §4.1 are decided — so a paused task sits in `awaiting_approval`, the one non-terminal
+state that means "a human must act", with **no pending request in the queue** and a `task.progress` event naming the
+tool, the count, the reason and the next action. That last field is what makes a pause visible rather than mysterious:
+§7.2 requires a paused task to carry a clear, user-visible reason, and a state with an empty queue and no explanation is
+precisely the silence §6.3 forbids.
+
+The step budget is the other half of "rather than loop", and it counts a refused call as well as an executed one
+(`PROVIDERS_AND_TOOLS.md` §5.2, D-088): a budget that only counted executions would leave unbounded the exact case the
+pause exists for.
+
+What this loop does not have, and does not pretend to: **the retry-then-ask ladder** — a provider error fails the task
+and the `task.failed` event says that no retry was attempted, because D-043's five attempts inside D-064's schedule are
+their own slice; **§6's cancellation settle** — an abort moves the task to `cancelling` and stops, since §6.2's evidence
+about whether the operation stopped is the cancellation manager's to produce and `transition()` refuses the entry
+without it; **§8's context budgeting and compaction**; **a conversation store** — a run suspended at a prompt holds its
+messages in process memory, so a restart is §7.1's and §7.2's business rather than something the loop reconstructs; and
+**any tools at all**, because `ARCHITECTURE.md` §18's `packages/tools` does not exist yet. The executor is a seam, and
+the loop offers a model nothing an executor cannot run.
 
 ## 6. Cancellation Behavior
 

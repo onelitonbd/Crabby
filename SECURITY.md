@@ -227,7 +227,7 @@ in one place, individually revocable, unavailable for T3 entirely, and it must n
 action. This is the honest reading of the parity promise: approval fatigue (T-05) is better answered by asking less
 often — fewer, larger, reversible steps — than by pre-authorizing the dangerous ones.
 
-Denials are recorded and respected; the agent must not rephrase a denied action to obtain a different answer, and repeated denial of the same class should pause the task and surface it to the user rather than loop.
+Denials are recorded and respected; the agent must not rephrase a denied action to obtain a different answer, and repeated denial of the same class should pause the task and surface it to the user rather than loop. "Repeated" is priced in `AGENT_RUNTIME.md` §5.2 (D-086): two refusals of the same tool in one task, and the pause is a state a client can read — the task stays `awaiting_approval` with nothing in the queue and the reason in its event log — rather than a silence. What the arbiter reports and what the loop decides stay separate (D-084), so the count is a fact and the pause is a policy.
 
 ## 7. Secrets Handling
 

@@ -6,9 +6,12 @@
 >
 > **Reviewed:** 22 documents (16 planning at `*.md` and `docs/*.md`, 4 element inventories, the review index and
 > this file), most recently on 2026-10-10 — findings F-13…F-31 are from the six 2026-10-10 passes (the (R) round,
-> the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from), and
+> the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from),
 > F-32…F-36 from M1c's implementation pass, the first pass where a *generator* rather than a reader compared the
-> documents with the code, so every earlier finding has been re-checked against the documents as they now stand.
+> documents with the code, and F-37…F-43 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38), a rule
+> enforced without a document to cite (F-39), the checker's own arithmetic (F-40), and the three M2d's loop met when it
+> had to ask for numbers and vocabulary the plan had not priced (F-41…F-43). Every earlier finding has been re-checked
+> against the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
 > a scratch pad: every finding below is either fixed with a decision ID, or explicitly listed as still open.
@@ -682,6 +685,68 @@ longer matches, and no test reads prose. The command now queries `GET /approvals
 gets, with the same object in the `--json` document — the claim became a measurement, which is the only fix that cannot
 go stale again.
 
+### F-41 — §5.2 requires six limits and D-074's table priced two of them nowhere
+**Severity: medium, because the prose and the table were both right and the code needed one of them.**
+`PROVIDERS_AND_TOOLS.md` §5.2's opening sentence requires the core — citing `SECURITY.md` §12 for why the caller may not
+be trusted with it — to enforce "per-task step limit, wall-clock timeout, tool-call count, output bytes, parallel steps
+(D-023), provider request rate, and a token budget with an optional cost ceiling". D-074's table, which is where §5.2 says
+those numbers live ("every row is a `limits.*` key in `config.json`"), carries provider timeouts, three tool classes,
+SQLite's busy timeout, extension overhead, 2 parallel steps, 4 concurrent provider requests and 5 queued tasks. It
+carries **no row for a per-task step limit and none for a tool-call count**, and none for a per-task wall clock or a token
+budget either.
+
+M2d's loop was the first code that had to answer "how many steps", which turned a documentation gap into a blocker: an
+unbounded loop of refused proposals is exactly what `SECURITY.md` §6.3 forbids, and a bound written only in a source file
+is a number no document can overrule — F-39's shape one level down, since here the *rule* was documented and the *size*
+was not. Fixed by D-088: 25 steps per task, counting refused calls as well as executed ones, and 2 tool calls per
+completion — D-074's own parallel-steps number reused as a per-response cap rather than a second invention. Both rows are
+in §5.2's table, and the three limits that remain unpriced are named in the paragraph under it with the reason each one
+waits: a wall clock would have to exclude D-064's approval window (D-074 keeps the two clocks separate on purpose), and a
+token budget and cost ceiling need `AGENT_RUNTIME.md` §8's context accounting, which does not exist.
+
+The same class of gap, one row down: the table prices per-tool deadlines for **three** classes only, so
+`packages/agent-runtime`'s `toolDeadlineMs` answers for `fs.*`, `net.fetch` and `shell.run` and `undefined` for the other
+forty-odd tools in §4.2, and the loop publishes `deadlineMs: null` in `tool.execution.started` rather than inventing a
+number. The general rule this adds: **a prose list of what the core enforces and a table of numbers are two registers, and
+the difference between them is a blocker for whoever writes the core.** A generator could diff them the way
+`scripts/parity.ts` diffs §4.2's tier table, and that is left as a named arrival rather than built here — §5.2's list is a
+sentence, and a sentence is not yet a machine-readable register.
+
+### F-42 — The fifth approval state had no event, so one event was doing two jobs
+**Severity: low, and invisible until something consumed an approval.** `APPROVAL_STATES` has five members, and the fifth —
+`consumed` — is what D-052's `scope: once` means in a row. `docs/INTERFACES_AND_API.md` §5.2's `approval.*` family listed
+four types, and `packages/agent-runtime/approvals.ts` returned `approval.answered` for the consumption as well as for the
+answer. Nothing could see it while only the arbiter and the decision route existed: the route only *answers*, so the double
+use never appeared in one log. M2d's loop consumes, and a full cycle then wrote **two `approval.answered` frames for one
+decision** — the first meaning "a human approved this", the second "the runtime has now used it" — with nothing to tell a
+client which had happened. `AGENT_RUNTIME.md` §5.1's own rule ("a state change without its event is a lie in progress") is
+why that is a defect and not a cosmetic one.
+
+Fixed by adding the type rather than by suppressing the second event, because suppressing it would have left a state
+change unlogged: `approval.consumed` is in `EVENT_TYPES`, in §5.2's family row, and is what `consume` returns;
+`packages/agent-runtime/approvals.test.ts` asserts it at the arbiter and `loop.test.ts` asserts it in a full cycle, in
+order, before the action starts. It is deliberately **not** in `ACTIONABLE_EVENT_TYPES`: §5.2's rule is about events a
+client must act on, and nobody acts on a consumption — the action it authorized is already running. The general rule: a
+state list and an event list are two registers of one lifecycle, and when their lengths differ the shorter one is missing
+something rather than the longer one inventing it.
+
+### F-43 — A deferral the registry carries on a row no name-keyed lookup can reach
+**Severity: low, still open by choice, category: a table split by argument and a lookup keyed by name.** §4.2 gives
+`ext.install` two rows: "Content-only kinds." at T2, and the executable kind "Blocked in the first release regardless of
+tier (D-038)". `packages/policy`'s `resolveTool` answers **by name**, so it returns the first row — and `availability.ts`'s
+`deferralFor`, which correctly reads the deferral off the row's own note instead of keeping a second list, therefore never
+sees the blocked one. No argument rule covers the gap either: `escalation.ts` has nothing for `ext.install`. So an executor
+that declared `ext.install` today would be offered it, and a call carrying an executable kind would be *gated at T2*
+instead of blocked at D-038.
+
+Recorded rather than fixed, for two reasons. Nothing in this build declares an `ext.install` executor — `ARCHITECTURE.md`
+§18's `packages/tools` does not exist — so the gap is not reachable, and the honest fix is an argument-dependent rule in
+`escalation.ts` beside the §4.2 row that justifies it, which belongs with the extension tooling and not with M2d's loop.
+`packages/agent-runtime/loop.test.ts` pins what *is* reachable (`withheldReason("ext.install", …)` answers `undefined`
+when the identity holds the grant) with this finding named in the assertion message, so the day someone adds the executor
+the test that goes red is the one that says why. It is the same shape as F-33 and F-34: two documents or two rows
+disagreeing, recorded visibly instead of resolved by inference.
+
 ## 3. Checks That Passed
 
 | Check | Result |
@@ -700,7 +765,7 @@ go stale again.
 | Every item in an open-questions list cites the decision or section that owns it | ✓ (rule 15, added because of F-18; negative-tested by blanking a citation) |
 | The section 8 counters and the `P-` row arithmetic are printed by a tool, not remembered | ✓ (`scripts/count-inventory.py --register-counters`) |
 | `allowed-tools` in an imported skill cannot grant a privilege | ✓ (D-071, `EXTENSIONS.md` §4.3 — F-19) |
-| Documents compared with the code they describe (`scripts/parity.ts`, `npm run test:parity`) | ✓ (12 routes, 45 tool rows, 32 capabilities, 25 matrix rows, 67 CLI commands; it exists because of F-08/F-10/F-11 and it found F-32 and F-35 — the first two findings in this file that a prose-against-prose check could not have seen) |
+| Documents compared with the code they describe (`scripts/parity.ts`, `npm run test:parity`) | ✓ (it exists because of F-08/F-10/F-11 and it found F-32 and F-35 — the first two findings in this file that a prose-against-prose check could not have seen. What it compares is not quoted here any more: this row used to carry the counts, and they were two milestones stale by M2d, which is F-40's rule about a number printed away from the expression that produces it. `npm run test:parity` prints them.) |
 | Markdown tables are rectangular, so a generator reads the same row a human does | ✓ (rule 16, added because of F-21; 4 pre-existing rows fixed) |
 | A count written inside `docs/review/` equals the count the file's rows produce | ✓ (rule 18, added because of F-22) |
 | A count quoted by a summary document equals what the inventories hold today | ✓ (rule 18 widened because of F-24; negative-tested with three planted wrong figures) |

@@ -6,8 +6,9 @@
 // The Setup and Gateway rows of §7.1's table plus the `config` verbs D-074 and D-060 need. Everything else is
 // `planned`, so that `--help` can be honest about the difference instead of silently omitting it: a user who reads a
 // list of eleven commands should not have to guess whether the other forty exist somewhere else. A verb is promoted
-// here only when it has a route behind it — `task run` stays `planned` in M1b because an executor is M2's job, and a
-// command that created a task nothing would move would be a mock with an exit code.
+// here only when it has a route behind it — `task run` stays `planned` because the loop that would run it
+// (`packages/agent-runtime/loop.ts`) has no executor, no provider adapter and no Gateway runner, and a command that
+// created a task nothing would move would be a mock with an exit code.
 export interface CommandSpec {
   readonly noun: string;
   readonly verb?: string;
@@ -139,7 +140,8 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: "create a task and follow it (blocks; `--detach` for scripts)",
     flags: ["--json", "--detach"],
     status: "planned",
-    milestone: "M2 (the runtime that executes a task)",
+    milestone:
+      "M2 (the loop is in packages/agent-runtime; a runner, tools and a provider adapter are not)",
   },
   {
     noun: "chat",

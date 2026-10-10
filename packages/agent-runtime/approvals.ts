@@ -27,6 +27,7 @@ export type { ApprovalState } from "@crabby/api-contracts";
 export type ApprovalEventKind =
   | "approval.requested"
   | "approval.answered"
+  | "approval.consumed"
   | "approval.expired"
   | "approval.re-requested";
 
@@ -396,7 +397,11 @@ export function createApprovals(deps: {
       }
       record.state = "consumed";
       record.consumedAt = at;
-      return commit(record, "approval.answered");
+      // `approval.consumed`, not a second `approval.answered`: the answer was already logged by whoever recorded it
+      // (the §4.3 decision route, or a TUI calling this same arbiter), and one event per state change is the rule this
+      // module exists to keep. Reusing `answered` here is what F-42 found — a client watching the stream saw two
+      // identical frames and could not tell "the user approved this" from "the runtime has now used it".
+      return commit(record, "approval.consumed");
     },
 
     sweep(at) {

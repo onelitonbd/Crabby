@@ -81,7 +81,12 @@ export async function runStatus(layout: DataLayout, renderer: Renderer): Promise
     renderer.line(
       "approvals",
       pending.count === 0
-        ? "nothing waiting — requests are opened by M2's runtime loop, which lands after this slice"
+        ? // The line used to end "— requests are opened by M2's runtime loop, which lands after this slice", and the loop
+          // has now landed (`packages/agent-runtime/loop.ts`), so the claim went stale exactly the way F-40 describes: no
+          // test reads a prose string, and a user does not check a screen that says nothing is waiting. What is left is the
+          // measurement and nothing else. Which party opens a request is `AGENT_RUNTIME.md` §5.2's business, not a status
+          // line's, and a sentence about the build in an output line outlives the build.
+          "nothing waiting"
         : `${pending.count} waiting · ${pending.items
             .map((item) => `${item.request.tier} ${item.request.tool}`)
             .join(", ")}`,

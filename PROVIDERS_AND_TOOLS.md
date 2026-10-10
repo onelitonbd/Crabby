@@ -444,6 +444,16 @@ interface:
 | Parallel tool steps in one task | 2 | More than two on a phone trades wall-clock time for memory pressure. |
 | Concurrent provider requests | 4 | Per Gateway, shared by all interfaces. |
 | Queued tasks | 5 | `task run` refuses past that, with the count in the message; a silently growing queue is a leak with good manners. |
+| Per-task steps | 25 | Tool calls through the gate, executed **or refused** (D-088). A budget that counted only executions would leave unbounded the loop `SECURITY.md` §6.3 forbids. |
+| Tool calls per completion | 2 | The parallel-steps row above, reused as a per-response cap rather than invented twice (D-088): a completion proposing three is asking for parallelism the device budget does not have. |
+
+Three of the limits this section's opening sentence requires still have **no number**, and they are recorded rather than
+priced by guess (F-41): a per-task wall clock, which would have to exclude D-064's approval window because the two
+clocks are separate by D-074 and a task paused for a human is not a task that is running long; and a token budget and an
+optional cost ceiling, which both need `AGENT_RUNTIME.md` §8's context accounting and cannot be enforced before it
+exists. The per-tool deadlines below are enforced for the three classes this table prices — `fs.*`, `net.fetch`,
+`shell.run` — and a tool in no class runs under cancellation alone, with `deadlineMs: null` in its
+`tool.execution.started` event so the absence is visible instead of implied.
 
 Every row is a `limits.*` key in `config.json` — readable with `crabby config get limits`, editable in the same screen
 as the output caps (`docs/review/WEB.md` W11-07) so there is one place where the machine's budget lives. Two clocks stay

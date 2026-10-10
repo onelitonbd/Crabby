@@ -201,13 +201,16 @@ Event families (initial set):
 | `task.*` | `created`, `planning.updated`, `state.changed`, `progress`, `completed`, `failed`, `cancelled`, `resumed`, `interrupted` |
 | `message.*` | `added`, `stream.started`, `stream.delta`, `stream.completed`, `stream.aborted` |
 | `tool.*` | `call.proposed`, `execution.started`, `execution.output`, `execution.completed`, `execution.failed`, `execution.blocked` |
-| `approval.*` | `requested`, `answered`, `expired`, `re-requested` |
+| `approval.*` | `requested`, `answered`, `consumed`, `expired`, `re-requested` |
 | `provider.*` | `retry.scheduled`, `retry.attempt`, `switch.proposed`, `switch.accepted` (feeds the §4.3 ladder) |
 | `extension.*` | `validate.started`, `validate.completed`, `installed`, `suspended`, `uninstalled` |
 | `system.*` | `ready`, `shutting-down`, `restarted`, `tunnel.started`, `tunnel.stopped`, `vault.locked`, `vault.unlocked` |
 
 Rules:
 
+- One event per state change, and one state change per event. `approval.consumed` exists because the row's fifth state
+  is a change of its own: reusing `answered` for it gave a client two identical frames for one decision, with nothing to
+  say which had happened (F-42).
 - Payload size cap with a truncation marker; large tool output is referenced by id, not inlined.
 - Events are informative records, never authorization grants (`ARCHITECTURE.md` §7).
 - Anything a client must act on (approval request, cancellation settled, task terminal state) must also be

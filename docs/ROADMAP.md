@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-40 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-43 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -185,10 +185,22 @@ that arrives as an event whether or not an answer arrived with it. Its persisten
 schema version 2 is the `approval` table, `packages/storage/approvals.ts` implements the arbiter's `ApprovalStore`
 seam, and the queue and the decision are `GET /approvals` and `POST /api/v1/approvals/{id}/decision` — a route over a
 table nobody had written would have been a demo, so the table came first. Writing it against §6.2 also surfaced that
-the tier-a-surface-may-sign rule had no document at all, which is F-39 and D-085. The loop that *opens* a request when
-a task reaches a gated action is the next thing, with cancellations and checkpoints as the remaining M2 managers; they
+the tier-a-surface-may-sign rule had no document at all, which is F-39 and D-085. The loop that *opens* a request when a task
+reaches a gated action landed next, in the same package: `packages/agent-runtime/loop.ts` runs §4.4's pipeline per action,
+hands the request to the arbiter, consumes the approval at the moment of execution, and drives the task through D-083's
+machine — which needed one amendment to do it (D-087: `running` → `awaiting_approval`, because §5's rule 1 evaluates every
+action and the table could not express a second approval in one task). Writing it against the plan is what priced the two
+limits §5.2 required and D-074 had not (D-088, F-41), what decided that "repeated denial" means two refusals and that a
+pause is a readable state rather than a silence (D-086), and what found the fifth approval state had no event of its own
+(F-42). Its harness runs a whole task end-to-end against the fake provider — plan, allowed step, gated step, answer,
+consumption, completion — and `loop.test.ts` asserts the sentences rather than the trace.
+Cancellations, checkpoints and the retry-then-ask ladder are the remaining M2 managers; they
 land in `packages/agent-runtime` rather than in the Gateway for the reason in D-003: a
-rule the Gateway owns is a rule only the Gateway can follow.
+rule the Gateway owns is a rule only the Gateway can follow. **Still absent, and the reason `crabby task run` is not
+`ready`:** the loop has no tools to run (`ARCHITECTURE.md` §18's `packages/tools` does not exist, so the executor is a
+seam), no provider adapter to call (`PROVIDERS_AND_TOOLS.md` §3.3's four arrive in M2/M4, and the fake is a test
+reference rather than a product provider), and nothing in the Gateway that drives a task — a route that started a run
+against a fake provider would be the demo this phase has refused to ship.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

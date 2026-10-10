@@ -1,7 +1,12 @@
 // The task repository. `docs/DATA_AND_MEMORY.md` §6's first principle is "persist critical task state transitions
 // before reporting them as durably recorded", so every write here completes before its caller answers — the whole
 // reason this is synchronous SQLite rather than a fire-and-forget cache.
-import { newId, type TaskRecord, type TaskState } from "@crabby/api-contracts";
+import {
+  newId,
+  type TaskCancellation,
+  type TaskRecord,
+  type TaskState,
+} from "@crabby/api-contracts";
 import type { SqliteDb } from "./db.ts";
 
 export interface CreateTaskInput {
@@ -18,7 +23,7 @@ export interface ListTasksOptions {
   readonly sessionId?: string | undefined;
 }
 
-const SELECT = `SELECT id, session_id, state, objective, created_at, updated_at, last_seq, error_code, error_message FROM task`;
+const SELECT = `SELECT id, session_id, state, objective, created_at, updated_at, last_seq, error_code, error_message, cancellation_json FROM task`;
 
 type Row = {
   id: string;
@@ -30,6 +35,7 @@ type Row = {
   last_seq: number;
   error_code: string | null;
   error_message: string | null;
+  cancellation_json: string | null;
 };
 
 export function createTask(db: SqliteDb, input: CreateTaskInput): TaskRecord {
@@ -85,22 +91,40 @@ export function listTasks(
   };
 }
 
+export interface SetStateOptions {
+  readonly now?: string;
+  /** The failure a client reads on `GET /tasks/{id}`. Omitting it clears whatever a previous state left, which is what the
+   *  columns do: a task that moves out of `failed` should not keep a reason for a state it is no longer in. */
+  readonly error?: { code: string; message: string };
+  /** §6.2's evidence, written once by the settle (F-46, D-089). Omitting it leaves what is there alone, because the only
+   *  writer is the cancellation manager and no other state move has an opinion about it. */
+  readonly cancellation?: TaskCancellation;
+}
+
 export function setState(
   db: SqliteDb,
   id: string,
   state: TaskState,
-  now = new Date().toISOString(),
-  error?: { code: string; message: string },
+  options: SetStateOptions = {},
 ): boolean {
+  const now = options.now ?? new Date().toISOString();
   const result = db
     .prepare(
-      `UPDATE task SET state = ?, updated_at = ?, error_code = ?, error_message = ?
+      `UPDATE task SET state = ?, updated_at = ?, error_code = ?, error_message = ?,
+                       cancellation_json = COALESCE(?, cancellation_json)
        WHERE id = ? AND state <> ?`,
     )
-    .run(state, now, error?.code ?? null, error?.message ?? null, id, state);
+    .run(
+      state,
+      now,
+      options.error?.code ?? null,
+      options.error?.message ?? null,
+      options.cancellation === undefined ? null : JSON.stringify(options.cancellation),
+      id,
+      state,
+    );
   return result.changes > 0;
 }
-
 export function setLastSeq(db: SqliteDb, id: string, seq: number): void {
   db.prepare("UPDATE task SET last_seq = ?, updated_at = ? WHERE id = ? AND last_seq < ?").run(
     seq,
@@ -130,5 +154,8 @@ function toRecord(row: Row): TaskRecord {
     ...(row.error_code === null || row.error_message === null
       ? {}
       : { error: { code: row.error_code, message: row.error_message } }),
+    ...(row.cancellation_json === null
+      ? {}
+      : { cancellation: JSON.parse(row.cancellation_json) as TaskCancellation }),
   };
 }

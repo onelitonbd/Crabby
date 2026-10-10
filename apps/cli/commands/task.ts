@@ -69,6 +69,21 @@ export async function runTask(
       renderer.line("created", task.createdAt);
       renderer.line("updated", task.updatedAt);
       if (task.error) renderer.line("error", `${task.error.code}: ${task.error.message}`);
+      // §10.1 asks this screen for "cancellation or recovery status", and §6.2's evidence is on the record now (F-46,
+      // D-091), so the line prints the two facts a user has to judge rather than the word "cancelled" alone: whether the
+      // operation stopped, and whether an external effect may already have happened. The `--json` document carries the
+      // whole object because it spreads the record, which is the same fact in both renderings.
+      if (task.cancellation)
+        renderer.line(
+          "cancelled",
+          `${task.cancellation.mode} · ${
+            task.cancellation.terminated ? "confirmed stopped" : "may still be running"
+          } · ${
+            task.cancellation.effectsUncertain
+              ? "external effects uncertain"
+              : "no external effect in doubt"
+          }`,
+        );
       const events = await connection.client.taskEvents(id, Math.max(0, task.lastSeq - 9));
       const listed = (
         events.body as { items: { id: string; seq: number; type: string; ts: string }[] }

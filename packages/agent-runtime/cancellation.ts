@@ -30,13 +30,17 @@ import {
   type ClientInterface,
   type Event,
   isTerminal,
+  type TaskCancellation,
   type TaskRecord,
 } from "@crabby/api-contracts";
 import { createPhaseWriter, type PhaseWriter, type TaskJournal } from "./journal.ts";
 
-/** §6.1's policy versus §6.2's override. The names are the document's: "Finish the Current Step" and the
- *  safety-critical intervention that must override it. */
-export type CancellationMode = "finish-step" | "immediate";
+// The mode *names* are the contract's, because `TaskCancellation.mode` and the body a cancellation route will someday
+// validate have to agree with them — the same split `approvals.ts` makes for `ApprovalState`. §6.1's policy and §6.2's
+// override are the two names; D-090 is the rule about what each one costs.
+export type { CancellationMode } from "@crabby/api-contracts";
+
+import type { CancellationMode } from "@crabby/api-contracts";
 
 export interface CancellationRequest {
   readonly taskId: string;
@@ -278,8 +282,22 @@ export function createCancellation(deps: CancellationDeps): Cancellation {
     }
     const recorded = requests.get(task.id);
     const { evidence } = input;
+    // F-46's fix: §6.2 says the uncertainty is recorded "on the task", and an event is not the task. So one phase writes
+    // both — the record a client reads when it polls `GET /tasks/{id}`, and the event that says when it happened — and a
+    // reader of either gets the two booleans, the mode, who asked, and what was in flight.
+    const onRecord: TaskCancellation = {
+      mode: recorded?.mode ?? "finish-step",
+      requestedAt: new Date(recorded?.requestedAt ?? at).toISOString(),
+      settledAt: new Date(at).toISOString(),
+      terminated: evidence.terminated,
+      effectsUncertain: evidence.effectsUncertain,
+      inFlight: evidence.inFlight,
+      ...(recorded?.byClientId === undefined ? {} : { by: recorded.byClientId }),
+      ...(recorded?.reason === undefined ? {} : { reason: recorded.reason }),
+    };
     phase(task.id, input.correlationId, (emit) => {
       move(task, "cancelled", { cancellation: evidence }, emit, at, {
+        cancellation: onRecord,
         payload: {
           // §6.2's requirement is that the uncertainty is recorded *on the task*, so it travels with the event and with
           // the record rather than living only in the outcome a caller happened to keep.

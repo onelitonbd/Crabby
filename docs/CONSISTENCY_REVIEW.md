@@ -799,12 +799,21 @@ the step — which satisfies §5.2's recovery rule ("anything a client must act 
 task record alone learns that the task was cancelled and not whether an external effect is in doubt, which is the fact
 §7.3 says must never be resolved by blindly re-executing.
 
-Not fixed in this slice because the honest fix is a schema change and not a sentence: `TaskRecord` would gain a
+Not fixed in that slice because the honest fix was a schema change and not a sentence: `TaskRecord` would gain a
 `cancellation` object, `packages/storage` a migration to v3 with a column to hold it, `crabby task show` and
 `GET /tasks/{id}` a line each, and §4.1's tool-record vocabulary a decision about where `sideEffects` eventually comes
-from. That is a slice of its own with a review surface of its own, and doing it inside a cancellation slice would have put
-a migration and a contract change in the same commit as the behaviour they serve. §6.2 now says what is true today and
-what is owed, so the gap is in the document a reviewer reads rather than in a code comment.
+from. That was a slice of its own with a review surface of its own, and doing it inside a cancellation slice would have put
+a migration and a contract change in the same commit as the behaviour they serve. §6.2 said what was true then and what was
+owed, so the gap lived in the document a reviewer reads rather than in a code comment.
+
+*(Closed in the next slice, as intended: D-091 is `TaskRecord.cancellation` and schema version 3's `cancellation_json`
+column, written once at the settle, read back by `GET /tasks/{id}` and printed by `crabby task show` as two facts a user can
+judge — whether the operation stopped, and whether an external effect is in doubt. What made it more than a column is
+`packages/storage/journal.ts`, the runtime's write seam over the real database: `packages/storage/journal.test.ts` now runs a
+whole gated task against SQLite, with the arbiter's rows committing in the same transaction as the task's events, and
+reopens the file afterwards to prove the outcome and every event that carried it survived. The one part of F-46 still open is
+the half that was never this finding's to close: `sideEffects` remains in `PENDING_RECORD_FIELDS`, so `effectsUncertain` is
+`true` for every tool step until a tool declares otherwise.)*
 
 ## 3. Checks That Passed
 

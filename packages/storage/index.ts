@@ -8,6 +8,7 @@ export * from "./clients.ts";
 export * from "./db.ts";
 export * from "./events.ts";
 export * from "./idempotency.ts";
+export * from "./journal.ts";
 export * from "./migrate.ts";
 export * from "./scratch.ts";
 export * from "./tasks.ts";

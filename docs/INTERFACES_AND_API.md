@@ -215,9 +215,9 @@ Rules:
 - Events are informative records, never authorization grants (`ARCHITECTURE.md` §7).
 - Anything a client must act on (approval request, cancellation settled, task terminal state) must also be
   retrievable by polling `GET /tasks/{id}` — a client that missed the event must still see the truth (§5.4). The
-  cancellation half of that rule is only partly met today: `task.cancelled` carries `AGENT_RUNTIME.md` §6.2's evidence in
-  its payload, and `TaskRecord` has no field for it, so a client that reads only `GET /tasks/{id}` learns that the task
-  was cancelled and not whether an external effect is in doubt (F-46).
+  cancellation half of that rule is met in both places: `task.cancelled` carries `AGENT_RUNTIME.md` §6.2's evidence in its
+  payload, and `TaskRecord.cancellation` carries it on the record, so a client that reads only `GET /tasks/{id}` learns
+  whether the operation stopped and whether an external effect is in doubt (D-091, closing F-46).
 - A cancellation *request* needs no event type of its own: it is a move into `cancelling`, so it travels as
   `task.state.changed` with the mode, the requester and the reason in the payload, and `task.cancelled` is the settle
   (§6.1's steps 1 and 6).

@@ -110,6 +110,19 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // F-46's fix: §6.2 requires the cancellation uncertainty to be recorded *on the task*, and until this migration the
+    // only place it lived was the `task.cancelled` event — durable, per-task and retrievable, but not on the record a
+    // client reads when it polls `GET /tasks/{id}`. One JSON column rather than five, for the reason `approval`'s
+    // `request_json` has: no query needs these fields apart, and a column nobody filters on is cheap to move later.
+    version: 3,
+    name: "task-cancellation",
+    up(db) {
+      db.exec(`
+        ALTER TABLE task ADD COLUMN cancellation_json TEXT;
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

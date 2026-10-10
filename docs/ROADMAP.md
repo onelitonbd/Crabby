@@ -205,9 +205,10 @@ rule the Gateway owns is a rule only the Gateway can follow. **Still absent, and
 cancellation route are not `ready`:** the loop has no tools to run (`ARCHITECTURE.md` §18's `packages/tools` does not
 exist, so the executor is a seam), no provider adapter to call (`PROVIDERS_AND_TOOLS.md` §3.3's four arrive in M2/M4, and
 the fake is a test reference rather than a product provider), and nothing in the Gateway that drives a task — so a route
-that started a run, or one that cancelled a run nobody started, would be the demo this phase has refused to ship. F-46 is
-the debt this phase owes itself: §6.2 wants the cancellation evidence on the task record, and the record has no field for
-it yet.
+that started a run, or one that cancelled a run nobody started, would be the demo this phase has refused to ship. F-46 was the debt that slice
+named, and the next one closed it: schema version 3 is the `cancellation_json` column, `TaskRecord.cancellation` is the
+contract, `packages/storage/journal.ts` is the runtime's write seam over the real database, and `crabby task show` prints
+whether the operation stopped and whether an external effect is in doubt (D-091).
 
 ## 5. Phase M3 — Four interfaces in parallel
 

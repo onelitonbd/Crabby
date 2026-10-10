@@ -301,11 +301,13 @@ as `effectsUncertain: false` — a completion request affects nothing on the use
 prompt it was already sent — and because that is a classification rather than a measurement, `inFlight` travels in the
 event payload beside both booleans, so a reader who disagrees can see which judgement was made.
 
-The evidence is written once, by the manager, into the `task.cancelled` event. §6.2's "recorded explicitly **on the
-task**" is not yet satisfied in the strict sense — `TaskRecord` has no field for it and adding one is a schema change
-(F-46) — and what is true today is the weaker, durable version: the fact is per-task, append-only, and retrievable by
-polling `GET /tasks/{id}/events`, which is §5.2's recovery rule. What is owed is the record channel, so a client reading
-only `GET /tasks/{id}` sees it.
+The evidence is written once, by the manager, into **both** places a reader looks: the `task.cancelled` event, and
+`TaskRecord.cancellation` on the task itself (D-091, closing F-46). The second is the one §6.2's wording asks for and
+§5.2's recovery rule needs — a client that missed the event polls `GET /tasks/{id}`, and a client that has to read the
+event log to learn whether an external effect is in doubt is a client one step from re-running the action, which §7.3
+prohibits. It is written at the settle and is absent while the task is merely `cancelling`, because the state already says
+a request was recorded and the evidence does not exist until the step in flight has settled: a record showing
+`terminated: false` before anything had terminated would be a guess in a field a user reads.
 
 Safety-critical intervention MUST override the normal finish-current-step behavior when continuing an operation would create unacceptable harm or leak sensitive data.
 

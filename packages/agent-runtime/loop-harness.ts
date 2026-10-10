@@ -232,12 +232,13 @@ function createMemoryJournal(input: {
   let inTransaction = false;
   const journal: TaskJournal = {
     task: () => record,
-    setState: (taskId, state, error) => {
+    setState: (taskId, state, patch) => {
       if (taskId !== record.id)
         throw new Error(`the harness journal holds one task, not ${taskId}`);
-      // Rebuilt field by field rather than spread, because `packages/storage`'s `setState` writes the error columns on
-      // every call: a move that carries no error clears the one a previous state left, and a record that kept it would
-      // show a reason for a state that no longer has one.
+      // Rebuilt field by field rather than spread, and with the two different omission rules `packages/storage`'s
+      // `setState` has: a move that carries no error *clears* the one a previous state left, because a record keeping a
+      // reason for a state it is no longer in is a reason nobody can act on; a move that carries no cancellation *keeps*
+      // the one that is there, because only the settle writes it and it is written once (F-46).
       record = {
         id: record.id,
         sessionId: record.sessionId,
@@ -246,7 +247,12 @@ function createMemoryJournal(input: {
         state,
         updatedAt: new Date(input.clock.now()).toISOString(),
         lastSeq: record.lastSeq,
-        ...(error === undefined ? {} : { error }),
+        ...(patch?.error === undefined ? {} : { error: patch.error }),
+        ...(patch?.cancellation === undefined
+          ? record.cancellation === undefined
+            ? {}
+            : { cancellation: record.cancellation }
+          : { cancellation: patch.cancellation }),
       };
       states.push(state);
     },

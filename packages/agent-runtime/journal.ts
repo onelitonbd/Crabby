@@ -16,7 +16,14 @@
 // `transact`/`setState`/`appendEvent` without distortion, and a harness can implement them over Maps — the same shape as
 // the arbiter's `ApprovalStore` (D-084), and for the same reason: the runtime zone owns the abstraction, so an adapter
 // imports it rather than the other way round (`ARCHITECTURE.md` §19).
-import type { ErrorClass, Event, EventType, TaskRecord, TaskState } from "@crabby/api-contracts";
+import type {
+  ErrorClass,
+  Event,
+  EventType,
+  TaskCancellation,
+  TaskRecord,
+  TaskState,
+} from "@crabby/api-contracts";
 import { type TransitionEvidence, transition } from "./transitions.ts";
 
 export interface JournalEventInput {
@@ -29,12 +36,17 @@ export interface JournalEventInput {
 
 export interface TaskJournal {
   readonly task: (taskId: string) => TaskRecord | undefined;
-  /** Writes the state the caller has already checked against `transition()`; the error is the one `GET /tasks/{id}`
-   *  shows, and omitting it clears whatever a previous state left, because that is what the columns do. */
+  /** Writes the state the caller has already checked against `transition()`, plus the two things a record carries that an
+   *  event cannot: the failure a client reads on `GET /tasks/{id}`, and §6.2's cancellation evidence (F-46). Omitting
+   *  `error` clears whatever a previous state left, because that is what the columns do; omitting `cancellation` leaves
+   *  what is there alone, because only the settle has an opinion about it. */
   readonly setState: (
     taskId: string,
     state: TaskState,
-    error?: { code: string; message: string },
+    record?: {
+      error?: { code: string; message: string };
+      cancellation?: TaskCancellation;
+    },
   ) => void;
   /** Appends and returns the event with its `seq`, so the caller publishes the frame that was actually stored. */
   readonly append: (input: JournalEventInput) => Event;
@@ -58,6 +70,15 @@ export class RuntimeError extends Error {
   }
 }
 
+/** What a move may write beside the state: the two record fields a client reads on `GET /tasks/{id}`, and the payload the
+ *  event carries. Kept as a named type because three modules pass it and a fourth shape would be a fourth opinion. */
+export interface MoveRecord {
+  readonly error?: { code: string; message: string };
+  /** §6.2's evidence, on the record as well as in the event (F-46). */
+  readonly cancellation?: TaskCancellation;
+  readonly payload?: Record<string, unknown>;
+}
+
 export interface FailedTask {
   readonly task: TaskRecord;
   readonly code: string;
@@ -68,15 +89,15 @@ export interface PhaseWriter {
   /** One transaction: every row and event this step owes, committed together and published after. The staged list is why
    *  `publish` cannot be called from inside `body`. */
   phase<T>(taskId: string, correlationId: string | undefined, body: (emit: Emit) => T): T;
-  /** Asks the machine and writes both halves of the answer. `record.error` is what `GET /tasks/{id}` shows;
-   *  `record.payload` is what the event carries beside `from` and `to`. */
+  /** Asks the machine and writes both halves of the answer. `record.error` and `record.cancellation` are what
+   *  `GET /tasks/{id}` shows; `record.payload` is what the event carries beside `from` and `to`. */
   move(
     task: TaskRecord,
     to: TaskState,
     evidence: TransitionEvidence,
     emit: Emit,
     at: number,
-    record?: { error?: { code: string; message: string }; payload?: Record<string, unknown> },
+    record?: MoveRecord,
   ): void;
   /** Reads the record rather than trusting one a caller carried here: a provider call is an `await`, and another client
    *  can move a task during it. */
@@ -123,7 +144,7 @@ export function createPhaseWriter(deps: {
     evidence: TransitionEvidence,
     emit: Emit,
     at: number,
-    record?: { error?: { code: string; message: string }; payload?: Record<string, unknown> },
+    record?: MoveRecord,
   ): void {
     const result = transition(task.state, to, evidence);
     if (!result.ok) {
@@ -134,7 +155,16 @@ export function createPhaseWriter(deps: {
           `refused: ${result.reason}`,
       });
     }
-    journal.setState(task.id, to, record?.error);
+    journal.setState(
+      task.id,
+      to,
+      record === undefined || (record.error === undefined && record.cancellation === undefined)
+        ? undefined
+        : {
+            ...(record.error === undefined ? {} : { error: record.error }),
+            ...(record.cancellation === undefined ? {} : { cancellation: record.cancellation }),
+          },
+    );
     emit(result.event, { from: result.from, to: result.to, ...(record?.payload ?? {}) }, at);
   }
 

@@ -137,7 +137,7 @@ The names are here because a name that lives only in code is a name an interface
 | File | Mode | What it is |
 | --- | --- | --- |
 | `config.json` | `0644` | Overrides only; the defaults stay in code (D-074). `AGENTS.md` names this file, so it is listed for completeness. |
-| `crabby.sqlite3` | `0600` dir-inherited | One database: tasks, events, client identities, pairing codes, idempotency records, and the approval queue (§6.3, schema version 2). `journal_mode = WAL`, `busy_timeout` from `limits.sqliteBusyTimeoutMs` (D-074). |
+| `crabby.sqlite3` | `0600` dir-inherited | One database: tasks (including §6.2's cancellation evidence, schema version 3), events, client identities, pairing codes, idempotency records, and the approval queue (§6.3, schema version 2). `journal_mode = WAL`, `busy_timeout` from `limits.sqliteBusyTimeoutMs` (D-074). |
 | `crabby.sqlite3-wal`, `crabby.sqlite3-shm` | — | SQLite's own siblings, present while a writer is open. Online backup takes a checkpoint first. |
 | `scratch/<taskId>/` | `0700` | Overflow for a payload past D-064's 64 KiB inline cap, named `<eventId>.json`, pruned at startup past 24 h with the removal logged. One directory per task so a completed task's bytes leave as a unit. |
 | `vault/` | `0700` | D-066's secret store; the only directory whose contents may be referenced by name and never by value in a log line. |
@@ -152,7 +152,11 @@ The architecture should separate data access from the database engine.
 Proposed repository boundaries:
 
 - Conversation repository.
-- Task and checkpoint repository.
+- Task and checkpoint repository — the task half is implemented twice over: `tasks.ts` for the record and
+  `journal.ts` for the runtime's write seam, which is `TaskJournal` from `packages/agent-runtime` implemented the way
+  §19 wants an adapter to implement an abstraction (`transact`/`setState`/`appendEvent` behind four synchronous methods,
+  so the runtime's write phases commit a state and its events together). The checkpoint half is still nobody's, and
+  `AGENT_RUNTIME.md` §6.1's settle event says so rather than implying one was written.
 - Event repository.
 - Approval repository — implemented as `packages/storage/approvals.ts`, which is `SECURITY.md` §6.3's row plus §17's
   restart property, and which *implements* `ApprovalStore` from `packages/agent-runtime` rather than defining it

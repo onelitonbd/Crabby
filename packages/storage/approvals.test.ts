@@ -279,13 +279,18 @@ describe("upgrading", () => {
     // written. The point is that the next start adds a table and disturbs nothing, because the alternative reading of
     // §2.6 is "upgrade = re-install", and on a phone that means losing the task history that outlives an approval.
     const { db, close } = fileDb();
-    db.exec("DELETE FROM schema_migration; DROP TABLE approval");
+    // Undoing *this* milestone's migration means undoing every migration after it too: a real v1 file has no `approval`
+    // table and no `cancellation_json` column, and a fixture that left the column in place would fail v3's ALTER TABLE
+    // for a reason no upgrade would ever meet.
+    db.exec(
+      "DELETE FROM schema_migration; DROP TABLE approval; ALTER TABLE task DROP COLUMN cancellation_json",
+    );
     db.prepare("INSERT INTO schema_migration (version, name, applied_at) VALUES (1, ?, ?)").run(
       MIGRATIONS[0]?.name ?? "v1",
       new Date(0).toISOString(),
     );
     const task = createTask(db, { objective: "survives the upgrade" });
-    assert.deepEqual(migrate(db), { applied: [2], version: 2 });
+    assert.deepEqual(migrate(db), { applied: [2, 3], version: 3 });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,
       1,

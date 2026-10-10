@@ -159,7 +159,11 @@ describe("gateway over http", () => {
     // `crabby.sqlite3` row says the same thing. A migration therefore cannot land quietly — it moves the ledger here and
     // in the document, or one of the two goes red, which is the only mechanism that keeps "what schema is this file
     // on?" answerable by someone holding a phone and a backup.
-    assert.equal(body.storage.schemaVersion, 2, "M2's `approval` table advanced the ledger from 1");
+    assert.equal(
+      body.storage.schemaVersion,
+      3,
+      "M2's `approval` table advanced the ledger from 1 to 2, and §6.2's cancellation column (D-091) from 2 to 3",
+    );
   });
 
   it("reports readiness over exactly §4.1's five subsystems", async () => {

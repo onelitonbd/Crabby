@@ -1,0 +1,194 @@
+# Crabby — Roadmap
+
+> **Document status:** Planning draft. This is the ordered path from finished documentation to a usable release.
+> Each phase has an **entry gate** and an **exit gate**; a phase is not "done" because its code exists, only when
+> its exit gate passes.
+>
+> **Related:** `PROJECT_BRIEF.md` §14, `ARCHITECTURE.md` §22, `DECISIONS.md` §8
+
+## 0. Current Position
+
+```
+Documentation ────────────────────────────► [YOU ARE HERE: M-D review] ─► M0 ─► M1 ─► M2 ─► …
+ PROJECT_BRIEF ✓   ARCHITECTURE ✓   AGENT_RUNTIME ✓   SECURITY ✓   EXTENSIONS ✓
+ PROVIDERS_AND_TOOLS ✓   DECISIONS ✓ (47 accepted · 45 open)   README ✓
+ docs/  DATA_AND_MEMORY ✓   INTERFACES_AND_API ✓   UI_UX_SPEC ✓   DESIGN_SYSTEM ✓
+        ROADMAP ✓   DEVELOPMENT ✓            AGENTS.md ✓
+```
+
+All 15 planning documents now exist. What remains in this phase is the **consistency review** (M-D below) and
+closing or consciously deferring the six implementation-blocking decisions in §11.
+
+Implementation has not started, and no phase below is authorized to start until the documentation phase closes
+with the consistency review (M-D) and the owner accepts the decisions marked **blocking** in §6.
+
+## 1. Phase M-D — Documentation close-out
+
+**Goal:** the planning set is complete, consistent, and usable as instructions for a coding agent.
+
+| Item | Detail |
+| --- | --- |
+| Entry | This document, `docs/DEVELOPMENT.md`, `AGENTS.md` written. |
+| Work | Cross-document review of all planning files; resolve terminology drift; verify every acceptance criteria list is checkable; ensure each open decision has an owner-visible status. |
+| Exit | `python3 scripts/check-docs.py` clean; every `Accepted` decision reflected in the doc that enforces it; no document claims implementation; the four blocking decisions in §6 are closed or explicitly deferred with a stated consequence. |
+| Deliberately not here | Any product code, any package, any dependency installation. |
+
+## 2. Phase M0 — Termux validation prototype
+
+**Goal:** prove the riskiest assumptions with throwaway code, before anything is built on top of them. This is
+the phase that prevents an expensive rewrite; `ARCHITECTURE.md` §22 makes it an architecture acceptance condition.
+
+| # | Probe | Pass condition |
+| --- | --- | --- |
+| P1 | Node.js LTS install + `npm install` + a plain TS build on Termux | Installs and runs from a clean Termux; no glibc-only assumption |
+| P2 | Fastify Gateway binding `127.0.0.1`, one `GET /health`, one SSE stream | Streams to a local client; survives a forced process kill and restarts cleanly |
+| P3 | Storage: `better-sqlite3` source build, WAL, crash-during-write | Reproduces the report in `DECISIONS.md` §5 on a clean environment; `integrity_check` ok; compare against `node:sqlite` for the same case |
+| P4 | React + Vite production build served by the Gateway | Built assets load from a phone browser at 360px; no dev server required |
+| P5 | TUI library candidate at 40 columns | Renders, streams without full-screen repaint, handles `Ctrl-C` as cancel; 8-color fallback usable |
+| P6 | Background behavior | Document what Android does to a long-running Termux process (wakelock requirement, kill under pressure) and whether recovery is adequate |
+| P7 | Hostile extension probe (informs O-008) | Attempt `fs`/`net`/`child_process` access from a restricted candidate; record what is and is not enforceable |
+
+Exit: each probe has a written result (pass / fail / platform-specific) recorded in `DECISIONS.md`, and every
+`Proposed` choice it touched becomes `Accepted`, changes, or is explicitly rejected. A failure here is a *good
+outcome* — it is why the phase exists.
+
+## 3. Phase M1 — Contracts and skeleton
+
+**Goal:** the shape of the system exists and compiles, so four interface workstreams can start in parallel.
+
+- Repository per `ARCHITECTURE.md` §18, with only the packages that actually hold code.
+- `api-contracts`: schemas, event envelope, error codes, exit codes (`docs/INTERFACES_AND_API.md` §2/§5/§6).
+- Configuration loading + validation, logging with redaction, platform detection, graceful shutdown, startup order
+  (`ARCHITECTURE.md` §5).
+- Storage abstraction with migrations, plus the repositories of `docs/DATA_AND_MEMORY.md` §5.
+- Policy engine skeleton with the capability vocabulary and tier model enforced (`SECURITY.md` §6), and the fake
+  provider (`PROVIDERS_AND_TOOLS.md` §3.3) so tests need no live API.
+- Test scaffolding for the parity and contract suites — before interfaces exist.
+
+Exit: `crabby init`, `crabby status`, `crabby doctor` work against a real local Gateway; the contract test harness
+runs; a task can be created and read back with an id, and nothing else.
+
+## 4. Phase M2 — Core runtime and Gateway
+
+**Goal:** one shared runtime that four clients can drive.
+
+- Session, task, event, cancellation, and checkpoint managers with the §4.4 ownership split enforced.
+- Task state machine + controlled parallelism (D-023) with configurable limits.
+- Agent loop: Plan → Execute, bounded retries, the retry-then-ask ladder (D-043/D-044), context budgeting and
+  hybrid compaction (D-027/D-045).
+- Approval service: request, bind, expire, answer-from-anywhere, conflict on double-answer.
+- Auto-recovery on restart that cannot bypass approvals (`AGENT_RUNTIME.md` §7.2).
+- Event delivery with gap handling and reconciliation-by-`GET`.
+- Initial tools with tiers: `file.*`, `session.*`, `task.*`, `net.fetch`, `memory.*`, `config.*`
+  (`PROVIDERS_AND_TOOLS.md` §4.2). `shell.run` may exist but stays off by default.
+
+Exit: a multi-step task started from a stub CLI completes, streams, persists, survives a kill + restart, and its
+state matches `GET /tasks/{id}` from a second client. Policy denies what policy must deny, in tests.
+
+## 5. Phase M3 — Four interfaces in parallel
+
+Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic
+(`ARCHITECTURE.md` §6).
+
+| Workstream | Deliverable | Definition of done |
+| --- | --- | --- |
+| CLI | Command grammar of `docs/INTERFACES_AND_API.md` §7.1 | `--json` everywhere, documented exit codes, scriptable, no TTY assumptions |
+| TUI | §4 panes, modal approvals, cancel-on-`Ctrl-C` | Fully usable at 40 columns; no full-screen repaint per token; 8-color fallback |
+| Web UI | §2 screens, §8 states | Every screen has empty/loading/error/degraded states; 360px layout complete; served as built assets |
+| Telegram | Commands, inline approvals, coalesced progress | No capability of its own; unauthorized senders get nothing; approvals expire visibly |
+
+Phase exit: the parity test walks `docs/INTERFACES_AND_API.md` §8 and passes with every blank cell carrying an
+accepted limitation. One task, started on Telegram, watched from Web, approved in the TUI, cancelled from the CLI —
+in one demo, documented as the release test.
+
+## 6. Phase M4 — Providers, memory, extensions
+
+- Provider adapters: `openai-compatible` (+ user-defined endpoints, D-041), `ollama`, `anthropic`, `gemini`, each
+  passing the conformance suite (§7) before it is listed as supported.
+- Per-model capability overrides with `reported` vs `effective` (`PROVIDERS_AND_TOOLS.md` §3.8).
+- Persistent memory with text search, provenance, review/edit/forget, and deletion semantics
+  (`docs/DATA_AND_MEMORY.md` §7).
+- Skills and command templates: content-only path of `EXTENSIONS.md` (D-035) — inert import, manifest validation,
+  conversion reports, `crabby ext init/validate/check-compat`.
+- MCP client: config import, stdio + HTTP/SSE transports, tier-classified tools, capped output.
+- Compatibility importer phase C-1 and C-2 (portable skills, MCP config) with real conversion reports.
+
+Exit gate: a user imports an OpenClaw/Claude-style `SKILL.md`, sees exactly what transferred and what did not, and
+the imported content cannot elevate anything. Third-party executable loading remains blocked (D-038) unless M5
+changed that with evidence.
+
+## 7. Phase M5 — Security hardening, remote access, isolation decision
+
+- Secrets vault: OS keychain where available, encrypted-file fallback with lock state everywhere (D-031).
+- Pairing and revocation finished across all four interfaces (D-030), plus `crabby auth list` last-seen data.
+- Cloudflare Quick Tunnel mode: enable as T3, identity list, URL discovery, teardown that truly closes listeners
+  (`SECURITY.md` §13).
+- Scheduled jobs with runtime re-evaluation (`PROVIDERS_AND_TOOLS.md` §4.5).
+- Extension isolation decision (O-008) executed: child process + capability RPC, or a written decision that
+  untrusted executable extensions stay out of scope with a documented reason.
+- Full `SECURITY.md` §17 suite on Termux: redaction, injection fixtures, auth rejection, escalation, resource caps.
+- Audit log completion and `crabby doctor --security` reporting a plain-language posture summary.
+
+Exit: every threat row T-01…T-15 has a mitigation and a test; no open security decision is silently resolved by an
+implementer.
+
+## 8. Phase M6 — Release readiness
+
+- Install path for Termux, Linux, macOS written and rehearsed from a clean device; O-012 closed (install, update,
+  rollback, backup, recovery).
+- Backup/restore per `docs/DATA_AND_MEMORY.md` §8; migration failure behavior tested.
+- Performance pass on a low-resource phone: memory, startup time, idle CPU, battery impact of each interface, WAL
+  growth; caps tuned (O-035).
+- Documentation: README, install, troubleshooting, platform limitations, and an honest "what Crabby does not
+  promise" page.
+- License audit of dependencies and bundled assets (`PROJECT_BRIEF.md` §14); third-party notices generated.
+- Changelog, version tagging, package publishing, `0.x` policy for breaking changes.
+
+Exit: a new user, following only the docs on a phone, reaches a completed multi-step task with approvals, and hits
+nothing that the limitations page did not already mention. **That is the release bar, not "all features work."**
+
+## 9. Later, explicitly not promised
+
+Windows native support (beyond WSL evaluation) · vector/semantic memory (D-021 leaves the door open) · official
+extension registry and signing · MCP server role (**non-goal**, D-040) · native Android app · local inference
+bundled on Android (O-034) · GUI/browser automation tools · multi-tenant or remote-hosted deployments · iOS.
+
+## 10. Cross-Cutting Rules
+
+01. Every phase ships with tests written in the same change; a phase whose tests come "next week" is not finished.
+02. Every decision that changes updates `DECISIONS.md` **and** the enforcing document in the same commit — the rule
+    in `PROJECT_BRIEF.md` §16 and D-034.
+03. Nothing is called "supported" for a platform until verified there (Brief §4).
+04. Scope pressure resolves by cutting depth, never by cutting a boundary: fewer tools, not "permissions for later".
+05. Each phase ends with a demo path that a real user can type, not a checklist review.
+06. A phase may be re-ordered if M0 evidence says so; the roadmap records the change and why.
+
+## 11. Decisions That Block Implementation
+
+Blocking means the shape of code depends on it, so guessing would be expensive:
+
+| ID | Why it blocks |
+| --- | --- |
+| O-004 (SSE vs WebSocket) | Every interface's transport code depends on it |
+| O-010 (event ids, replay window) | Gap handling and `seq` semantics are core behavior |
+| O-019 remainder (token format, expiry) | Auth is the first thing written in M1 |
+| O-002 (`better-sqlite3` reproduction) | Storage abstraction and migrations depend on the driver |
+| O-006 (TUI library) | M0 P5 must pick it; the whole TUI workstream waits |
+| O-012 (install/upgrade/recovery) | M1 packaging is built around it |
+
+Not blocking, and safe to decide during the phase that needs them: O-001, O-003, O-005, O-007, O-011, O-013…O-018,
+O-021…O-025, O-027, O-029…O-046 — the rest of the 38 open items, each tracked where it applies.
+
+## 12. Roadmap Acceptance Criteria
+
+01. Every phase has an entry gate, exit gate, and at least one demo path.
+02. No phase depends on an undecided blocking item from §11 without naming it.
+03. The four interfaces are planned concurrently from M1, per the owner's requirement, with parity as the phase
+    gate rather than an aspiration.
+04. M0 exists and is honest: it can invalidate proposed choices, and a negative result is recorded as a success.
+05. Release is defined by a user reaching a working multi-step task on a phone, not by a feature count.
+06. The "later" list is explicit, so deferral never reads as a promise.
+
+---
+
+**End of Roadmap**

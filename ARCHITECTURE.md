@@ -228,7 +228,7 @@ Events should use a common envelope containing fields such as:
 - Correlation ID.
 - Event payload.
 
-The exact schema will be specified in `INTERFACES_AND_API.md`.
+The exact schema will be specified in `docs/INTERFACES_AND_API.md`.
 
 Events are informational and operational messages, not authorization grants. Receiving an event must never automatically grant permission to execute a tool or perform a protected operation.
 

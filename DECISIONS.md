@@ -126,6 +126,18 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-036 | Planning-doc checker coverage | Proposed in `scripts/check-docs.py`. Open: whether it should run in CI once a repository workflow exists. |
 | O-037 | Capability override UX | Open: `crabby model edit` as per-field prompts vs an editor screen on Web/TUI (D-045 data model is fixed). |
 | O-038 | Provider-wide capability override | Open: allow overriding every model of one provider at once, or per-model only. |
+| O-039 | API versioning style | Open: `/api/v1` path prefix vs header-based versioning (`docs/INTERFACES_AND_API.md` §12). |
+| O-040 | Web UI serving | Open: served by the Gateway, or by a separate static step behind `crabby web open`. |
+| O-041 | Approval expiry policy | Open: single duration vs per-tier durations (a T3 prompt should not age like a T2 one). |
+| O-042 | Parity matrix source | Open, recommended: generate `docs/INTERFACES_AND_API.md` §8 from the tool registry plus annotations instead of hand-maintaining it. |
+| O-043 | Web component approach | Open: in-house primitives vs a dependency-free library. Tokens must not depend on the choice (`docs/DESIGN_SYSTEM.md` §1 rule 05). |
+| O-044 | Concrete palette values | Open: hex values plus verified WCAG 2.2 AA contrast for text and non-text. |
+| O-045 | Light theme in v1 | Open: ship both themes from day one, or dark only with light to follow. |
+| O-046 | TUI color capability detection | Open: `$COLORTERM` sniffing, a probe, or an explicit user setting. Requires a legible 8-color fallback either way. |
+| O-047 | Linter/formatter | Open: choose once and record. |
+| O-048 | Biome vs ESLint + Prettier | Open; resolve together with O-047 — these are one decision, not two. |
+| O-049 | Package publishing model | Open: publish `packages/*` independently, or only as app bundles. |
+| O-050 | Termux CI runner | Open: find a practical runner, or keep the M0 manual checklist as the documented substitute. |
 
 **Open here means genuinely undecided.** A row marked closed must stay consistent with the decision it cites.
 
@@ -217,21 +229,20 @@ D-033 (`termux-api` tiers) accepted and propagated.
    O-020 narrowed, O-028…O-036 opened. `device.*` and read-side capabilities added to the `SECURITY.md` §6.1
    vocabulary so no tool references an undefined grant.
 3b. Add `scripts/check-docs.py` to a pre-commit or CI step once the repository has workflows (O-036).
-4. Write `docs/INTERFACES_AND_API.md` — API contract, event envelope, pairing/revocation flow, reconnect and
-   replay rules (closes O-010).
-5. Write `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md`.
-6. Write `docs/ROADMAP.md` and `docs/DEVELOPMENT.md` (incl. `SECURITY.md` §17 test obligations).
-7. Write `AGENTS.md`.
-8. Final cross-document consistency review, then the Termux validation prototype.
+4. ~~`docs/INTERFACES_AND_API.md`~~ · ~~`docs/UI_UX_SPEC.md`~~ · ~~`docs/DESIGN_SYSTEM.md`~~ ·
+   ~~`docs/ROADMAP.md`~~ · ~~`docs/DEVELOPMENT.md`~~ · ~~`AGENTS.md`~~ all written this round.
+5. **M-D:** final cross-document consistency review (owner + agent together), then close the 6 implementation-
+   blocking items listed in `docs/ROADMAP.md` §11 — O-004, O-010, O-019 (remainder), O-002, O-006, O-012.
+6. Then M0 Termux validation prototype. Still no product code before M-D finishes and those gates are addressed.
 
 | Counter | Value |
 | --- | --- |
 | Accepted decisions | 47 (D-001…D-047) |
 | Proposed technical choices | 9 (P-001…P-009) |
-| Open / needs-validation items | 38 tracked: 5 closed as decided (O-020, O-026, O-028, O-030, O-033), 33 still open |
-| Planning docs written | 9 (incl. `EXTENSIONS.md`, `PROVIDERS_AND_TOOLS.md`) |
+| Open / needs-validation items | 50 tracked: 5 closed as decided (O-020, O-026, O-028, O-030, O-033), 45 still open — 12 of them block nothing, 6 block implementation (`docs/ROADMAP.md` §11) |
+| Planning docs written | 15 — documentation set complete except the final consistency review |
 | Custom endpoint / fallback decisions | D-041…D-047 accepted this round |
-| Planning docs remaining | 7 |
+| Planning docs remaining | 0 (M-D review is the last step) |
 
 Run `python3 scripts/check-docs.py` after editing any planning document; it verifies ID references,
 cross-references, section anchors, capability coverage, and that no document claims an implementation exists., plus O-001…O-017 as listed above.

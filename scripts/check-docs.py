@@ -24,7 +24,7 @@ FILE_REF_RE = re.compile(r"`((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.md)`|`([A-Za-
 # reported as advisory, because the plan explicitly defers them (DECISIONS.md section 8).
 ADVISORY_FILENAMES = {
     "INTERFACES_AND_API.md", "UI_UX_SPEC.md", "DESIGN_SYSTEM.md", "ROADMAP.md",
-    "DEVELOPMENT.md", "AGENTS.md", "LICENSE", "SKILL.md",
+    "DEVELOPMENT.md", "AGENTS.md", "LICENSE", "SKILL.md", "CHANGELOG.md",
 }
 SECTION_RE = re.compile(r"`([A-Z][A-Z_]+\.md)`\s*§(\d+(?:\.\d+)*)")
 H2_RE = re.compile(r"^##\s+(\d+)(?:[^\n]*)$", re.M)

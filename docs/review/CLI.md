@@ -101,7 +101,7 @@
 
 | ID | Element | Content | Sizes | Behavior | Status |
 | --- | --- | --- | --- | --- | --- |
-| C5-01 | One-shot question | `crabby chat "…"` | full width | plain question, no task, no plan; the answer streams to stdout | PROPOSED |
+| C5-01 | chat: one-shot question | `crabby chat "…"` | full width | plain question, no task, no plan; the answer streams to stdout | PROPOSED |
 | C5-02 | Stdin input | `crabby chat -` or a pipe | n/a | reads until EOF, so `pbpaste \| crabby chat -` works; an empty stdin is an error, not a hang | PROPOSED |
 | C5-03 | Session continuation | `crabby chat --session <id>` | n/a | the same session the Web and TUI see; ids are printed on one selectable line | PROPOSED |
 | C5-04 | Model for this call | `--model <p>/<m>` | n/a | one-turn override with the capability delta warning if tool calling is off (D-045) | PROPOSED |
@@ -246,7 +246,25 @@ matches the mental model of "I am running this now". Proposal: exit `3` by defau
 
 ---
 
-## 9. The scripting contract
+## 9. Context and tools
+
+### Region C10 — Context, compaction, tools
+
+These four commands exist because the parity matrix lists them (`docs/INTERFACES_AND_API.md` §8): the context drawer
+in the Web, the context pane in the TUI, and `/context` in Telegram all reach the same three routes, and a user in a
+terminal has to be able to reach them too. They are also the commands a script would call.
+
+| ID | Element | Content | Sizes | Behavior | Status |
+| --- | --- | --- | --- | --- | --- |
+| C10-01 | context show | `crabby context show <session>` | ≤20 lines | what is in budget, what was compacted, what is pinned, each section with its cost — the same view as TUI T8-02 and Web W7; a section costing 0 prints `0` rather than being hidden | PROPOSED |
+| C10-02 | context pin | `crabby context pin <session> [ref]` | one line | no ref lists what is pinned, a ref pins it, `--remove` unpins; pinning is what keeps an instruction alive through compaction (`POST /sessions/{id}/pin`) | PROPOSED |
+| C10-03 | session compact | `crabby session compact <session>` | 3–5 lines | summarizes now instead of at the budget limit (D-027), and says where the originals live; never implies the original text is gone | PROPOSED |
+| C10-04 | tools ls | `crabby tools ls` | 1 line per tool | name, tier, capability, enabled, platform availability, and the reason for anything deferred — the same list the Web shows (W11-01), including "not in this version" rows | PROPOSED |
+| C10-05 | context as data | `context show --json` | n/a | byte counts and budget headroom in machine form, so a cron wrapper can stop filling a session it cannot see (`GET /sessions/{id}/context`) | PROPOSED |
+
+---
+
+## 10. The scripting contract
 
 ### Region C-S — What another program may rely on
 
@@ -273,7 +291,7 @@ v1 (cheap, impossible to drift once generated), skip the man page.
 
 ---
 
-## 10. Coverage check
+## 11. Coverage check
 
 | Screen | Regions | Elements | Every state defined? |
 | --- | --- | --- | --- |
@@ -285,8 +303,9 @@ v1 (cheap, impossible to drift once generated), skip the man page.
 | Extensions | C-E | 13 | verdict stop, report diff, executable-kinds refusal |
 | Interfaces and access | C8 | 12 | local-only pairing, T3 tunnel, token never printed |
 | Data | C9 | 9 | T2 export, propagation count, no unredacted view |
+| Context, compaction, tools | C10 | 5 | pin/unpin, compaction disclosure, deferred tools listed |
 | Scripting contract | C-S | 14 | idempotency, signals, timeouts, dry run |
-| **Total** | **12 regions** | **138 elements** | — |
+| **Total** | **13 regions** | **143 elements** | — |
 
 Every `C` element above has to exist for the parity test to pass: if a capability is in `docs/INTERFACES_AND_API.md`
 §8 and there is no row here, this file is wrong, not the matrix.

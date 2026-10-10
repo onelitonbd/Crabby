@@ -221,8 +221,8 @@ Per D-055, interface review proceeds as element inventories. An element counts a
 | --- | --- | --- | --- | --- |
 | `docs/review/WEB.md` | 17 regions of the Web UI | 161 | 0 | 161 |
 | `docs/review/TUI.md` | 19 regions of the TUI | 185 | 0 | 185 |
-| `docs/review/CLI.md` | 12 regions of the CLI | 138 | 0 | 138 |
-| `docs/review/TELEGRAM.md` | 11 regions of the Telegram interface | 106 | 0 | 106 |
+| `docs/review/CLI.md` | 13 regions of the CLI | 143 | 0 | 143 |
+| `docs/review/TELEGRAM.md` | 11 regions of the Telegram interface | 123 | 0 | 123 |
 
 Review medium (D-056): `python3 docs/review/mockups/build.py` renders `docs/review/WEB.md` into
 `docs/review/mockups/crabby-web-ui.html` — one self-contained file, no network, no CDN. The build fails if the mockup
@@ -230,7 +230,7 @@ references an element the inventory does not define, or if the inventory has a r
 the picture cannot drift from the document. Decisions made in the mockup leave it as paste-ready rows; nothing
 the mockup stores counts until it is written back into the `.md`.
 
-All four inventories exist now: 161 Web + 185 TUI + 138 CLI + 106 Telegram = 590 elements awaiting a decision, and
+All four inventories exist now: 161 Web + 185 TUI + 143 CLI + 123 Telegram = 612 elements awaiting a decision, and
 the review is the gate before `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are regenerated from them.
 
 An open question written in an inventory is not left inside the inventory: each one that changes what gets built is

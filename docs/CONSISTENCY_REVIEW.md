@@ -92,6 +92,41 @@ execution system in the initial release.
 **Resolution:** M2 now states that `shell.run` ships in that phase, is not enabled by default, and that the exit demo
 runs twice — once with it off, once with it on — so "off by default" is verified rather than assumed.
 
+### F-08 — The command grammar and the parity matrix did not describe the same surface
+**Severity: medium.** While counting the four element inventories against `docs/INTERFACES_AND_API.md` §8, three
+disagreements appeared at once:
+
+1. §7.1's command table was missing `logs`, `audit`, `context show`/`context pin`, `session compact`, and `tools ls` —
+   all five of which §8 requires a CLI cell for. `crabby --help` generated from that table would have omitted them, so
+   the CLI would have looked like the interface with the gap.
+2. §7.4 listed 11 Telegram commands, while §8's Telegram column names 20 — and 15 of those had no command in the
+   list at all (`/approvals`, `/compact`, `/config`, `/context`, `/delete`, `/export`, `/ext`, `/logs`, `/memory`,
+   `/probe`, `/providers`, `/resume`, `/sessions`, `/tools`, `/tunnel`). Most of them are exactly the ones nobody
+   would think to type and nobody would think to miss. §7.4 now has 28: the union of both lists, plus `/unwatch` and
+   `/new`, which are an inverse and a second session rather than new capabilities.
+3. `docs/review/TELEGRAM.md` inherited that short list and had a row saying provider/config/extension commands are
+   simply "not offered here" — which would have written an undocumented capability gap into the approved spec.
+
+**Resolution:** §7.1 gained the missing rows, §7.4 now states one command per matrix capability and says plainly that
+dropping a command to save typing is the D-005 test failing, `docs/review/TELEGRAM.md` G3 was rebuilt to one row per
+command (31 rows: 28 named commands plus an unknown command, bare text, and a refusal), and
+`docs/review/CLI.md` gained region C10 for context/compaction/tools. `docs/UI_UX_SPEC.md` §7 no longer repeats the
+command list at all — it points at §7.4, because a second copy of a list is how this happened.
+
+**Made structural:** `scripts/check-docs.py` rule 10 now compares the command sets themselves instead of trusting
+prose, in both directions, and refuses to stay silent if the source tables change shape. That is the only reason this
+class of finding cannot come back as F-08 again.
+
+### F-09 — One of the consistency checks was not checking anything
+**Severity: medium, against our own tooling.** Rule 1 of `scripts/check-docs.py` — "every referenced decision ID must
+exist in the register" — was written as `set(ID_RE.findall(body)) and set()`, which evaluates to an empty set: the
+loop body never ran, so a reference to a decision that does not exist would have passed silently since the checker was
+written. Found while wiring rule 10, not by the rule itself.
+
+**Resolution:** the expression is fixed, and the first honest run of rule 1 reported nothing — the register is clean.
+A check that cannot fail is worse than no check, because it is trusted; both rules now print an error naming
+themselves if the tables they read are missing or reshaped.
+
 ## 3. Checks That Passed
 
 | Check | Result |
@@ -162,17 +197,19 @@ The remaining half of M-D. Each item is a yes/no, not a discussion:
 
 **And the element-review gate added during M-D (D-055/D-056), which comes first:**
 
+- [ ] `docs/review/README.md` — the index: what each file covers, how to answer, and which invariants the checker
+      enforces.
 - [ ] `docs/review/WEB.md` — 161 elements. Reviewed through `docs/review/mockups/crabby-web-ui.html`, which is
       generated from that file, so an element that exists in one and not the other is a build error rather than a
       disagreement.
 - [ ] `docs/review/TUI.md` — 185 elements, every one of them answerable at 40 columns × 24 rows.
-- [ ] `docs/review/CLI.md` — 138 elements, with the pipe and the exit code as the binding case.
-- [ ] `docs/review/TELEGRAM.md` — 106 elements, where the transport's own limits are facts and the responses to them
-      are the decisions.
+- [ ] `docs/review/CLI.md` — 143 elements over 13 regions, with the pipe and the exit code as the binding case.
+- [ ] `docs/review/TELEGRAM.md` — 123 elements, where the transport's own limits are facts and the responses to them
+      are the decisions, and where every parity-matrix capability has a command of its own (F-08).
 - [ ] Only after statuses stop saying `PROPOSED`: regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from
       the approved rows, then re-run §7.
 
-590 elements, 0 approved as of this round. Nothing in this list is a formality: a row that reads "the small chip"
+612 elements, 0 approved as of this round. Nothing in this list is a formality: a row that reads "the small chip"
 has as much standing as "the chat pane", and cutting it is a decision with an ID.
 
 When these are ticked, `docs/ROADMAP.md` §0 moves to "M-D complete" and M0 starts.

@@ -85,6 +85,16 @@ def inventory(body: str) -> list[tuple[str, str, str]]:
     return out
 
 
+def review_elements(body: str) -> list[tuple[str, str]]:
+    """(id, element-column text) for every row in a review inventory."""
+    out: list[tuple[str, str]] = []
+    for line in body.splitlines():
+        m = REVIEW_ROW_RE.match(line.strip())
+        if m:
+            out.append((m.group(1), [c.strip() for c in m.group(2).split("|")][0]))
+    return out
+
+
 def defined_ids(decisions: str) -> dict[str, str]:
     """Rows like `| D-001 | ... |` in the decision register define those IDs."""
     out: dict[str, str] = {}
@@ -112,8 +122,8 @@ def main() -> int:
 
     # 1. every referenced decision ID must be defined in the register
     for p, body in bodies.items():
-        for ident in sorted(set(ID_RE.findall(body)) and set()):
-            full = f"{ident[0]}-{ident[1]}"
+        for tup in sorted(set(ID_RE.findall(body))):
+            full = f"{tup[0]}-{tup[1]}"
             if full not in defined:
                 problems.append(f"{p.name}: references undefined {full}")
 
@@ -335,15 +345,75 @@ def main() -> int:
         if m and not m.group(1).strip().startswith(want):
             problems.append(f"DECISIONS.md: counter {label!r} should start with {want!r}")
 
+
+    # 10. the command surface must be the same set in every direction. "A command cannot exist in one interface
+    #     only" is prose in `docs/INTERFACES_AND_API.md`; here it is a set comparison. Two things it caught on the
+    #     first run: §7.1 listed fewer commands than §8 required, and `docs/review/TELEGRAM.md` named a command in a
+    #     sentence instead of as an element.
+    iface = bodies.get(ROOT / "docs" / "INTERFACES_AND_API.md", "")
+    cli_md = bodies.get(ROOT / "docs" / "review" / "CLI.md", "")
+    tg_md = bodies.get(ROOT / "docs" / "review" / "TELEGRAM.md", "")
+
+    def first_table(body: str, heading: str) -> list[list[str]]:
+        """The first pipe table after `heading`, skipping whatever prose sits between them."""
+        at = body.find(heading)
+        if at < 0:
+            return []
+        rows = []
+        for line in body[at:].splitlines():
+            if line.startswith("|"):
+                if not set(line) <= set("|- "):
+                    rows.append([c.strip() for c in line.strip().strip("|").split("|")])
+            elif rows:
+                break
+        return rows
+
+    cmd_cell = re.compile(r"`([a-z][a-z0-9-]*)(?:[ /<][^`]*)?`")
+    cli_nouns: set[str] = set()
+    tg_spec: set[str] = set()
+    for row in first_table(iface, "### 7.1 CLI"):
+        for cell in row[1:] if len(row) > 1 else []:
+            cli_nouns |= set(cmd_cell.findall(cell))
+    for row in first_table(iface, "## 8. Feature Parity Matrix"):
+        if len(row) < 6:
+            continue
+        cli_nouns |= set(cmd_cell.findall(row[2]))
+        tg_spec |= {c for c in re.findall(r"`/([a-z]+)", row[5])}
+    sec74 = re.search(r"^### 7\.4 Telegram\n(.*?)\n## 8", iface, flags=re.S | re.M)
+    if sec74:
+        tg_spec |= {c for c in re.findall(r"`/([a-z]+)", sec74.group(1))}
+    if not cli_nouns or not tg_spec:
+        problems.append(
+            "scripts/check-docs.py: the parity check read no commands out of `docs/INTERFACES_AND_API.md` — the "
+            "§7.1/§8 tables changed shape, so the check itself needs updating"
+        )
+    # an inventory names a command in the element column, so that is where it has to be found: matching anywhere
+    # in the file let "context window" stand in for `crabby context show`, and a build-tool mention for `tools ls`.
+    cli_words = {w for _, el in review_elements(cli_md) for w in re.findall(r"[a-z][a-z0-9-]*", el.lower())}
+    for noun in sorted(cli_nouns - cli_words):
+        problems.append(
+            f"docs/review/CLI.md: no row names the command `{noun}` — the grammar and the parity matrix both "
+            f"require it, so the CLI inventory has to carry it as an element"
+        )
+    tg_inv = {m.group(1) for _, el in review_elements(tg_md) if (m := re.match(r"^/([a-z]+)$", el))}
+    for cmd in sorted(tg_spec - tg_inv):
+        problems.append(f"docs/review/TELEGRAM.md: command /{cmd} is required by §7.4/§8 but no row names it")
+    for cmd in sorted(tg_inv - tg_spec):
+        problems.append(f"docs/review/TELEGRAM.md: command /{cmd} is proposed here but absent from §7.4's list")
+
     if problems:
         print(f"✗ {len(problems)} documentation problem(s):")
         for prob in problems:
             print(f"  - {prob}")
         return 1
 
-    n_review = len(files) - n_planning
-    suffix = f" + {n_review} element inventories" if n_review else ""
-    print(f"✓ {len(files)} documents consistent ({n_planning} planning{suffix})")
+    n_inv = sum(1 for p in files if p.parent.name == "review" and p.stem in {"WEB", "TUI", "CLI", "TELEGRAM"})
+    n_other = len(files) - n_planning - n_inv
+    detail = f"{n_planning} planning + {n_inv} element inventories"
+    if n_other:
+        detail += f" + {n_other} index"
+
+    print(f"✓ {len(files)} documents consistent ({detail})")
     print(f"  decisions: {sum(1 for k in defined if k.startswith('D-'))} accepted · "
           f"{sum(1 for k in defined if k.startswith('P-'))} proposed · "
           f"{sum(1 for k in defined if k.startswith('O-'))} open")

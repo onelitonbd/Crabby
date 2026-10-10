@@ -261,7 +261,8 @@ pipeable and free of color when not a TTY.
 | Config | `config get/set/path/schema` |
 | Extensions | `ext init`, `ext validate`, `ext check-compat`, `ext install`, `ext list`, `ext info`, `ext update`, `ext uninstall` |
 | Interfaces | `gateway start/stop/status`, `web open`, `telegram start`, `tui`, `tunnel on/off/status` |
-| Data | `history export`, `history delete-session`, `memory list/search/forget` |
+| Data | `history export`, `history delete-session`, `memory list/search/forget`, `logs`, `audit` |
+| Context | `context show <id>`, `context pin <id> [ref]`, `session compact <id>`, `tools ls` |
 
 Rule: `crabby --help` and `crabby <noun> --help` are generated from the same contract that the Web UI and Telegram
 use, so a command cannot exist in one interface only (the D-005 test).
@@ -296,8 +297,14 @@ React + Vite per `ARCHITECTURE.md` §6.3; served as built assets by the Gateway 
 
 Adapter over grammY (P-009); translates Telegram updates into the same internal requests.
 
-- Commands: `/ask <text>`, `/task <objective>`, `/tasks`, `/watch <id>`, `/cancel [id]`, `/approve <id>`,
-  `/deny <id>`, `/model <provider/model>`, `/status`, `/health`, `/help`.
+- Commands, one per capability in §8 rather than a hand-picked subset: `/ask <text>`, `/task <objective>`, `/tasks`,
+  `/watch <id>`, `/unwatch <id>`, `/cancel [id]`, `/resume <id>`, `/approve <id>`, `/deny <id>`, `/approvals`,
+  `/sessions`, `/new`, `/context`, `/compact`, `/model <provider/model>`, `/providers`, `/probe <model>`, `/tools`,
+  `/memory`, `/ext`, `/config`, `/logs`, `/export`, `/delete <id>`, `/tunnel on|off`, `/status`, `/health`, `/help`.
+  A command may not be dropped from this list to save typing: dropping one removes a capability from the interface,
+  which is the D-005 test failing. What *is* Telegram's to choose is how little of it needs typing — inline keyboards
+  and reply targets carry the common paths, and the two documented limitations in §8 (provider add, identity
+  minting) are refusals with an alternative, not silence.
 - Approvals use inline keyboards; a callback must be verified against requester, chat, and originating message
   (`SECURITY.md` §5.2). Callback data carries an opaque approval id, never the action itself.
 - Long output is chunked at Telegram's limit with explicit continuation, or delivered as a file; a truncated reply

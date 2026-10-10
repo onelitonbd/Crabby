@@ -140,6 +140,8 @@ crabby init
 
 ## 7. Telegram
 
+- The command list is `docs/INTERFACES_AND_API.md` §7.4 and is not repeated here: a second copy of a list is how
+  the two drift, and on Telegram a missing command is a missing capability.
 - Message shape: short first line with the outcome, details in the same message only when they change a decision.
   Everything else links to a task id, not to a URL with a token in it.
 - Inline keyboards for approve/deny and for model choice; the callback carries an opaque id only.

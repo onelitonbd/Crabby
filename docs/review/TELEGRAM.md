@@ -65,22 +65,48 @@
 
 ### Region G3 — Commands
 
+The command surface is `docs/INTERFACES_AND_API.md` §7.4: one command per parity-matrix capability, 28 of
+them, plus the three ways a message arrives that is not a command. That
+is deliberately not a curated short list: on Telegram a missing command is a missing capability, and the interface
+stays small by making the common paths *not* need typing (inline keyboards, reply targets, `/tasks` numbering so an id
+is one tap away) rather than by cutting commands.
+
+Rows are in the order a person meets them: conversation → tasks → approvals → sessions and context → models and
+tools → data and settings → self-description.
+
 | ID | Element | Content | Sizes | Behavior | Status |
-| --- | --- | --- | --- | --- | --- |
-| G3-01 | /ask | one-shot question, no task | n/a | the same capability as Web chat and `crabby chat` (`docs/INTERFACES_AND_API.md` §7.4) | PROPOSED |
-| G3-02 | /task | starts a multi-step task | ≤1 message | prints the id and the watch/cancel commands immediately, so a lost phone does not lose the thread | PROPOSED |
-| G3-03 | /tasks | the list, compact | up to 10 lines | state word + objective + pending-approval marker; oldest active first | PROPOSED |
-| G3-04 | /watch | attach progress to this chat | n/a | exactly one progress message per task per chat; a second `/watch` is a no-op that says so | PROPOSED |
-| G3-05 | /cancel | stops the running task, or a named one | one line | the three-phase cancellation is reported as it settles; `/cancel` is not "delete the message" | PROPOSED |
-| G3-06 | /approve and /deny | answer a pending approval by id | one line | the keyboard is the primary path; typed commands exist so a stale or missing keyboard is not a dead end | PROPOSED |
-| G3-07 | /model | list and switch, with provider/model names | inline keyboard | shows the override and capability deltas, same data as the Web models screen (W10) | PROPOSED |
-| G3-08 | /status | Gateway, vault, tunnel, queue, pending approvals | ≤8 lines | the phone-sized version of `crabby status`, same facts | PROPOSED |
-| G3-09 | /health | reachability plus last confirmed time | one line | deliberately boring and safe to ask at any moment | PROPOSED |
-| G3-10 | /help | every command, one line each | ≤1 message | lists exactly what exists; a command in the help that is not implemented is worse than an undocumented one | PROPOSED |
-| G3-11 | Unknown command | typo or a command from another version | one line | names the closest real command; never a silent no-reply, because silence here is indistinguishable from an unauthorized sender | PROPOSED |
-| G3-12 | Long text without a command | a bare paragraph | n/a | treated as `/ask`, and the reply says it was treated as a question so the guess is visible | PROPOSED |
-| G3-13 | Commands not offered | provider add, config edit, pairing, ext install | n/a | typed commands cover them where the parity matrix allows (see the documented limitation in `docs/INTERFACES_AND_API.md` §8); the row exists so typing `/provider` gets a "not here, and why" instead of nothing | PROPOSED |
-| G3-14 | Command autocomplete | Telegram's own `setMyCommands` list | n/a | the menu mirrors G3-01…G3-10 exactly and is updated when the grammar changes, or it is not shown at all | PROPOSED |
+ | --- | --- | --- | --- | --- | --- |
+| G3-01 | /ask | one question, no task | ≤1 message | the same capability as Web chat and `crabby chat`; runs without a plan and without tool escalation | PROPOSED |
+| G3-02 | /task | objective in one line | 1–2 messages | starts a task through the same route as the Web; the reply carries the id, plus `/watch` and `/cancel` spelled out, because a phone loses the terminal often | PROPOSED |
+| G3-03 | /tasks | active and recent tasks | ≤10 lines | numbered, so a later command can say `2` instead of an id a user has to select and copy; pending-approval tasks marked first | PROPOSED |
+| G3-04 | /watch | attach progress to this chat | one line | one edited message per task (G4-01); a second `/watch` on the same task is a no-op that says so | PROPOSED |
+| G3-05 | /unwatch | stop the edits, keep the task | one line | the difference between watching and running is stated, because `cancel` is the other thing a panicking user reaches for | PROPOSED |
+| G3-06 | /cancel | the running task, or `/cancel 2` | 2 lines | reports the three-phase stop as it settles (requested → finishing current step → settled) | PROPOSED |
+| G3-07 | /resume | a suspended or failed task by number or id | 2 lines | resumes from the checkpoint and prints what will be skipped vs repeated (D-044); never restarts the objective | PROPOSED |
+| G3-08 | /approve | `/approve <id>` for a pending item | one line | the typed path beside the keyboard (G-A2), so a missing or stale keyboard is never a dead end; approval is once-only (D-052) | PROPOSED |
+| G3-09 | /deny | `/deny <id> [reason]` | one line | the reason lands on the task record, and the reply says what will not happen | PROPOSED |
+| G3-10 | /approvals | the pending queue | ≤10 lines | the read-only list; answering still goes through a keyboard or the typed commands, so there is exactly one way to say yes | PROPOSED |
+| G3-11 | /sessions | this chat's sessions | ≤10 lines | the same rows as `GET /sessions`; a group sees the group's sessions only (G7-07) | PROPOSED |
+| G3-12 | /new | start another session in this chat | one line | and the chat now points at the new one — the old session keeps its history and is reachable via `/sessions` | PROPOSED |
+| G3-13 | /context | what is in the working context | ≤15 lines | sections with cost, what was compacted, what is pinned; the phone version of Web W7 and TUI T8, same numbers | PROPOSED |
+| G3-14 | /compact | force compaction now | 2 lines | prints what was summarized and where the originals live; never implies the original text is gone (D-027) | PROPOSED |
+| G3-15 | /model | list and switch models | inline keyboard | shows the override marker and capability deltas; switching across the privacy boundary repeats the boundary sentence (G6-05) | PROPOSED |
+| G3-16 | /providers | the configured providers, no secrets | ≤10 lines | list-only here: adding or editing an endpoint is refused with the reason and the local command (the documented §8 limitation, not a gap) | PROPOSED |
+| G3-17 | /probe | `/probe <model>` capability probe | ≤8 lines | same probe the Web button triggers, so a pass in one interface means a pass in all of them | PROPOSED |
+| G3-18 | /tools | tools with tier and enabled state | ≤20 lines | the same list as `tools ls` and Web W11-01, including deferred tools with their reason | PROPOSED |
+| G3-19 | /memory | review, search, forget | ≤10 lines per action | `/memory search <text>`, `/memory forget <n>`; forgetting shows what referenced the entry first, matching Web W8-08 | PROPOSED |
+| G3-20 | /ext | list, info, validate | ≤12 lines | install is a multi-step confirmation and this interface carries the approval message only when a verdict exists (D-038: no third-party executable kinds, and the help says so rather than failing mysteriously) | PROPOSED |
+| G3-21 | /config | read a key, or set one | 2 lines | reads print the value with secrets `redacted`; a T3 change confirms in-chat with the diff shown before it is written, exactly like the Web | PROPOSED |
+| G3-22 | /logs | tail of the log, redacted | ≤4 096 chars | the newest lines with a truncation label (G2-03); the full file is fetched from the Web or CLI, not paged through a chat | PROPOSED |
+| G3-23 | /export | this session as a file | one file | the same artifact as `history export` and the Web download (T2, so a task-shaped action), sent as a document with the format in the caption | PROPOSED |
+| G3-24 | /delete | `/delete <n> yes` | one line | typed confirm required, because a chat has no undo affordance and an accidental tap would destroy the record — the friction is the design | PROPOSED |
+| G3-25 | /tunnel | `/tunnel on`, `/tunnel off` | ≤3 lines | T3: says which identities become reachable before it does it, and confirms; the URL is printed as text, never as a link with a token (D-051) | PROPOSED |
+| G3-26 | /status | Gateway, vault, tunnel, queue, pending approvals | ≤8 lines | the phone version of `crabby status`, same facts, so a bug report from either reads the same | PROPOSED |
+| G3-27 | /health | reachable, and since when | one line | deliberately boring and safe to ask at any moment; it does not reveal anything about other chats | PROPOSED |
+| G3-28 | /help | every command, restrictions, and what cannot be done here | ≤2 messages | lists all 28 commands; states G7-03 and G3-16 as limitations; an undocumented command is worse than a missing one, and a documented one that is not implemented is a lie | PROPOSED |
+| G3-29 | unknown command | typo, or a command from another version | one line | names the closest real command — the one case where silence is not allowed here, because a real answer and "you are not on the allow-list" must not look identical | PROPOSED |
+| G3-30 | bare text, no command | a paragraph sent without a slash | n/a | treated as `/ask`, and the reply says it was treated as a question so the guess is visible instead of silent | PROPOSED |
+| G3-31 | refused command | `/pair`, `/auth`, `/provider add` | one line | refused with the reason and the local alternative — the two documented limitations, surfaced in the interface that has them rather than left to be discovered | PROPOSED |
 
 ---
 
@@ -209,7 +235,7 @@
 | --- | --- | --- | --- |
 | Access and pairing | G1 | 12 | blocked bot, deleted message, lost edit, two chats |
 | Message shape | G2 | 13 | split, truncation, escape fallback, long-target |
-| Commands | G3 | 14 | unknown command, bare text, refused command |
+| Commands | G3 | 31 | unknown command, bare text, refused command, one row per capability |
 | Approvals | G-A | 13 | conflict, expiry, double tap, no-keyboard fallback |
 | Progress | G4 | 9 | 429, stall, unwatch, silence-not-success |
 | Files and media | G5 | 8 | size limits, expiry, cleanup, caption limit |
@@ -217,7 +243,7 @@
 | Identity and transport | G7, G-S | 17 | spoofing, injection, retention, enumeration, inbound flood |
 | Forced states | G-T | 8 | both sides down, partial delivery, offline user |
 | First run and help | G-O | 5 | unconfigured, read-only, limits discoverable |
-| **Total** | **11 regions** | **106 elements** | — |
+| **Total** | **11 regions** | **123 elements** | — |
 
 Nothing in this file may become a capability the other three interfaces lack, and nothing may be cut here to mean
 "less capable" — that is the parity rule, and `docs/INTERFACES_AND_API.md` §8 is where the two accepted limitations

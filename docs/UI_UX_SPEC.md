@@ -89,7 +89,8 @@ Every empty state teaches one command, not a marketing sentence: "No tasks yet â
 
 ## 4. TUI
 
-Target: 40 columns minimum, 24 rows usable. Every view must be functional at that size; wider sizes only add
+Target: 40 columns minimum, 24 rows usable. The renderer is a reconciling one (Ink, P-010), so the flexbox model
+is assumed available and the layout must be expressed in weights rather than fixed column counts where possible. Every view must be functional at that size; wider sizes only add
 columns, never require them.
 
 - **Single primary pane** with mode switching (`Tab` or `1-5`) instead of always-visible side panes.

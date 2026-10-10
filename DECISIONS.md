@@ -81,6 +81,7 @@ These choices are recommendations, not accepted technical decisions.
 | P-007 | Web frontend | React + Vite | Proposed |
 | P-008 | Test framework | Vitest | Proposed |
 | P-009 | Telegram library | grammY | Proposed |
+| P-010 | TUI library | Ink 8 (React renderer for terminals) | Proposed — evidence below (O-006) |
 
 Each proposal remains pending until explicitly accepted or validated as required.
 
@@ -93,7 +94,7 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-003 | npm vs pnpm | Open: compare installation, reproducibility, workspace workflow, and Termux compatibility. |
 | O-004 | SSE vs WebSocket | Open: evaluate streaming, reconnection, bidirectional control, and event replay. |
 | O-005 | Zod vs TypeBox | Open: confirm schema validation and API contract requirements. |
-| O-006 | TUI library | Open: compare terminal UI libraries for mobile terminal usability and platform support. |
+| O-006 | TUI library | Researched 2026-10-09 against the npm registry; recommendation P-010 (Ink 8) awaiting acceptance. Evidence in §5A. |
 | O-007 | Windows support | Open: define the initial WSL support boundary and assess native Windows support. |
 | O-008 | Extension isolation | Needs Validation. Candidates and the hard gate are written up in `EXTENSIONS.md` §15: filtered in-process for bundled/first-party only, child process + capability RPC for everything else; `worker_threads` and `node:vm` rejected as security boundaries. Blocking item: hostile-extension test on Termux. |
 | O-009 | Tunnel lifecycle | Partly resolved: authentication is defined in `SECURITY.md` §5 and D-030/D-032. Open remainder: URL rotation on restart, reconnect handling, shutdown ordering, and exposure auditing. |
@@ -138,8 +139,32 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-048 | Biome vs ESLint + Prettier | Open; resolve together with O-047 — these are one decision, not two. |
 | O-049 | Package publishing model | Open: publish `packages/*` independently, or only as app bundles. |
 | O-050 | Termux CI runner | Open: find a practical runner, or keep the M0 manual checklist as the documented substitute. |
+| O-051 | TUI repaint strategy under streaming | Needs Validation (M0 P5): measure Ink's reconciliation cost for token-by-token output on a phone terminal; decide buffer/flush policy from the result. |
 
 **Open here means genuinely undecided.** A row marked closed must stay consistent with the decision it cites.
+
+## 5A. TUI Library Evaluation Record
+
+**Evidence source:** npm registry metadata read on 2026-10-09. Runtime behavior on Termux is **not** measured
+here — that is what `docs/ROADMAP.md` M0 P5 exists for.
+
+| Candidate | Latest | Published | Engines | Native modules | Assessment |
+| --- | --- | --- | --- | --- | --- |
+| **Ink** | 8.0.0 | 2026-10-03 | `node >=22` | none — all 23 direct deps and the layout engine are pure JS | **Recommended.** Actively maintained; React model matches the Web UI stack, so component and state patterns are shared across two interfaces; Yoga flexbox is exactly what a 40-column layout needs |
+| neo-blessed | 0.2.0 | 2018-06-13 | `node >=8` | none | Rejected. Two published versions, ~8 years dormant; `blessed` upstream is unmaintained |
+| OpenTUI (`@opentui/core`, `@opentui/react`) | 0.5.17 | 2026-10-08 | `bun >=1.3.0`, `node >=26.4.0` | Zig core via FFI bindings | Deferred as primary. Fast and actively developed, but it requires Bun or Node ≥26.4 (conflicts with D-015's Node LTS plan) and a native/FFI layer — the exact Termux risk class `DECISIONS.md` §5 flags. Revisit if Ink's repaint cost proves unacceptable at streaming volumes |
+| Build directly on `node:readline` + ANSI | — | Node built-in | n/a | none | Fallback if both fail the Termux probe. Cheapest possible footprint, most code owned |
+
+Selection rationale against Crabby's constraints:
+
+- **Termux:** no `node-gyp`, no prebuilt binaries, no native addon is the single strongest filter. Ink passes cleanly.
+- **Single React model:** TUI and Web share components, state logic, and the token layer (`docs/DESIGN_SYSTEM.md` §9).
+- **Node LTS alignment:** Ink 8 requires `node >=22`; the reported Termux range is v22–v26 (`§5.3`), so it fits.
+- **Streaming cost** is the known risk of a reconciling renderer in a terminal. `docs/ROADMAP.md` M0 P5 must measure
+  line-buffered output at 40 columns rather than trusting a benchmark; a failure reopens OpenTUI or the readline
+  fallback, and that outcome is recorded as a *useful* M0 result, not a setback.
+- Anything layered on top (termcn-style component collections) is treated as copy-in source, not a dependency, so it
+  cannot smuggle in an install-time native build.
 
 ## 5. Database Evaluation Record
 
@@ -238,8 +263,8 @@ D-033 (`termux-api` tiers) accepted and propagated.
 | Counter | Value |
 | --- | --- |
 | Accepted decisions | 47 (D-001…D-047) |
-| Proposed technical choices | 9 (P-001…P-009) |
-| Open / needs-validation items | 50 tracked: 5 closed as decided (O-020, O-026, O-028, O-030, O-033), 45 still open — 12 of them block nothing, 6 block implementation (`docs/ROADMAP.md` §11) |
+| Proposed technical choices | 10 (P-001…P-010) |
+| Open / needs-validation items | 51 tracked: 5 closed as decided (O-020, O-026, O-028, O-030, O-033), 46 still open — 6 of them block implementation (`docs/ROADMAP.md` §11) |
 | Planning docs written | 15 — documentation set complete except the final consistency review |
 | Custom endpoint / fallback decisions | D-041…D-047 accepted this round |
 | Planning docs remaining | 0 (M-D review is the last step) |

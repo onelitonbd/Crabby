@@ -44,7 +44,7 @@ the phase that prevents an expensive rewrite; `ARCHITECTURE.md` §22 makes it an
 | P2 | Fastify Gateway binding `127.0.0.1`, one `GET /health`, one SSE stream | Streams to a local client; survives a forced process kill and restarts cleanly |
 | P3 | Storage: `better-sqlite3` source build, WAL, crash-during-write | Reproduces the report in `DECISIONS.md` §5 on a clean environment; `integrity_check` ok; compare against `node:sqlite` for the same case |
 | P4 | React + Vite production build served by the Gateway | Built assets load from a phone browser at 360px; no dev server required |
-| P5 | TUI library candidate at 40 columns | Renders, streams without full-screen repaint, handles `Ctrl-C` as cancel; 8-color fallback usable |
+| P5 | TUI candidate at 40 columns — Ink 8 (P-010), with the `node:readline` fallback as a control | Renders; token-by-token streaming does not force a full-screen repaint; `Ctrl-C` maps to cancel not quit; 8-color fallback usable; no native build step. Result decides OpenTUI's deferral (O-051) |
 | P6 | Background behavior | Document what Android does to a long-running Termux process (wakelock requirement, kill under pressure) and whether recovery is adequate |
 | P7 | Hostile extension probe (informs O-008) | Attempt `fs`/`net`/`child_process` access from a restricted candidate; record what is and is not enforceable |
 

@@ -34,8 +34,12 @@ python3 docs/review/mockups/build.py
 They are not decoration; each one exists because a row in the inventory makes a claim that has to be checked:
 
 - **360 / 600 / desktop** — the 360px case is the binding one (`docs/UI_UX_SPEC.md` §2).
-- **vault locked / offline / tunnel on** — the three states that change what can be trusted on screen. With
+- **dark / light**, **comfortable / compact** — the rows that claim a theme or a density behaves differently are
+  checked here, not argued about.
+- **vault locked / offline / tunnel / first-run** — the states that change what can be trusted on screen. With
   *phone* + *vault locked* you can see the escape from the overflow sheet that open question **W1-A** proposes.
-- **element IDs** — labels every drawn element with its inventory ID, so a comment can be phrased as "W4-08, this one".
-- **Download / Copy review** — markdown of the rows you changed, plus your notes, ready to paste into
-  `docs/review/WEB.md` or to hand back for applying.
+- **show element IDs** — labels every drawn element with its inventory ID, so a comment can be phrased as "W4-08, this one".
+- **Copy my edits / Download / Reset** — markdown of the rows you changed, plus your notes, ready to paste into
+  `docs/review/WEB.md` or to hand back for applying. Reset clears the browser's copy and nothing else.
+- Clicking any element selects its row — there is no mode to turn that off, and the keyboard path (`j`/`k`, `a`,
+  `d`, `x`, `?`) reaches every row without the mouse.

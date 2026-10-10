@@ -126,9 +126,9 @@ Pairing requirements:
 - Revocation takes effect on the next request and must also terminate live event streams.
 - Unauthenticated requests are rejected before routing, including `GET /health` and event subscriptions.
 
-Token format and lifetime are fixed by D-051 (opaque token, no expiry; revocation is the control). **O-019** keeps a
-single remainder: the pairing code's presentation on a phone-sized terminal — readable, typeable, and copyable in one
-screen (`docs/INTERFACES_AND_API.md` §3.2).
+Token format and lifetime are fixed by D-051 (opaque token, no expiry; revocation is the control). **O-019** is closed by D-067:
+`crabby auth pair` prints the URL and an 8-character code **each on their own line**, because selection on a phone is a
+fight, and the Web's first-run field takes the code. The credential is delivered once and never logged.
 
 Alternatives considered and rejected:
 
@@ -207,6 +207,8 @@ Rules:
 
 An approval request must carry: task id, tool, tier, human-readable action summary, the exact command or path or destination host, expected effects, reversibility, and an explicit "what could go wrong". It must be answerable from all four interfaces, with an expire-on-timeout default so a stale prompt cannot be approved much later.
 
+Expiry is per tier, decided in D-064 (closing O-041): **T1 15 minutes, T2 10 minutes, T3 5 minutes.** The direction of that gradient is the whole point — the more an approval grants, the less time an unattended prompt should stay answerable, because the window in which a phone is left unlocked and a request is left standing is exactly the window this rule covers. The countdown is rendered by every interface (Web W-A5, TUI T-A5, Telegram G-A1) with the reason it expires.
+
 Approval binding: a decision applies to *that* action with *those* arguments in *that* task. Approval must never be interpreted as a general license, and re-approval is required when the action materially changes (targets a new path, host, or destination) — per `AGENT_RUNTIME.md` §5.
 
 **Stored ("remember this") approvals are out of scope for the first release** (D-052). v1 supports exactly one
@@ -235,12 +237,12 @@ Platform behavior:
 | --- | --- | --- |
 | macOS | Keychain | Preferred path. |
 | Linux | Secret Service when available | Otherwise treated like the fallback case; do not silently write plaintext. |
-| Android + Termux | Encrypted file + passphrase | `keystore` reachability from Termux is unverified → O-018 remainder. If a future probe finds it usable, it may become the preferred store. |
-| Windows / WSL | Fallback encrypted file | Do not claim DPAPI protection until designed and tested (§15). |
+| Android + Termux | Encrypted file + passphrase | The floor, decided in D-066 (closing O-018). `termux-keystore` is used *only* when a probe at setup succeeds, and the probe result is printed at setup, so the user knows which protection they have rather than inferring it from silence. |
+| Windows / WSL | Fallback encrypted file | Do not claim DPAPI protection until designed and tested (§15). WSL is the only supported Windows path in v1; native Windows is documented-unsupported (D-066, closing O-007). |
 
 Fallback rules:
 
-- The encrypted file is created `0600`, holds a key-derived blob (KDF parameters to be pinned, O-018 remainder), and is *never* the default on a platform where a keychain exists.
+- The encrypted file is created `0600`, holds a key-derived blob with the KDF pinned — scrypt, N=2^15, r=8, p=1, a per-install random salt stored beside the blob (D-066) — and is *never* the default on a platform where a keychain exists.
 - Startup must not block forever for a passphrase: a locked vault means provider calls and T2/T3 tools are unavailable until unlocked, which must be reported clearly on all four interfaces.
 - Lock state is visible: users must always be able to tell whether secrets are currently available.
 - Any UI or log message referencing the fallback must state that it protects against casual disclosure, not against an attacker who already owns the Termux user account (§15).
@@ -372,12 +374,12 @@ The security design is ready for implementation planning when:
 
 01. Capability vocabulary and risk tiers are defined, and every initial tool is classified.
 02. A client authentication mechanism is selected and specified — closed by D-030 (mechanism) and D-051 (format and
-   lifetime); the pairing-screen UX stays open and does not block M1.
+   lifetime); the pairing-screen UX is decided in D-067 (`docs/INTERFACES_AND_API.md` §3.2) and does not block M1.
 03. Secrets storage behavior is decided per platform, with an explicit weaker-fallback disclosure (O-018).
 04. Approval payload content, binding rules, and revocation UX are specified for all four interfaces.
 05. The untrusted-content policy is written into tool and importer implementations as a requirement, not a convention.
 06. Remote-mode requirements are complete enough that no implementer must invent a security rule.
-07. Audit redaction rules are decided (O-022) and covered by tests.
+07. Audit redaction rules are decided (O-022 closed by D-065) and covered by tests.
 08. Threat model rows T-01…T-15 each map to at least one concrete mitigation and at least one test.
 09. Platform limitations are documented in user-facing docs, not only in this file.
 10. `DECISIONS.md` reflects the accepted/open status of every choice referenced above.
@@ -396,10 +398,10 @@ Still open:
 - **O-018** (remainder) Android `keystore` reachability from Termux; KDF and encryption parameters for the fallback.
 - **O-019** (remainder) Pairing-code presentation on a phone-sized terminal. Format and expiry are decided (D-051).
 - ~~**O-020**~~ Per-tool risk-tier assignment — **closed (D-046)**; table in `PROVIDERS_AND_TOOLS.md` §4.2.
-- **O-021** Depth of prompt-injection hardening for imported content.
-- **O-022** Audit log redaction rules.
-- **O-024** Initial `termux-api` capability list.
-- **O-025** Whether task-scoped capability narrowing is mandatory or opt-in.
+- ~~**O-021**~~ — **closed (D-065).** Content from a file, a web fetch or a tool result is tagged with its source and treated as data: no privileged parsing, no instruction-following, and the `external content` marker of §10 is what the user sees. Importing text and importing an instruction are the same bug in every agent product, so this is a hard rule rather than a mitigation.
+- ~~**O-022**~~ — **closed (D-065).** Logs and exports carry no secret-shaped values and no credential material, including under `--debug`. The audit record keeps the **exact target in plaintext**: an approval whose path was hashed cannot be reviewed later, and the record exists to be read after the fact. Where a path itself is the secret, the user is told to expect it in the audit and offered `history.deleteTask` (D-025's deletion path), so the choice is made once, in the open, instead of by a hash nobody can undo.
+- ~~**O-024**~~ — **closed (D-066).** `notify` T1, `tts` T1, `vibrate` T1, `torch` T1, `clipboard-read` T2, `clipboard-write` T2, `location` T2, `camera-capture` T2, `share` T2, `sms-send` T3. Every entry reuses the vocabulary in §6.1, so nothing new is trusted by this list.
+- ~~**O-025**~~ — **closed (D-066).** Opt-in, with the floor set in configuration. Mandatory narrowing was rejected on behavioural grounds: a prompt in front of every task trains the user to press through it, which removes the judgement this feature exists to involve.
 
 ## 20. Threat-to-Mitigation Summary
 

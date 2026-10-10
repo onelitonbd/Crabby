@@ -1,28 +1,32 @@
 :root {
-  /* Semantic tokens per docs/DESIGN_SYSTEM.md §2 — placeholder values pending O-044.
-     Every element is styled from a token; no raw color appears in app.js. */
-  --bg-base: #0f1113;
-  --bg-raised: #16191d;
-  --bg-overlay: #1d2126;
-  --bg-inset: #0a0b0d;
-  --fg-primary: #e8eaed;
-  --fg-secondary: #b3b9c0;
-  --fg-muted: #7d858e;
-  --line: #2a2f36;
-  --line-strong: #3b424b;
-  --accent: #d4622a;
-  --accent-fg: #16191d;
-  --state-ok: #4caf7d;
-  --state-warn: #d6a419;
-  --state-err: #e05252;
-  --state-info: #5b9dd9;
-  --risk-t0: #6b7280;
-  --risk-t1: #5b9dd9;
-  --risk-t2: #d6a419;
-  --risk-t3: #e05252;
-  --diff-add: #2f6f4f;
-  --diff-del: #7a3636;
-  --tunnel-on: #b84fd6;
+  /* Semantic tokens: the accepted values from docs/DESIGN_SYSTEM.md §2.3 (D-068, closing O-044). They are the spec's
+     numbers, not placeholders — scripts/check-docs.py rule 13 recomputes every ratio in that table from those hexes,
+     so editing a color here to something unreadable is a failing check, and editing it only here is a mockup that
+     disagrees with the document it exists to review.
+     The three tokens below marked (local) exist only because a CSS mock needs a fill and a rule color; they are not
+     spec tokens and are derived from the ones above. */
+  --bg-base: #101418;
+  --bg-raised: #171c22;
+  --bg-overlay: #1f262e;
+  --bg-inset: #0b0e11;            /* (local) derived from bg.base */
+  --fg-primary: #e8ecf1;
+  --fg-secondary: #b6c0cc;
+  --fg-muted: #8592a3;
+  --line: #2a323b;               /* border.subtle — decorative, exempt from the ratio rule */
+  --line-strong: #3a4551;        /* (local) derived from border.subtle */
+  --accent: #4ea1ff;
+  --accent-fg: #101418;          /* (local) text on an accent fill; 5.7:1 against #4ea1ff */
+  --state-ok: #46c08a;
+  --state-warn: #e0a63c;
+  --state-err: #ff6b6b;
+  --state-info: #7fb4ff;
+  --risk-t0: #9aa7b6;
+  --risk-t1: #7fb4ff;
+  --risk-t2: #e0a63c;
+  --risk-t3: #ff6b6b;
+  --diff-add: #46c08a;           /* the +/- prefix carries the meaning; the color is decoration (DESIGN_SYSTEM §2.3) */
+  --diff-del: #ff6b6b;
+  --tunnel-on: #ff8a3d;          /* reserved hue: nothing else in the system may use it */
   --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Bengali", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
@@ -31,12 +35,18 @@
 }
 
 html[data-theme="light"] {
-  --bg-base: #f6f7f9; --bg-raised: #ffffff; --bg-overlay: #ffffff; --bg-inset: #eceef1;
-  --fg-primary: #171a1d; --fg-secondary: #454c55; --fg-muted: #6b7280;
-  --line: #d8dce1; --line-strong: #b9bfc7; --accent: #b8451a; --accent-fg: #ffffff;
-  --state-ok: #1f7a52; --state-warn: #8a6512; --state-err: #b3282a; --state-info: #25608f;
-  --risk-t0: #5b636e; --risk-t1: #25608f; --risk-t2: #8a6512; --risk-t3: #b3282a;
-  --tunnel-on: #7b2d94; --diff-add: #d6efe0; --diff-del: #f7dcdc;
+  /* Both themes ship in v1 (D-068, closing O-045). Light is specified, not inverted: the obvious candidate values —
+     a muted and an accent that pass on a white page — fail on the raised surface, which is where most text sits.
+     Measured, and the numbers are in docs/DESIGN_SYSTEM.md §2.3. */
+  --bg-base: #fbfbfc; --bg-raised: #f2f4f7; --bg-overlay: #e7ebf0;
+  --bg-inset: #eef1f5;            /* (local) */
+  --fg-primary: #14181d; --fg-secondary: #3c4653; --fg-muted: #616b79;
+  --line: #c8ced7; --line-strong: #a7b0bb;   /* (local) */
+  --accent: #1864c0; --accent-fg: #ffffff;
+  --state-ok: #0c6b45; --state-warn: #8a5a00; --state-err: #c02b2b; --state-info: #1864c0;
+  --risk-t0: #5b6673; --risk-t1: #1864c0; --risk-t2: #8a5a00; --risk-t3: #c02b2b;
+  --diff-add: #0c6b45; --diff-del: #c02b2b;
+  --tunnel-on: #b35410;
 }
 
 * { box-sizing: border-box; }

@@ -187,6 +187,74 @@ as "extra".
 plan that executes them, so `docs/ROADMAP.md` is now inside the loop — every capability with an inventory region has
 to be named by a phase. That is the same rule, one level up.
 
+### F-13 — The review instrument disagreed with the design system
+**Severity: high, for this round.** `docs/review/mockups/tokens.css` carried `--accent: #d4622a` and a comment
+calling its values "placeholder … pending O-044", while `docs/DESIGN_SYSTEM.md` §2.1 stated constraints and no values.
+So far, consistent with "not decided yet". What was not consistent: the light block was **the dark theme inverted**,
+which is the one thing §1 principle 02 forbids — and it was inverted badly enough to be visible in the numbers. Its
+`--bg-raised` and `--bg-overlay` were both `#ffffff`, i.e. three surfaces collapsed to two, and `fg.muted` on that
+raised surface measured **4.19:1**, under AA for body text.
+
+**Resolution:** the palette was decided *by arithmetic* (O-044, O-045, O-046 → D-068): values recorded in
+`docs/DESIGN_SYSTEM.md` §2.3 with their worst-surface contrast for both themes, `scripts/check-docs.py` rule 13
+recomputes every printed ratio from the hexes, and a declared text floor below 4.5 is a failure ("a floor may be
+raised here, never lowered"). `tokens.css` now imports the same values instead of paraphrasing them, and the light
+theme is specified rather than derived. Measured along the way: no pair of state hues in this palette can reach even
+17% luminance separation while both clear 3:1 on every surface, so the `+`/`-` prefixes and the tier words are the
+meaning and the color is decoration — which is §1's never-color-only rule with a number behind it for the first time.
+
+**Lesson kept:** a mockup that shows placeholder values *while claiming to be the review instrument* is worse than no
+mockup, because the owner reviews the wrong colors and calls it approved. Either the instrument carries the decided
+values or it says, in the file the reviewer reads, that it does not.
+
+### F-14 — Eight documents kept lists of questions that had already been answered
+**Severity: medium, systemic.** Closing the open items exposed the same defect in eight places at once:
+`ARCHITECTURE.md` §21 listed ten "topics [that] must not be silently treated as finalized", of which eight had
+answers; `AGENT_RUNTIME.md` called the atomic-step definition and the retrieval strategy open twice;
+`docs/DATA_AND_MEMORY.md` §9 asked seven questions that D-065 and D-066 had answered; and `docs/INTERFACES_AND_API.md`,
+`docs/DESIGN_SYSTEM.md`, `docs/DEVELOPMENT.md`, `PROVIDERS_AND_TOOLS.md` and `SECURITY.md` each ended with an
+"Open Decisions" section whose items were closed elsewhere in the same commit set. Every one of those sections read
+as *current* — nothing marks a stale open-list as stale.
+
+**Resolution:** each list now states the answer and the decision ID next to the question, struck through where the
+house style already did that, and keeps the *genuinely* open items with the reason they are open (a device, real
+extensions, or post-v1). `docs/ROADMAP.md` §0's count of accepted/open decisions was updated in the same pass,
+because a figure like "47 accepted · 45 open" in an ASCII diagram is exactly the kind of number that is true once.
+
+**Lesson kept:** the register is not the only place a decision lives; it is only the place a decision is *counted*.
+Any document that enumerates open questions is a second register and needs the same status discipline — which is why
+`DECISIONS.md` §4's counters are checked mechanically and these eight lists are not, and why they should be short.
+
+### F-15 — A validation probe was written to test a stack nobody had chosen
+**Severity: medium.** `docs/ROADMAP.md` §2's P4 read "React + Vite production build served by the Gateway", and P5's
+pass conditions covered repaint, `Ctrl-C` and color tiers but not the composer key contract or Bengali truncation.
+Both rows were written before the decisions they were meant to inform; keeping them would have spent M0 measuring a
+framework the Web design then rejected (O-043 → D-068, framework-free) and skipped the two measurements the TUI
+design now depends on.
+
+**Resolution:** P4 builds and serves the small dependency-free bundle and checks the 360px bar against the overflow
+rule; P5 gained the `Ctrl+J` guarantee, the extended-key negotiation as a *recorded* result rather than a hope, the
+≤4 fps repaint budget, the readable 8-color tier and cluster-boundary truncation of pasted Bengali. Both rows state
+what a failure would change, which is the point of a probe.
+
+**Lesson kept:** when a decision lands, re-read the plan for the questions it was answering. A probe that tests an
+overturned assumption is not neutral — it costs a day and produces confidence in the wrong thing.
+
+### F-16 — The decision text invented two key bindings and one row
+**Severity: low, caught before it shipped.** Writing D-061 into `docs/UI_UX_SPEC.md` §4 came with two plausible
+inventions — `j`/`k` as select keys, and a `g`-prefix pane jump "matching the Web" — neither of which any inventory
+row carried, in a document whose job is to be *generated from* those rows. Fixing the sentence surfaced a real
+inconsistency in the same list: it said `Tab` or `1-5` while D-057's pane set has six members.
+
+**Resolution:** the invented keys were removed rather than back-filled into the inventories; the stale `1-5` became
+`1`–`6`; and the one thing the decision genuinely *does* create became an element with a row of its own —
+**T-A14**, walking the approval queue with `n`/`p` while the `2 of 5` count stays visible — which raised the TUI
+inventory to 203 elements and was recomputed by `scripts/count-inventory.py` rather than typed.
+
+**Lesson kept:** a decision text is not a license to add elements; it is a reason to check whether one is missing. If
+an answer makes a new control necessary, the control appears in the inventory with the size and the behavior, or it
+does not exist.
+
 ## 3. Checks That Passed
 
 | Check | Result |
@@ -213,7 +281,7 @@ Orphan check on the brief itself — every numbered requirement needs a home:
 | §9 tools/skills/plugins/compat | `EXTENSIONS.md`, `PROVIDERS_AND_TOOLS.md` §4 | Covered |
 | §10 security and privacy | `SECURITY.md` | Covered |
 | §11 storage and memory | `docs/DATA_AND_MEMORY.md` | Covered |
-| §12 technical direction | `DECISIONS.md` §3 + §5 + §5A | Covered, with `O-003`/`O-005` still open by design |
+| §12 technical direction | `DECISIONS.md` §3 + §5 + §5A | Covered; `O-003`/`O-005` were open by design and are closed by D-060 (npm workspaces, TypeBox), with the registry evidence in §5A re-checked 2026-10-10 |
 | §13 principles | `AGENTS.md` §2–§4 (enforceable form) | Covered |
 | §14 initial release scope | `docs/ROADMAP.md` §1–§8 | Covered |
 | §15 out of scope | `EXTENSIONS.md` §10, `docs/ROADMAP.md` §9 | Covered |
@@ -229,17 +297,26 @@ Being explicit, because "reviewed" must not quietly mean "verified":
 
 01. **No document has been tested against a real system.** Termux behavior (`node:sqlite` stability, Ink repaint
     cost, WAL growth, Android process killing) is asserted from reports and registry metadata, not measured here.
-    That is M0's job, and M0 can still invalidate `P-003`, `P-010`, and `P-006`.
+    That is M0's job, and M0 can still invalidate `P-003`, `P-010`, and `P-006`. The (R) round of 2026-10-10 changed
+    the *designs* around those measurements and did not touch their status: what it recorded is either arithmetic that
+    can be redone here (contrast ratios, cluster widths, registry versions and dates) or a choice about what to build.
+    Nothing that needs a phone was presented as settled, and the five items that need one say so with a protocol
+    (`docs/review/DECISION-QUEUE.md` §2).
 02. **`SECURITY.md` has not been adversarially reviewed** by anyone other than its author. A threat model written by
     the same agent that writes the mitigations is a single point of failure; the T-01…T-15 → test mapping should be
     checked by a second reader before M5 exit.
-03. **Provider claims are dated.** `DECISIONS.md` §5/§5A record versions as of 2026-10-09; registry state moves, so
-    both records carry an "as of" date and must be re-checked at M0 rather than trusted.
+03. **Provider claims are dated.** `DECISIONS.md` §5/§5A record versions as of 2026-10-09, re-checked against the npm
+    registry on 2026-10-10 for the (R) round (ink 8.0.0 published 2026-10-03, `@biomejs/biome` 2.5.15 on 2026-09-30,
+    `better-sqlite3` 13.0.3 on 2026-08-05); registry state moves, so both records carry an "as of" date and must be
+    re-checked at M0 rather than trusted. Ink 8 being a week old at review time is precisely why `P-010` stays
+    `Proposed`.
 04. **Cost/effort is unestimated.** `docs/ROADMAP.md` gives order and gates, not durations. Turning it into a
     schedule would require the owner's availability, which is not a documentation fact.
 05. **Bengali rendering and input ergonomics are untested** on a real phone keyboard (`docs/UI_UX_SPEC.md` §9,
     `docs/DESIGN_SYSTEM.md` §11) — this matters more for this project than for most, since the owner's working
-    language is Bengali and the primary device is a phone.
+    language is Bengali and the primary device is a phone. What *was* measured here is the arithmetic behind the
+    layout rule (code units vs grapheme clusters vs cells, in Node 22), which is enough to decide how truncation must
+    work and nowhere near enough to claim a terminal will agree about widths.
 
 ## 6. Owner Verification Checklist
 
@@ -251,8 +328,13 @@ The remaining half of M-D. Each item is a yes/no, not a discussion:
 - [ ] Sanity-check `docs/ROADMAP.md` §1: is M0 (throwaway Termux probes) genuinely wanted before M1, or is one probe
       (`P3` driver, `P5` TUI) enough to proceed?
 - [ ] Read `AGENTS.md` §7 (forbidden shortcuts) as the rules you actually want enforced on every future coding turn.
-- [ ] Confirm that every still-open item in `DECISIONS.md` §4 is either device-measured (O-002, O-006, O-051) or an
-      owner decision (O-053…O-063 from the element review), and that nothing is open out of habit.
+- [ ] Read `docs/review/DECISION-QUEUE.md` and veto anything in the (R) round you disagree with, one row at a time
+      (D-059). Thirteen `O-` rows are still open: O-001/O-002 (a phone build), O-006/O-051 (a phone render), O-008
+      (real extensions), O-052 (post-v1 by choice) and the halves of O-012/O-018 that M0 will finish — confirm that
+      nothing is open out of habit.
+- [ ] Decide whether the (R) round's *process* is the pattern you want: a delegated answer recorded with its evidence
+      and marked `(R)` beats an unmarked assumption, but it does move work from "asked" to "reviewed after". If you
+      would rather every item were asked first, say so and D-059 goes back to `Proposed`.
 - [ ] Verify `docs/INTERFACES_AND_API.md` §8's two documented limitations are acceptable rather than gaps to fill.
 
 **And the element-review gate added during M-D (D-055/D-056), which comes first:**
@@ -262,14 +344,15 @@ The remaining half of M-D. Each item is a yes/no, not a discussion:
 - [ ] `docs/review/WEB.md` — 185 elements over 19 regions. Reviewed through `docs/review/mockups/crabby-web-ui.html`, which is
       generated from that file, so an element that exists in one and not the other is a build error rather than a
       disagreement.
-- [ ] `docs/review/TUI.md` — 202 elements over 21 regions, every one answerable at 40 columns × 24 rows.
+- [ ] `docs/review/TUI.md` — 203 elements over 21 regions, every one answerable at 40 columns × 24 rows.
 - [ ] `docs/review/CLI.md` — 158 elements over 15 regions, with the pipe and the exit code as the binding case.
 - [ ] `docs/review/TELEGRAM.md` — 129 elements, where the transport's own limits are facts and the responses to them
       are the decisions, and where every parity-matrix capability has a command of its own (F-08).
 - [ ] Only after statuses stop saying `PROPOSED`: regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from
       the approved rows, then re-run §7.
 
-674 elements, 0 approved as of this round. (The count grew from 590 while F-08…F-10 were being fixed: a screen with no rows is the most expensive kind of gap, because it costs nothing to notice.) Nothing in this list is a formality: a row that reads "the small chip"
+675 elements, 25 decided as of this round — the 25 are the rows whose only blocker was an open question the (R) round
+answered; the other 650 wait on the owner, not on research. (The count grew from 590 while F-08…F-10 were being fixed: a screen with no rows is the most expensive kind of gap, because it costs nothing to notice.) Nothing in this list is a formality: a row that reads "the small chip"
 has as much standing as "the chat pane", and cutting it is a decision with an ID.
 
 When these are ticked, `docs/ROADMAP.md` §0 moves to "M-D complete" and M0 starts.

@@ -30,7 +30,7 @@
 | T1-01 | Root container | one primary pane plus the pinned status line (T2) | 40×24 minimum; grows | never two always-visible side panes at 40 columns | PROPOSED |
 | T1-02 | Pane switch row | `chat · tasks · jobs · approvals · logs · models` | one line; abbreviates to 3 chars at 40 columns | `Tab` cycles, `1`–`6` jumps; hidden while the help overlay is open, never while an approval waits | PROPOSED |
 | T1-03 | Active pane marker | the current pane name carries the marker | 1 char before the name | underline or `>` prefix depending on charset tier (T10-04) | PROPOSED |
-| T1-04 | Buffer choice | which screen buffer the app draws in and what the user keeps afterwards | whole screen | see open question **T1-A**; whichever is chosen, the help sheet states it | PROPOSED |
+| T1-04 | Buffer choice | which screen buffer the app draws in and what the user keeps afterwards | whole screen | Open question **T1-A**; whichever is chosen, the help sheet states it — decided in D-061 | ACCEPTED |
 | T1-05 | Resize handling | reflow on terminal size change | any width ≥40 | no crash, no lost scroll position; reflow debounced so dragging a desktop terminal does not redraw every frame | PROPOSED |
 | T1-06 | Below-40-column state | narrower than the design case | <40 columns | do not reflow into unreadability: status line + one pane, plus one line naming the minimum | PROPOSED |
 | T1-07 | Focus model | where keys go when a modal is up | n/a | the approvals modal takes focus; `Esc` closes only what is closable — a blocking approval is not closable (Web W-A11 parity) | PROPOSED |
@@ -44,6 +44,8 @@ itself on exit)? Termux users live in scrollback; an approval modal wants a stab
 plus an explicit "print to scrollback" action for tool output, decided together with the O-051 measurement on a phone.
 
 ### Region T2 — Status line (pinned, every pane)
+
+> **T1-A — closed (D-061).** Decided: **inline**. The frame draws in the normal buffer with Ink's line-diffed incremental mode, so scrollback survives, and any block can be pushed there explicitly with `print to scrollback`. Ink's own README states the scrollback buffer is unavailable while the alternate screen is active, and a phone user has no tmux to fall back to — so the alternate screen is the wrong default on the target device. A `alternateScreen` config key exists for a later measurement without a release, and T-O9 names the active mode, which is what this question was really guarding against.
 
 | ID | Element | Content | Sizes | Behavior | Placement | Status |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -73,6 +75,8 @@ rather than becoming a spec line by accident.
 
 ---
 
+> **T3-A — closed (D-061).** Decided: **not configurable in v1**. The hint strip is the authority on what a key does right now; a binding file would be a second source of truth for the same line, and `docs/INTERFACES_AND_API.md` §7.2 keeps one list. Revisit with a real conflict, not in advance.
+
 ## 2. Chat pane
 
 ### Region T4 — Message list
@@ -93,7 +97,7 @@ rather than becoming a spec line by accident.
 | T4-12 | Scroll position held | user scrolled up while content arrives | n/a | position held, plus a one-line `new content (3)` note — the Web W3-13 affordance expressed as text | PROPOSED |
 | T4-13 | Reconnect reconciliation | what changed while the terminal was disconnected | up to 4 lines | truth comes from `GET /tasks/{id}`, not from replayed events alone (D-049) | PROPOSED |
 | T4-14 | Task link line | which task this turn belongs to | one line | `Enter` opens the task detail pane (T7) | PROPOSED |
-| T4-15 | Long non-Latin text | Bengali paragraphs, combining marks, very long paths | full width | governed by open question **T-C2-B**; the row exists so the limit is a decision and not a surprise | PROPOSED |
+| T4-15 | Long non-Latin text | Bengali paragraphs, combining marks, very long paths | full width | governed by open question **T-C2-B**; the row exists so the limit is a decision and not a surprise — decided in D-062 | ACCEPTED |
 
 **Open question T4-A:** does the TUI render markdown at all, or pass text through raw? Rendering costs a re-layout
 per token batch and can mangle code; raw text is cheap and copyable. Proposal: render only emphasis and code spans,
@@ -101,9 +105,11 @@ leave headings as text, and never touch fenced blocks.
 
 ### Region T5 — Composer
 
+> **T4-A — closed (D-061).** Decided: **a named subset**. Emphasis, code spans and fenced blocks render; tables, nested lists and inline HTML pass through as text; the `--plain` switch (C2-02) turns rendering off entirely, and the TUI honours it the same way. Rendering more buys a re-layout on every resize for formatting a phone terminal cannot show.
+
 | ID | Element | Content | Sizes | Behavior | Status |
 | --- | --- | --- | --- | --- | --- |
-| T5-01 | Input area | multiline, draft persisted per session | starts at 1 line, grows to 6 then scrolls | `Enter` sends; newline needs its own key because terminals mostly cannot report `Shift+Enter` (see **T5-A**) | PROPOSED |
+| T5-01 | Input area | multiline, draft persisted per session | starts at 1 line, grows to 6 then scrolls | `Enter` sends; newline needs its own key because terminals mostly cannot report `Shift+Enter` (see **T5-A**) — decided in D-061 | ACCEPTED |
 | T5-02 | Real cursor | terminal cursor at the edit position | 1 cell | not a drawn block: Termux's IME and its editing keys only behave around a real cursor | PROPOSED |
 | T5-03 | Slash command menu | `/model` `/compact` `/pin` `/task` `/cancel` | up to 6 lines under the input | filtered as typed; every command also has a visible control in Web (`docs/INTERFACES_AND_API.md` §8) | PROPOSED |
 | T5-04 | File attach | path typed or picked from workspace roots | one line per path | paths as text, no blob preview; the deny-list applies (`SECURITY.md` §8) | PROPOSED |
@@ -112,13 +118,15 @@ leave headings as text, and never touch fenced blocks.
 | T5-07 | Send vs stop | one control, two states | one line | stop means the cancel endpoint's semantics: finish the current step, then settle — never a local hide | PROPOSED |
 | T5-08 | Queue | messages sent while a task runs | count + `q` lists them | queued, not interrupting; reorder and drop available in that list | PROPOSED |
 | T5-09 | Input history | previous inputs via `↑` when the composer is empty | n/a | per session, and it must not swallow `↑` for scrolling in a pane that scrolls | PROPOSED |
-| T5-10 | Token estimate of the draft | approximate, labeled as an estimate | one line | same honesty rule as W4-09 and O-031 | PROPOSED |
+| T5-10 | Token estimate of the draft | approximate, labeled as an estimate | one line | same honesty rule as W4-09 and O-031 — decided in D-064 | ACCEPTED |
 
 **Open question T5-A:** newline. Browsers distinguish `Shift+Enter`; terminals mostly cannot. Options: `Ctrl-J`, a
 trailing `\` continuation, or an explicit multiline mode. The constraint is what a phone keyboard can actually send
 from Termux, so this belongs with the M0 device measurements (O-002), not with taste.
 
 ---
+
+> **T5-A — closed (D-061).** Decided: **`Ctrl+J` is the newline key, always available**, `Shift+Enter` and `Alt+Enter` are enabled only when the terminal answers an extended-key query, and `Enter` always sends. A legacy terminal reports `Shift+Enter` as `CR`, byte-identical to send, and Termux's own support is documented as unclear — a composer whose newline depends on negotiation breaks on the primary platform. Whether negotiation succeeds on a real device stays a measurement (O-002's list), but the design no longer waits on it, because `Ctrl+J` works either way.
 
 ## 3. Tasks
 
@@ -207,7 +215,7 @@ from Termux, so this belongs with the M0 device measurements (O-002), not with t
 | T-A2 | Action summary | one sentence, second person, no hedging | up to 3 lines | same wording rule as Web W-A2 (`docs/UI_UX_SPEC.md` §10) | PROPOSED |
 | T-A3 | Exact target | the real command / path / recipient / URL / SQL | own line, never paraphrased | if it exceeds the width it stays on its own line and wraps; it is never truncated in the middle | PROPOSED |
 | T-A4 | Consequence and reversibility | what changes, whether undo exists, what an undo costs | 2 lines | both parts required; `reversible: unknown` is a legal value and must be printed as one | PROPOSED |
-| T-A5 | Expiry countdown | remaining time + why it expires | one line | per-tier duration is still open (O-041) | PROPOSED |
+| T-A5 | Expiry countdown | remaining time + why it expires | one line | per-tier duration is decided in D-064 | ACCEPTED |
 | T-A6 | Approve once | `a` | one line | the only affirmative action in v1 (D-052) — there is no "always allow" key | PROPOSED |
 | T-A7 | Deny | `d`, then an optional reason on the next line | one line | the reason is recorded on the task | PROPOSED |
 | T-A8 | Show related task | `t` | one line | jumps to T7 without losing the pending item; answering from there is still one keystroke | PROPOSED |
@@ -216,6 +224,7 @@ from Termux, so this belongs with the M0 device measurements (O-002), not with t
 | T-A11 | No dismissal | `Esc` inside the modal | n/a | `Esc` neither answers nor closes it; it can only move focus onto the buttons — a blocking thing stays blocking | PROPOSED |
 | T-A12 | Why am I being asked | `?` inside the modal | up to 4 lines | names the rule and tier that produced the prompt and where to change it, so the user fixes config instead of resenting the prompt | PROPOSED |
 | T-A13 | Typed answer as an alternative | typing `yes` / `no` besides the keys | one line | accepted, because one letter on a phone keyboard is a mis-tap risk; ambiguity (e.g. `y` meaning retry) is not allowed | PROPOSED |
+| T-A14 | Queue walk | `n` next, `p` previous, header reads `2 of 5` | one char each, plus the count line | the consequence of one-card display (D-061): the queue has to be walkable without dismissing the item in front of you, and the count has to stay visible while it is walked, or "how many am I ignoring" becomes unanswerable at exactly the moment it matters | PROPOSED |
 
 **Open question T-A-A:** with two items pending, the modal shows one at a time. Alternative: a list with a cursor.
 One-at-a-time is proposed because a queue invites answering without reading, and 24 rows cannot hold two full
@@ -223,13 +232,15 @@ readable cards anyway.
 
 ---
 
+> **T-A-A — closed (D-061).** Decided: **one card at a time**, header `2 of 5`, `n`/`p` to walk the queue, and the count also sits in the status line so the queue size is visible from any pane. Twenty-four rows cannot hold two readable cards, and a readable risk line is the one thing an approval may not lose.
+
 ## 5. Context and memory
 
 ### Region T8 — Context
 
 | ID | Element | Content | Sizes | Behavior | Status |
 | --- | --- | --- | --- | --- | --- |
-| T8-01 | Budget line | used / available, counted-vs-estimated flag, reserve for output | one line | an estimate carries `~`, because that is the entire point (O-031) | PROPOSED |
+| T8-01 | Budget line | used / available, counted-vs-estimated flag, reserve for output | one line | an estimate carries `~`, because that is the entire point (O-031 closed by D-064) | ACCEPTED |
 | T8-02 | What is in context | system, pinned, recent turns, retrieved memory, tool results, each with cost | up to 6 lines | a section costing 0 shows `0` instead of hiding, so the shape is visible | PROPOSED |
 | T8-03 | What was compacted | summary card + where the originals live | 3 lines | never implies the original is gone (D-027) | PROPOSED |
 | T8-04 | Pin / unpin | per message, file, decision | one line | same three targets as Web W7-04 | PROPOSED |
@@ -294,7 +305,7 @@ readable cards anyway.
 | T12-05 | Shell toggle | off by default; enabling is a described action with the no-sandbox sentence | 2 lines | the sentence is in the confirm, not after it | PROPOSED |
 | T12-06 | Workspace roots editor | add/remove roots, with the deny-list applied to each | 1 line per root | shows the deny-list rows the user would otherwise have to trust (`SECURITY.md` §8) | PROPOSED |
 | T12-07 | Limits editor | timeouts, output caps, temp lifetime, parallel steps | up to 5 lines | the default is printed next to the current value | PROPOSED |
-| T12-08 | Per-task narrowing | mandatory vs opt-in still open (O-025); present for both | 2 lines | the same open question as Web W11-08, closed for both interfaces at once | PROPOSED |
+| T12-08 | Per-task narrowing | mandatory vs opt-in decided in D-066; present for both | 2 lines | the same open question as Web W11-08, closed for both interfaces at once — decided in D-066 | ACCEPTED |
 
 ---
 
@@ -330,10 +341,10 @@ readable cards anyway.
 | T13-03 | Diff before apply | exactly what changed | up to 6 lines | `-`/`+` lines, because that is what a user can paste into an issue | PROPOSED |
 | T13-04 | T3 markers | security-relevant rows flagged before the edit, not after | 1 marker | the marker is a word plus an attribute, never color alone | PROPOSED |
 | T13-05 | Density mode | comfortable / compact / reduced | one line | an explicit user choice, never auto-detected (`docs/DESIGN_SYSTEM.md` §8) | PROPOSED |
-| T13-06 | Color tier override | force 8 / 16 / 256 regardless of detection | one line | the escape hatch for a wrong detection (O-046); without it a misdetection is unfixable | PROPOSED |
+| T13-06 | Color tier override | force 8 / 16 / 256 regardless of detection | one line | the escape hatch for a wrong detection (O-046 closed by D-068); without it a misdetection is unfixable — decided in D-068 | ACCEPTED |
 | T13-07 | Retention controls | event and history retention | 2 lines | shows the current size, because "30 days" means nothing without bytes | PROPOSED |
 | T13-08 | Reset / export config | sanitized export only | n/a | the plaintext config never contains a key value | PROPOSED |
-| T13-09 | Language | UI copy strings; Bengali first-class | one line | subject to the same shaping caveat as T4-15, so it depends on **T-C2-B** | PROPOSED |
+| T13-09 | Language | UI copy strings; Bengali first-class | one line | subject to the same shaping caveat as T4-15, so it depends on **T-C2-B** — decided in D-062 | ACCEPTED |
 
 ### Region T14 — Access
 
@@ -370,7 +381,7 @@ readable cards anyway.
 
 | ID | Element | Content | Sizes | Behavior | Status |
 | --- | --- | --- | --- | --- | --- |
-| T-C1 | Color capability detection | 16 / 256 / 8-color paths, all required | n/a | the detection strategy is open (O-046); until it lands, T13-06 is mandatory, not nice | PROPOSED |
+| T-C1 | Color capability detection | 16 / 256 / 8-color paths, all required | n/a | the detection strategy is open (O-046 closed by D-068); until it lands, T13-06 is mandatory, not nice — decided in D-068 | ACCEPTED |
 | T-C2 | `NO_COLOR` and `TERM=dumb` | no color, no box-drawing | n/a | meaning survives via words, punctuation, and placement (`docs/UI_UX_SPEC.md` §6) | PROPOSED |
 | T-C3 | Width tiers | 40 / 60 / 80 / 120 columns | n/a | wider adds columns, narrower never requires them — the §4 rule stated per element | PROPOSED |
 | T-C4 | Height tiers | 24 rows usable minimum | n/a | at 12 rows the modal (T-A1) switches to a compact card instead of clipping the target line | PROPOSED |
@@ -378,7 +389,7 @@ readable cards anyway.
 | T-C6 | Redraw cost | tokens per second the renderer can afford | n/a | measured on a phone in M0 P5 (O-051), not assumed; T4-05 and T15-08 depend on the number | PROPOSED |
 | T-C7 | Resize and selection | what is preserved across a resize | n/a | selection is lost when the terminal reflows — the help sheet says so instead of letting the user fight it | PROPOSED |
 | T-C8 | Selection and copy | everything meant to be copied fits on one line | n/a | ids, commands, URLs, and exact targets each get their own line for exactly this reason | PROPOSED |
-| T-C9 | Bengali in a terminal | shaping of combining marks and conjuncts | n/a | see open question **T-C2-B**; the answer decides T4-15 and T13-09 | PROPOSED |
+| T-C9 | Bengali in a terminal | shaping of combining marks and conjuncts | n/a | Open question **T-C2-B**; the answer decides T4-15 and T13-09 — decided in D-062 | ACCEPTED |
 | T-C10 | Bell and noise | terminal bell, and nothing else that makes sound | n/a | bell only for approvals and only when enabled (T-A9) | PROPOSED |
 | T-C11 | No mouse dependence | keys and typed commands cover everything | n/a | clicking is a Web affordance; every TUI action is reachable by keys (parity rule) | PROPOSED |
 | T-C12 | Cell width assumptions | Bengali and emoji may not be one cell per character | n/a | wrapping is computed, never guessed from character count | PROPOSED |
@@ -390,6 +401,8 @@ Proposal: (b) now, plus (c) as an M0 measurement — "Bengali first-class" is a 
 promise a terminal cannot keep has to be narrowed in words, not silently.
 
 ---
+
+> **T-C2-B — closed (D-062).** Decided: **measure clusters, align nothing.** Widths come from grapheme clusters (`Intl.Segmenter`, present in Node 22 — measured, not assumed) and truncation happens only at cluster boundaries. Measured here: `দিয়েছি` is 7 code units and 7 code points but 3 clusters and 6 cells; `কিন্তু` is 6 units and 4 cells; cutting `দিয়েছি` at 3 code units yields `দিয` with the conjunct torn. Terminals disagree about Indic spacing marks, so no grid, ruler or box may contain non-Latin text: chrome stays English, content passes through unshaped, and the limit is stated in help rather than discovered.
 
 ## 10. First run and global surfaces
 
@@ -405,7 +418,7 @@ promise a terminal cannot keep has to be narrowed in words, not silently.
 | T-O6 | Command palette | absent; the slash menu and `?` cover it | n/a | recorded so the absence is deliberate (the Web has W-O6, desktop-only) | PROPOSED |
 | T-O7 | Gateway down screen | the exact restart command for Termux | 3 lines | never a generic retry, because Android may have killed the process | PROPOSED |
 | T-O8 | Unknown input | a typo in a slash command or config key | 2 lines | names the closest real option and keeps the bad input on screen, so the user sees what was parsed | PROPOSED |
-| T-O9 | Help sheet | every key, every slash command, scrollback behavior, color tiers | full pane | states the T1-A choice explicitly | PROPOSED |
+| T-O9 | Help sheet | every key, every slash command, scrollback behavior, color tiers | full pane | states the T1-A choice explicitly — decided in D-061 | ACCEPTED |
 | T-O10 | Accessibility checklist | no color-only meaning, visible focus, readable in 8 colors, nothing beyond the documented key set required | n/a | the TUI's accessibility is mostly the degradation rules in T-C; this row is the checklist for them | PROPOSED |
 
 ---
@@ -419,17 +432,22 @@ promise a terminal cannot keep has to be narrowed in words, not silently.
 | App frame | T1, T2, T3 | 24 | resize, below-minimum, startup, reconnect, dumb terminal |
 | Chat | T4, T5 | 25 | loading, streaming, stall, approval in list, error, reconnect, narrow |
 | Tasks | T6, T7 | 22 | empty, no-bulk, cancel phases, checkpoint, ladder, 40-column drop order |
-| Approvals | T-A | 13 | conflict, expiry, no-dismiss, bell-off, typed answer |
+| Approvals | T-A | 14 | conflict, expiry, no-dismiss, bell-off, typed answer, queue walk |
 | Context & memory | T8, T9 | 16 | overflow warning, pending queue, propagation preview |
 | Providers/models/tools | T10, T11, T12 | 26 | insecure transport, forced-on, deferred tools |
 | Extensions | T-E | 12 | suspended, locked, verdict-failed, pre-approval size report |
 | Settings/access/logs | T13, T14, T15 | 26 | diff-before-apply, redaction, paging, color-tier escape hatch |
 | Capability rules | T-C | 12 | this region is the degraded-state contract |
 | Onboarding | T-O | 10 | skip, gateway down, unknown input, help |
-| **Total** | **21 regions** | **202 elements** | — |
+| **Total** | **21 regions** | **203 elements** | — |
 
 Two things this file must satisfy before `docs/UI_UX_SPEC.md` is regenerated from it (per D-055): every `Sizes`
 cell states the 40-column outcome, and every open question here has an owner decision.
 
-**Open questions:** T1-A (buffer / scrollback) · T3-A (configurable keys in v1) · T4-A (how much markdown) ·
-T5-A (newline key, tied to O-002) · T-A-A (one card vs a list) · T-C2-B (Bengali shaping).
+**Open questions:** all six are closed by the review round of 2026-10-10 — T1-A, T3-A, T4-A, T5-A and T-A-A by D-061, T-C2-B by D-062. Nothing in this inventory waits on a decision any more; what still waits is measurement on a physical phone (O-006 and O-051 for rendering cost and flicker, O-002 for the key negotiation), and those rows are labelled as unvalidated rather than accepted.
+
+
+
+
+
+

@@ -27,7 +27,8 @@
     interrupts.
 07. **Recoverable presentation.** If the stream drops, the screen shows it says "reconnecting" and reconciles from
     `GET /tasks/{id}` (`docs/INTERFACES_AND_API.md` §5.4) rather than freezing a stale "running" badge.
-08. **Bengali and English are both first-class.** Longer strings must not break layouts, and copy is written to
+08. **Bengali and English are both first-class.** Longer strings must not break layouts (measured cluster widths and
+    cluster-boundary truncation, D-062 — see §9), and copy is written to
     survive translation (`docs/DESIGN_SYSTEM.md` §3).
 
 ## 2. Web UI — Structure
@@ -52,6 +53,13 @@ must be usable at 360px without horizontal scroll.
 Model + provider (with a fallback-switch marker when the ladder fired), tunnel indicator (dim when off, colored and
 labeled when on), vault state (locked/unlocked), pending-approval count, connection state (`live` /
 `reconnecting` / `offline`), and Gateway version. Every one of these is a control, not a label: tap to change.
+
+**Overflow rule (D-067, closing O-053).** At 360px the bar fits four chips — model, connection, approvals, vault —
+and everything else goes to the `more` sheet (W1-11), which lists the items it swallowed with their full text. Two
+states escape the sheet and stay in the bar whatever else is happening: **a locked vault** and **offline**. They are
+the two where the bar is the only place a user looks, and both are states where the interface is lying by omission if
+it is quiet about them. The bar wraps to a second line rather than truncating chip text, and truncating is the failure
+this rule exists to prevent.
 
 ### 2.2 Screens
 
@@ -99,15 +107,33 @@ Target: 40 columns minimum, 24 rows usable. The renderer is a reconciling one (I
 is assumed available and the layout must be expressed in weights rather than fixed column counts where possible. Every view must be functional at that size; wider sizes only add
 columns, never require them.
 
-- **Single primary pane** with mode switching (`Tab` or `1-5`) instead of always-visible side panes.
+- **Single primary pane** with mode switching (`Tab` or `1`–`6`, matching the six panes below rather than the five
+  this list had while `jobs` was still being argued about) instead of always-visible side panes.
 - Panes: chat, tasks, task detail, approvals, jobs, logs, providers/models (D-057). Approvals steal focus with a modal and beep
   (bell) only if enabled.
-- Streaming renders line-buffered, no re-layout of the whole screen per token (flicker on slow terminals is a real
-  usability bug, not a cosmetic one).
+- **Inline rendering, not the alternate screen** (D-061, closing O-054). The frame draws in the terminal's normal
+  buffer with line-diffed incremental updates, so scrollback survives the session and long-press selection behaves
+  like every other terminal app; `print to scrollback` pushes a block there deliberately. An `alternateScreen`
+  config key exists so the trade can be re-measured without a release, and the help sheet (T-O9) always names which
+  mode is on.
+- Streaming renders line-buffered with a repaint capped at about 4 fps while tokens arrive, and no re-layout of the
+  whole screen per token (flicker on slow terminals is a real usability bug, not a cosmetic one). The cap is a
+  budget, not a promise: what a device actually sustains is O-006 and O-051, and this line stays *Needs Validation*
+  in the inventory until someone measures it on a phone.
+- **Markdown is rendered as a named subset** (D-061, closing O-056): emphasis, code spans and fenced blocks; tables,
+  nested lists and inline HTML pass through as text. `--plain` turns rendering off entirely, and the TUI honours it
+  exactly as the CLI does, because a user piping a TUI screenshot into a bug report deserves the same output they
+  would get from a terminal they trust.
 - Status line pinned at the bottom: model, tunnel, connection, pending approvals.
 - Keys: `Ctrl-C` cancel task (not quit); `Ctrl-Q` quit; `Esc` close pane/modal; `?` help; `s` session switcher;
-  `↑↓` select;
-  `Enter` open; `a` approve; `d` deny; `x` cancel task; `r` resume; `m` switch model.
+  `↑↓` select; `Enter` open; `a` approve; `d` deny; `n`/`p` walk the approval queue (D-061, row T-A14);
+  `x` cancel task; `r` resume; `m` switch model. **Keys are fixed in v1** (D-061, closing O-059): no binding file, because the hint strip is a statement about what
+  a key does right now and a config file would make it a guess.
+- **Newline in the composer is `Ctrl+J`, always** (D-061, closing O-055 and O-002's design half). `Shift+Enter` and
+  `Alt+Enter` are enabled only when the terminal confirms extended-key reporting, and `Enter` always sends. A legacy
+  terminal reports `Shift+Enter` as `CR` — byte-identical to send — so a design built on it breaks on the primary
+  platform, where Termux's support is documented as unclear. The composer's hint line states the key that works, which
+  is what makes the fallback invisible when negotiation succeeds and harmless when it does not.
 - Copy on Termux is via long-press selection; therefore ids and commands must fit on one short line so they are
   selectable without wrapping into uselessness.
 
@@ -176,6 +202,13 @@ Every screen must define all of these; a missing state is a defect, not a follow
 ## 9. Accessibility and Input
 
 - WCAG 2.2 AA contrast for text and for tier chips; tier is never color-only (each chip carries its label `T0`…`T3`).
+  The values and their measured ratios are in `docs/DESIGN_SYSTEM.md` §2.3, and both themes ship in v1 (D-068,
+  closing O-044 and O-045) — light was specified, not inverted, because the obvious first candidate failed AA on a
+  raised surface.
+- **Text width is measured in grapheme clusters, never in code units** (D-062, closing O-058). Truncation happens at a
+  cluster boundary; no grid, ruler, progress bar or table may contain non-Latin text, because terminals disagree about
+  Indic spacing marks and no model of ours will beat that argument. Interface chrome stays English, user and model
+  content passes through unshaped, and any length limit is stated in help rather than discovered by the user.
 - Touch targets ≥44px in the Web UI; TUI key hints always visible on narrow screens.
 - Full keyboard operation in the browser; visible focus rings; logical tab order inside approval dialogs, with the
   destructive option never pre-focused.

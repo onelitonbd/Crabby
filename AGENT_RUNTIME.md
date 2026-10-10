@@ -132,7 +132,7 @@ The runtime MUST:
 
 AI-based risk assessment MAY assist this process, but security enforcement MUST NOT depend exclusively on an AI model's judgment.
 
-The precise risk classification system, approval persistence, and policy configuration format remain open decisions. `SECURITY.md` owns the policy and threat-model definition.
+The risk tiers and their per-tool assignment are decided (`SECURITY.md` §6, `PROVIDERS_AND_TOOLS.md` §4.2, D-046), and so is the classifier that nudges `shell.run` upward (D-066, closing O-032 — an escalation hint, never the boundary). Approval **persistence** is decided as *absent* in v1 (D-052), and policy configuration is one file in one format, `config.json`, whose schema is the artifact `crabby config schema --json` prints (D-060). What remains open in this area is a number, not a design: the timeout thresholds and escalation tuning that M2 sets against real usage. `SECURITY.md` owns the policy and threat-model definition.
 
 ## 6. Cancellation Behavior
 
@@ -161,7 +161,7 @@ Where an external action may already have taken effect when cancellation arrived
 
 Safety-critical intervention MUST override the normal finish-current-step behavior when continuing an operation would create unacceptable harm or leak sensitive data.
 
-Timeout thresholds, escalation mechanisms, and the definition of an atomic execution step remain open decisions.
+The definition of an atomic execution step is decided — it is the committed step boundary that D-065 resumes across and `SECURITY.md` §6.3 approves at — and the escalation mechanism is the tier ladder in `SECURITY.md` §6. Timeout thresholds remain a tuning value (the 64 KiB and temp-lifetime caps are decided in D-064; a per-tool duration is not), and that distinction is the point: an undecided number is a default to be measured, not a gap in the contract.
 
 ## 7. Automatic Recovery and Resume
 
@@ -209,7 +209,10 @@ Task recovery is separate from database transaction recovery. A successfully rec
 
 Crabby MUST NOT claim that every interrupted task can be resumed without information loss or duplicate side effects.
 
-Checkpoint frequency, recovery ordering, retry limits, and recovery verification remain open implementation decisions.
+Checkpoint frequency is not a knob: a checkpoint is written at each committed step boundary (D-065), recovery may
+pass only a step that is idempotent or has its effect recorded, and the retry ladder is D-043's floor with D-064's
+schedule inside it. Recovery verification is the `integrity_check` and the committed-state comparison in
+`docs/DATA_AND_MEMORY.md` §2.2 — what remains open is the tuning of per-tool timeouts, not the ordering rules.
 
 ## 8. Context Management and Compaction
 
@@ -243,7 +246,7 @@ Crabby MUST NOT assume that a summary perfectly preserves all details from the o
 
 The context-management design MUST remain independent of a specific model provider's context window or compaction API.
 
-Compaction thresholds, summary formats, memory retrieval strategies, and token-budget allocation remain open decisions.
+Retrieval strategy is decided (D-065: SQLite FTS5, no vector index before a measured need) and the summary format follows the hybrid compaction design in D-027. Compaction thresholds and budget allocation stay tuning values validated against the acceptance list rather than a benchmark (D-065, closing O-011) — a threshold picked to look right in a plan is how a context system ends up discarding the thing the user pinned.
 
 ## 9. Error Handling
 

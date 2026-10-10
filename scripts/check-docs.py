@@ -20,13 +20,12 @@ DOC_GLOBS = ["*.md", "docs/*.md", "docs/review/*.md"]
 ID_RE = re.compile(r"\b([DPO])-(\d{3})\b")
 MD_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)#]+\.[A-Za-z]+)(#[^)]*)?\)")
 FILE_REF_RE = re.compile(r"`((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.md)`|`([A-Za-z0-9_.-]+\.md)`")
-# Referenced-but-unwritten documents are a known phase of this project: they are
-# reported as advisory, because the plan explicitly defers them (DECISIONS.md section 8).
-ADVISORY_FILENAMES = {
-    "INTERFACES_AND_API.md", "UI_UX_SPEC.md", "DESIGN_SYSTEM.md", "ROADMAP.md",
-    "DEVELOPMENT.md", "AGENTS.md", "LICENSE", "SKILL.md", "CHANGELOG.md", "CONSISTENCY_REVIEW.md",
-    "WEB.md", "TUI.md", "CLI.md", "TELEGRAM.md",
-}
+# Two referenced files are unwritten on purpose, and only these two are forgiven: the license arrives with
+# distribution and the changelog with the first release (docs/ROADMAP.md section 11). Everything else that used to be
+# on this advisory list has been written, so a reference to a missing planning document is now a failure rather than
+# a note — which is how the F-14 class of defect (a document referring to a section that quietly no longer exists)
+# gets caught instead of accumulated.
+ADVISORY_FILENAMES = {"LICENSE", "CHANGELOG.md"}
 SECTION_RE = re.compile(r"`([A-Z][A-Z_]+\.md)`\s*§(\d+(?:\.\d+)*)")
 H2_RE = re.compile(r"^##\s+(\d+)(?:[^\n]*)$", re.M)
 CAPABILITY_RE = re.compile(r"`([a-z]+(?:\.[a-z_]+)+(?::-root)?)`")
@@ -500,6 +499,78 @@ def main() -> int:
                     f"docs/review/{key}: the `{name}` resource has routes in the API and nothing here — an "
                     f"interface either carries the capability or records why it does not"
                 )
+
+    # 13. the palette table in docs/DESIGN_SYSTEM.md §2.3 states measured ratios, so they are measured
+    #     here as well. A hex can be edited without measuring it, and a minimum can be lowered quietly;
+    #     both are caught by recomputing WCAG 2.2 contrast from the hexes in the table.
+    design = bodies.get(ROOT / "docs" / "DESIGN_SYSTEM.md", "")
+    m = re.search(r"### 2\.3 Values.*?\n(###|## 3\.)", design, flags=re.S)
+    if not m:
+        problems.append("docs/DESIGN_SYSTEM.md: §2.3 (measured palette) is missing")
+    else:
+        def _lum(h):
+            h = h.lstrip('#')
+            c = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+            c = [(v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4) for v in c]
+            return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+        def _ratio(a, b):
+            la, lb = _lum(a), _lum(b)
+            hi, lo = max(la, lb), min(la, lb)
+            return (hi + 0.05) / (lo + 0.05)
+
+        palette, surfaces, raw = {}, {}, {}
+        for line in m.group(0).splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) != 7 or not cells[0].startswith("`"):
+                continue
+            tok = cells[0].strip("`")
+            vals = {}
+            for label, col in (("dark", 1), ("light", 2)):
+                hexv = cells[col].strip("`")
+                if not re.fullmatch(r"#[0-9a-f]{6}", hexv):
+                    problems.append(f"docs/DESIGN_SYSTEM.md: {tok} {label} value `{hexv}` is not a 6-digit lowercase hex")
+                    continue
+                vals[label] = hexv
+            if len(vals) != 2:
+                continue
+            palette[tok] = vals
+            raw[tok] = cells
+            if tok.startswith("bg."):
+                surfaces[tok] = vals
+        wanted = [t for t in ("bg.base", "bg.raised", "bg.overlay") if t not in surfaces]
+        if wanted:
+            problems.append(f"docs/DESIGN_SYSTEM.md: §2.3 needs all three surfaces to measure against; missing {', '.join(wanted)}")
+        else:
+            for tok, vals in palette.items():
+                if tok.startswith("bg."):
+                    continue
+                minimum, shown_d, shown_l = raw[tok][3], raw[tok][4], raw[tok][5]
+                if tok.split(".")[0] in ("fg", "accent", "state", "risk") and float(minimum) < 4.5:
+                    problems.append(
+                        f"docs/DESIGN_SYSTEM.md: {tok} is text and declares a minimum of {minimum}; WCAG 2.2 AA "
+                        f"body text is 4.5 — a floor may be raised here, never lowered"
+                    )
+                if minimum == "—":
+                    if shown_d != "—" or shown_l != "—":
+                        problems.append(f"docs/DESIGN_SYSTEM.md: {tok} is declared exempt but still prints ratios")
+                    continue
+                for label, shown in (("dark", shown_d), ("light", shown_l)):
+                    worst = min(_ratio(vals[label], surfaces[s][label]) for s in ("bg.base", "bg.raised", "bg.overlay"))
+                    try:
+                        stated = float(shown)
+                    except ValueError:
+                        problems.append(f"docs/DESIGN_SYSTEM.md: {tok} {label} ratio `{shown}` is not a number")
+                        continue
+                    if abs(stated - worst) > 0.02:
+                        problems.append(
+                            f"docs/DESIGN_SYSTEM.md: {tok} {label} prints {stated:.2f} but the hexes measure {worst:.2f} "
+                            f"— the worst surface, not bg.base, is what a token has to clear"
+                        )
+                    if worst < float(minimum) - 0.005:
+                        problems.append(
+                            f"docs/DESIGN_SYSTEM.md: {tok} {label} measures {worst:.2f} against its stated minimum {minimum}"
+                        )
 
     if problems:
         print(f"✗ {len(problems)} documentation problem(s):")

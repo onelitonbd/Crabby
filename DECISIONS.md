@@ -76,6 +76,16 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-056 | The review medium for an interface is a mockup generated from its inventory file (`docs/review/mockups/`), not a hand-drawn picture: every element shown must come from a row, must click back to that row, and must be able to carry a decision out of the mockup. The inventory stays the source of truth; a generated view cannot contradict it. A mockup is a review instrument, not implementation, and is never shipped. | Accepted |
 | D-057 | Scheduled jobs get a first-class surface in v1: a `Scheduled` screen in the Web UI (fifth nav item), a sixth TUI pane, `crabby job …` commands, and `/jobs` on Telegram. They are **not** folded into the task list, because a job is a standing authority to run work later and needs its own pause/edit/review affordances. | Accepted |
 | D-058 | Gateway lifecycle (`start` / `stop` / `restart`) and the sanitized diagnostics report are capabilities of all four interfaces, not CLI-only conveniences. Restart/shutdown is T3 (`config.write`) and confirms in every interface that shows it. | Accepted |
+| D-059 | **Review-round authority.** On 2026-10-10 the owner instructed: research, then arrange everything according to the agent's recommendations. Decisions in this round are marked **(R)**, each names the evidence it rests on, and each is reversible one row at a time — an (R) row the owner rejects goes back to `Proposed` or `Open` without touching its neighbours. Anything that can only be measured on a physical phone stays Needs Validation and is listed as such, because deciding it here would be the exact failure mode this project forbids (an unvalidated choice presented as final). | Accepted (R) |
+| D-060 | **Toolchain.** npm with workspaces (no pnpm: Termux installs must be reproducible with the one package manager a user already has, D-050's clone+`npm install` path). Lint and format: Biome — the package is `@biomejs/biome` (2.5.15, verified on the npm registry, zero runtime deps); `biome` on npm is an unrelated 2016 package and must never be the install target. Types/schemas: TypeBox (0.34.52) over Zod, because the API contract, the config schema (`crabby config schema --json`) and the generated `--help` all need real JSON Schema, which TypeBox emits rather than converts. `packages/*` are not published independently in v1 (one repo, one version, no cross-package skew to support). `scripts/check-docs.py` runs in CI as a required check. Termux coverage: `termux/termux-docker` (active, verified on GitHub) runs the Node/toolchain half of the suite in CI; the device checklist remains the substitute for `termux-api` calls and TUI measurement, because a container has no Android runtime. Closes O-003, O-005, O-036, O-047, O-048, O-049, O-050. | Accepted (R) |
+| D-061 | **Terminal input and rendering contract.** (a) The TUI renders **inline**, not in the alternate screen, and turns on Ink's line-diffing incremental mode; a `print to scrollback` action exists for any block the user may want to keep, because losing copy-paste history on a phone is worse than exit residue (O-054). (b) Newline in the composer is **`Ctrl+J`** as the always-available key; `Shift+Enter`/`Alt+Enter` are used only when the terminal confirms extended-key reporting, and `Enter` always sends (O-002 design half, O-055): the evidence is that a plain terminal reports Shift+Enter as `CR`, identical to Enter, and Termux's own support is only certain via a fork's implementation, so a design that depends on it is a design that breaks on the primary platform. (c) Markdown in the TUI renders emphasis, code spans and fenced blocks only; tables, nested lists and inline HTML pass through as text (O-056). (d) Approvals are **one card at a time** with a queue count in the status line (O-057): 24 rows cannot hold two readable cards, and a readable second card is the one thing an approval cannot lose. (e) Keys are **fixed in v1**, no configuration surface (O-059) — a binding file is a second source of truth for the hint strip, and the hint strip is the authority. | Accepted (R) |
+| D-062 | **Non-Latin text in terminals.** Layout never measures text with code units or code points: it segments grapheme clusters (`Intl.Segmenter`, present in Node 22 — measured here, not assumed) and sums cell widths. Truncation happens only at cluster boundaries. No grid-aligned table, ruler or box may contain non-Latin text, because terminals disagree about Indic spacing marks: measured here, `দিয়েছি` is 7 code units but 3 clusters and 6 cells, `কিন্তু` is 6 code units and 4 cells, and truncating `দিয়েছি` at 3 code units yields `দিয` with a broken conjunct. Chrome (labels, hints, status) stays English; user and model text passes through unshaped and unmodified, with the limit stated in the help rather than discovered (O-058). | Accepted (R) |
+| D-063 | **CLI blocking and machine output.** `crabby task run` **blocks** and prints the id plus the resume command on the first line; `--detach` is the script path (O-060). `task watch` with `--json` emits **NDJSON**, one event per line, carrying the per-task `seq` from D-049 so a script detects gaps the way the Web does (O-061). When a human answer is required and none is reachable, the command **exits 3** rather than blocking forever; `--wait-approval <n>` is the explicit opt-in (O-062), because a silently blocking command in a cron job is an outage. Shell completion is **generated from the command registry in v1**; there is no man page and no second reference surface (O-063). | Accepted (R) |
+| D-064 | **Provider runtime policies.** Retry schedule inside the 5-attempt floor (D-043): `1s, 2s, 4s, 8s, 16s` with ±25% jitter, and a `Retry-After`/`retry_after` value always overrides the schedule upward (O-029). Token estimation when a provider exposes no counter: `max(chars/4, cluster count × 1.35)` — the measured Bengali ratio above is why the divisor is not applied blindly to non-Latin text — and every estimate is labeled `estimated` in the UI, never shown as a count (O-031). Tool output caps for a low-resource device: 64 KiB inline, larger goes to a file in the session scratch with the path printed; scratch files older than 24 h are pruned at startup, and the prune is logged (O-035). Approval expiry per tier: T1 15 min, T2 10 min, T3 5 min — an approval that grants more should age faster (O-041). `crabby model edit` opens a field editor with per-field prompts available for scripting; the Web/TUI show the same fields in a form, one source of truth (O-037). Overriding every model of one provider at once is allowed only as an explicit bulk action that repeats the warning per affected model, never as a default (O-038). | Accepted (R) |
+| D-065 | **Data, retention and deletion policies.** Imported content is tagged by source and treated as data — no privileged parsing, no instruction-following from file or web text, and the `external content` marker from `SECURITY.md` §10 is what a user sees (O-021). Redaction: log lines and exports carry no secret-shaped values and no credential material; the audit record keeps the **exact target** in plaintext because approving a path you cannot re-read is worthless, and the retention of that record is what `SECURITY.md`'s deletion rules govern (O-022). Event retention: 30 days or 5 000 events per task, whichever comes first, with the count visible in the task record (O-014). Deleting a conversation propagates to summaries and derived memories on read (a dangling reference is shown as deleted, never silently rewritten) (O-016). Retrieval in v1 is SQLite FTS5 only; vector search stays out until a measured need exists (O-015). Backup is `db.backup()` to a timestamped file plus the config directory; restore is a documented manual step that runs an integrity check first, and a failed migration leaves the previous file untouched (O-017, and the rollback half of O-012). Checkpoint recovery may only resume past a step whose tool declares itself idempotent or whose effect is recorded; anything else re-asks rather than repeating an external action (O-013), and the compaction/budget algorithms are validated against the recorded acceptance list rather than a benchmark (O-011). Extension conversion reports: keep the report for the installed version and the one before it, prune older ones, and include reports in user exports (O-027). | Accepted (R) |
+| D-066 | **Platform boundaries.** SQLite is confirmed as the engine (`docs/DATA_AND_MEMORY.md` §4's comparison stands; the clean-environment reproduction stays open as O-001's one remaining clause). `better-sqlite3 ^13` (13.0.3 verified, single native dependency) with `--build-from-source` on Termux per D-050. Windows: **WSL only** in v1; native Windows is documented-unsupported rather than half-supported (O-007). Secrets on Android/Termux: the vault file in `~/.crabby/vault`, scrypt KDF at N=2^15 with a per-install salt, and `termux-keystore` used only if the probe succeeds at first run — the probe result is printed at setup so the user knows which they have (O-018). Local inference on Android: **documented unsupported**, supported only through an external server the user runs, matching the §3.3 assumption (O-034). Tunnel lifecycle: a quick tunnel's URL is not sticky, it changes on restart, the Gateway prints the new one on every start and never redirects the old one, and shutdown drains for 5 s before exiting (O-009). The initial `termux-api` capability list is exactly: `notify`(T1), `tts`(T1), `clipboard-read`(T2), `clipboard-write`(T2), `share`(T2), `camera-capture`(T2), `location`(T2), `vibrate`(T1), `torch`(T1), `sms-send`(T3) (O-024). Per-task capability narrowing is **opt-in with a configured floor**, not mandatory: a mandatory prompt per task is friction that trains users to click through it, which is worse than the hole it closes (O-025). The `shell.run` classifier is a small table shipped in-tree with the release and versioned with the code, documented as an escalation hint and never as the security boundary (the boundary is path and capability checks, `SECURITY.md` §9); "updatable via a skill" was rejected because a table that gates T3 and updates itself is an extension point with less review than an extension gets (D-038), and that closes O-032. | Accepted (R) |
+| D-067 | **Interface shapes.** API versioning by path prefix `/api/v1`, with additive changes inside a minor version and a deprecation note for anything removed (O-039). The Web UI is **served by the Gateway** from a build directory — `crabby web open` starts nothing new and points at the same origin, because two servers means two certificate stories and a second thing to keep alive on a phone (O-040). `docs/INTERFACES_AND_API.md` §8 is **generated** from the tool registry plus per-tool interface annotations, with the generator committed and the table checked in so drift fails CI — this is the structural answer to F-08/F-11, whose root cause was three hand-maintained lists (O-042). Pairing on a phone: `crabby auth pair` prints the URL and an 8-character code on their own lines, the Web first-run field takes the code, and the long-lived credential is delivered once and never logged (O-019). A status bar that cannot fit its chips at 360px shows four inline plus a `more` sheet, and locked-vault and offline escape the sheet into the bar (O-053). Remembered, scoped approvals remain out of v1 (D-052); their design is deferred as O-052 rather than guessed at here (O-052). | Accepted (R) |
+| D-068 | **Web UI stack and colour values.** The Web UI is framework-free: native custom elements, `<dialog>`, CSS custom properties for tokens, SSE for events — no SPA framework, because this interface is a client of the contract rather than an application platform, and every dependency is install weight and audit surface on a phone (O-043). Palette values are recorded in `docs/DESIGN_SYSTEM.md` §2.3 with their measured WCAG 2.2 contrast, and `scripts/check-docs.py` recomputes them rather than trusting the table (O-044). Both themes ship on day one; light is specified, not inverted, and the measured numbers show why (a naive muted/accent pair for light fails AA on a raised surface — O-045). TUI colour detection is an explicit user setting first, with `$COLORTERM` sniffing only as the default when unset, and the 8-color tier keeps every state word readable — a probe that fails on a phone is worse than no probe (O-046). | Accepted (R) |
 
 ## 3. Proposed Technical Choices
 
@@ -100,69 +110,69 @@ Each proposal remains pending until explicitly accepted or validated as required
 
 | ID | Topic | Status / next action |
 | --- | --- | --- |
-| O-001 | Database engine | Largely informed: SQLite is the leading candidate after comparison against `docs/DATA_AND_MEMORY.md` §4. Final confirmation still requires reproduction on a clean environment. |
-| O-002 | Database driver | Needs Validation: reproduce `better-sqlite3` build and runtime behaviour on a clean Termux environment; pin supported version range. |
-| O-003 | npm vs pnpm | Open: compare installation, reproducibility, workspace workflow, and Termux compatibility. |
+| O-001 | Database engine | **Mostly closed (D-066).** SQLite is the engine. One clause stays open: the clean-environment reproduction on a phone (see O-002, same run). |
+| O-002 | Database driver | **Narrowed (D-060, D-066).** Driver and build path fixed (`better-sqlite3 ^13`, `--build-from-source`); the newline-key question is answered (D-061) and no longer waits on this. What stays open is one measured number: build + WAL behaviour on a clean Termux install. |
+| O-003 | npm vs pnpm | **Closed (D-060).** npm with workspaces. |
 | O-004 | SSE vs WebSocket | **Closed (D-048).** SSE + HTTP; WebSocket not in v1. |
-| O-005 | Zod vs TypeBox | Open: confirm schema validation and API contract requirements. |
+| O-005 | Zod vs TypeBox | **Closed (D-060).** TypeBox, because the contract, the config schema and the generated help all need JSON Schema natively. |
 | O-006 | TUI library | Researched 2026-10-09 against the npm registry (evidence in §5A). **Intentionally not accepted yet:** Ink 8 stays P-010 (Proposed) until `docs/ROADMAP.md` M0 P5 measures streaming repaint cost on a phone terminal. Owner decision this round: measure first, accept after. |
-| O-007 | Windows support | Open: define the initial WSL support boundary and assess native Windows support. |
+| O-007 | Windows support | **Closed (D-066).** WSL only; native Windows documented-unsupported. |
 | O-008 | Extension isolation | Needs Validation. Candidates and the hard gate are written up in `EXTENSIONS.md` §15: filtered in-process for bundled/first-party only, child process + capability RPC for everything else; `worker_threads` and `node:vm` rejected as security boundaries. Blocking item: hostile-extension test on Termux. |
-| O-009 | Tunnel lifecycle | Partly resolved: authentication is defined in `SECURITY.md` §5 and D-030/D-032. Open remainder: URL rotation on restart, reconnect handling, shutdown ordering, and exposure auditing. |
+| O-009 | Tunnel lifecycle | **Closed (D-066).** Non-sticky URL, printed on every start, no redirect of the old one, 5 s drain on shutdown. |
 | O-010 | Event replay | **Closed (D-049).** Per-task `seq`, count-bounded window, explicit gap + reconcile-by-GET. |
-| O-011 | Context management algorithms | Needs Validation: evaluate token budgeting, compaction, retrieval, checkpointing, and recovery. |
+| O-011 | Context management algorithms | **Closed (D-065).** Budget/compaction/recovery are validated against the recorded acceptance list, not a benchmark. |
 | O-012 | Installation and upgrades | **Closed (D-050)** for the v1 path. Still open: backup/restore specifics (O-017) and rollback behavior after a failed migration (O-013-adjacent). |
-| O-013 | Checkpoint recovery semantics | Needs Validation: establish safe resume rules, idempotency, and handling of partially completed external actions. |
-| O-014 | Event retention policy | Open: determine retention duration, storage limits, and deletion rules. |
-| O-015 | Memory retrieval implementation | Open: define text-search implementation, indexing, and criteria for introducing vector search. |
-| O-016 | Memory deletion and privacy | Open: specify how deleting conversations affects summaries, memories, and derived records. |
-| O-017 | Backup and restore | Open: define a reliable, portable backup and restore procedure for persistent data. |
-| O-018 | Secrets storage mechanism | Accepted direction in D-031. Open remainder: Android/Termux `keystore` reachability from Termux, and the KDF/encryption parameters for the fallback file. |
-| O-019 | Local client authentication method | **Closed** (D-030 mechanism, D-051 format/expiry). Open remainder: pairing UX on a phone-sized terminal only. |
+| O-013 | Checkpoint recovery semantics | **Closed (D-065).** Resume may pass only a step that is declared idempotent or whose effect is recorded; otherwise it re-asks. |
+| O-014 | Event retention policy | **Closed (D-065).** 30 days or 5 000 events per task, whichever first, count visible in the task record. |
+| O-015 | Memory retrieval implementation | **Closed (D-065).** SQLite FTS5 text search in v1; no vector search before a measured need. |
+| O-016 | Memory deletion and privacy | **Closed (D-065).** Propagation on read, dangling references shown as deleted, never silently rewritten. |
+| O-017 | Backup and restore | **Closed (D-065).** `db.backup()` + timestamped file, manual restore behind an integrity check. |
+| O-018 | Secrets storage mechanism | **Closed (D-066).** Vault file with scrypt N=2^15; `termux-keystore` only when the setup probe succeeds, and the probe result is printed. |
+| O-019 | Local client authentication method | **Closed (D-067).** URL and 8-character code on their own lines; code consumed by the Web first-run field. |
 | O-020 | Risk classification levels for tools | **Closed (D-046).** Tier model in `SECURITY.md` §6.2, per-tool assignment in `PROVIDERS_AND_TOOLS.md` §4.2; the three judgement calls confirmed. |
-| O-021 | Prompt-injection hardening depth for imported content | Open: instruction-source tagging vs full isolation. |
-| O-022 | Audit log redaction rules | Open: which payload fields are stripped vs hashed vs retained. |
+| O-021 | Prompt-injection hardening depth for imported content | **Closed (D-065).** Tagged by source, treated as data, no privileged parsing; the `external content` marker is the user-visible half. |
+| O-022 | Audit log redaction rules | **Closed (D-065).** Logs and exports carry no secret-shaped values; the audit record keeps the exact target in plaintext, because approving a path you cannot re-read is worthless. |
 | O-023 | Remote shell posture | Accepted in D-032 (no tunnel-specific narrowing). See `SECURITY.md` §13 for the residual-risk note and the per-identity narrowing path. |
-| O-024 | `termux-api` exposure | Accepted in D-033 (T3, per-capability, per-action approval). Open remainder: the exact capability list shipped in the first release. |
-| O-025 | Mandatory per-task capability narrowing | Open: whether task-scoped narrowing (`SECURITY.md` §6.1) should be required for every task or offered opt-in. |
+| O-024 | `termux-api` exposure | **Closed (D-066).** The initial list and its tiers are named in D-066. |
+| O-025 | Mandatory per-task capability narrowing | **Closed (D-066).** Opt-in with a configured floor; not mandatory for every task. |
 | O-026 | MCP server role | **Closed — non-goal (D-040).** Crabby is an MCP client only. |
-| O-027 | Conversion-report history depth | Open: how many per-version reports to retain before pruning, and whether reports ship inside user exports/backups. |
+| O-027 | Conversion-report history depth | **Closed (D-065).** Installed version plus the one before it; older pruned; included in exports. |
 | O-028 | Bundled provider list | **Closed (D-042).** Lean presets (`groq`, `openrouter`, `ollama`, `anthropic`, `gemini`, `mock/fake`) + user-defined OpenAI-compatible endpoints (D-041). |
-| O-029 | Provider retry/backoff policy | Open: per-class budgets, `Retry-After` handling, jitter. The 5-attempt floor per failing stage is fixed (D-043); the schedule inside it is undecided. |
+| O-029 | Provider retry/backoff policy | **Closed (D-064).** `1s, 2s, 4s, 8s, 16s` ±25% jitter, `Retry-After` overrides upward, floor of 5 attempts per stage stays (D-043). |
 | O-030 | Provider fallback default | **Closed (D-047).** Explicit ask by default (D-043); optional narrow pre-approved ladder, reliability classes only. |
-| O-031 | Token estimation when a provider has no counter | Open: heuristic choice and how estimates are labeled to users. |
-| O-032 | Shell command classifier ruleset | Open: initial rules, where the table lives (in-tree vs updatable skill), and its documented non-boundary status. |
+| O-031 | Token estimation when a provider has no counter | **Closed (D-064).** `max(chars/4, clusters × 1.35)`, always labeled `estimated`. |
+| O-032 | Shell command classifier ruleset | **Closed (D-066).** In-tree table, versioned with the code, escalation hint only. |
 | O-033 | `generic-http` user template | **Closed as rejected.** OpenAI-compatible shape is the supported custom path (D-041); a user-authored request template stays out until proven need. |
-| O-034 | Local inference on Android | Open: document as unsupported, or support only via an external local server (current §3.3 assumption). |
-| O-035 | Tool output caps and temp-file lifetime | Open: per-platform defaults for a low-resource device. |
-| O-036 | Planning-doc checker coverage | Proposed in `scripts/check-docs.py`. Open: whether it should run in CI once a repository workflow exists. |
-| O-037 | Capability override UX | Open: `crabby model edit` as per-field prompts vs an editor screen on Web/TUI (D-045 data model is fixed). |
-| O-038 | Provider-wide capability override | Open: allow overriding every model of one provider at once, or per-model only. |
-| O-039 | API versioning style | Open: `/api/v1` path prefix vs header-based versioning (`docs/INTERFACES_AND_API.md` §12). |
-| O-040 | Web UI serving | Open: served by the Gateway, or by a separate static step behind `crabby web open`. |
-| O-041 | Approval expiry policy | Open: single duration vs per-tier durations (a T3 prompt should not age like a T2 one). |
-| O-042 | Parity matrix source | Open, recommended: generate `docs/INTERFACES_AND_API.md` §8 from the tool registry plus annotations instead of hand-maintaining it. |
-| O-043 | Web component approach | Open: in-house primitives vs a dependency-free library. Tokens must not depend on the choice (`docs/DESIGN_SYSTEM.md` §1 rule 05). |
-| O-044 | Concrete palette values | Open: hex values plus verified WCAG 2.2 AA contrast for text and non-text. |
-| O-045 | Light theme in v1 | Open: ship both themes from day one, or dark only with light to follow. |
-| O-046 | TUI color capability detection | Open: `$COLORTERM` sniffing, a probe, or an explicit user setting. Requires a legible 8-color fallback either way. |
-| O-047 | Linter/formatter | Open: choose once and record. |
-| O-048 | Biome vs ESLint + Prettier | Open; resolve together with O-047 — these are one decision, not two. |
-| O-049 | Package publishing model | Open: publish `packages/*` independently, or only as app bundles. |
-| O-050 | Termux CI runner | Open: find a practical runner, or keep the M0 manual checklist as the documented substitute. |
+| O-034 | Local inference on Android | **Closed (D-066).** Documented unsupported on Android; external local server only. |
+| O-035 | Tool output caps and temp-file lifetime | **Closed (D-064).** 64 KiB inline, larger to scratch with the path printed; scratch pruned at startup past 24 h, logged. |
+| O-036 | Planning-doc checker coverage | **Closed (D-060).** `scripts/check-docs.py` is a required CI check. |
+| O-037 | Capability override UX | **Closed (D-064).** Field editor with per-field prompts for scripting; same fields, one source of truth. |
+| O-038 | Provider-wide capability override | **Closed (D-064).** Bulk override allowed only as an explicit action that repeats the warning per model. |
+| O-039 | API versioning style | **Closed (D-067).** `/api/v1` path prefix. |
+| O-040 | Web UI serving | **Closed (D-067).** Served by the Gateway from a build directory. |
+| O-041 | Approval expiry policy | **Closed (D-064).** T1 15 min, T2 10 min, T3 5 min. |
+| O-042 | Parity matrix source | **Closed (D-067).** §8 is generated from the registry plus annotations, with the generator committed. |
+| O-043 | Web component approach | **Closed (D-068).** Framework-free custom elements; no SPA dependency. |
+| O-044 | Concrete palette values | **Closed (D-068).** Values in `docs/DESIGN_SYSTEM.md` §2.3 with measured ratios; the checker recomputes them. |
+| O-045 | Light theme in v1 | **Closed (D-068).** Both themes on day one; light specified, not inverted. |
+| O-046 | TUI color capability detection | **Closed (D-068).** Explicit setting first, `$COLORTERM` as the default only, readable 8-color tier required. |
+| O-047 | Linter/formatter | **Closed (D-060).** Biome. |
+| O-048 | Biome vs ESLint + Prettier | **Closed (D-060).** Biome, as `@biomejs/biome` — the bare `biome` name on npm is an unrelated 2016 package. |
+| O-049 | Package publishing model | **Closed (D-060).** Not published independently in v1. |
+| O-050 | Termux CI runner | **Closed (D-060).** `termux/termux-docker` for the Node half in CI; the device checklist stays the substitute for `termux-api` and TUI measurement. |
 | O-051 | TUI repaint strategy under streaming | Needs Validation (M0 P5): measure Ink's reconciliation cost for token-by-token output on a phone terminal; decide buffer/flush policy from the result. |
 | O-052 | Remembered approvals after v1 | Open: whether scoped "remember this" approvals return, and with which persistence and revocation guarantees. Out of scope for v1 per D-052. |
-| O-053 | Web status bar overflow at 360px | Open (raised by `docs/review/WEB.md`, W1-A): four inline chips plus a "more" sheet, with a locked vault and an offline state escaping the sheet. Blocks regenerating the spec from approved elements. |
-| O-054 | TUI screen buffer vs scrollback | Open (`docs/review/TUI.md`, T1-A): alternate screen vs inline rendering, with an explicit "print to scrollback" action. Decide together with the O-051 measurement on a phone. |
-| O-055 | TUI newline key | Open (T5-A): which key inserts a newline when `Shift+Enter` is not reportable. Constrained by what a phone keyboard can actually send, so it is decided with O-002. |
-| O-056 | TUI markdown rendering depth | Open (T4-A): render emphasis and code spans only, or pass text through raw. Affects the streaming rows T4-02 and T4-05. |
-| O-057 | TUI approval queue shape | Open (T-A-A): one card at a time vs a selectable list when several approvals are pending. Proposal is one at a time; 24 rows cannot hold two readable cards. |
-| O-058 | Terminal rendering of Bengali | Open (T-C2-B): a terminal may not shape Indic conjuncts the way a browser does. Choose pass-through with a stated limit, English chrome with pass-through content, or measure on device first. |
-| O-059 | TUI key configurability | Open (T3-A): whether keys are user-configurable in v1 at all, or fixed with the documented set. |
-| O-060 | CLI task run blocking behavior | Open (`docs/review/CLI.md` C6-A): does `crabby task run "…"` block until the task finishes, or queue and return the id? Proposal: block by default, `--detach` for scripts, id and resume command printed on the first line. |
-| O-061 | CLI watch stream contract | Open (C6-B): whether `task watch` emits machine-readable NDJSON (per-task `seq`, gap detection like the Web) or human-only tail. Machine-readable is proposed, because a capability scripts cannot read breaks the parity rule. |
-| O-062 | Waiting for an approval from a script | Open (C-A-A): exit `3` immediately when a human answer is needed, or `--wait-approval <n>`. Proposal: exit by default, opt-in wait, because a silently blocking command in a cron job is an outage. |
-| O-063 | Shell completion and generated reference | Open (C-S-A): generate completion from the command registry in v1, and skip a man page; or neither, since a second surface can drift from the registry. |
+| O-053 | Web status bar overflow at 360px | **Closed (D-067).** Four chips inline plus a `more` sheet, with vault-locked and offline escaping the sheet: the two states where the bar is the only place a user looks. Layout rule in `docs/UI_UX_SPEC.md` §2.1. |
+| O-054 | TUI screen buffer vs scrollback | **Closed (D-061).** Inline, incremental, with `print to scrollback`. |
+| O-055 | TUI newline key | **Closed (D-061).** `Ctrl+J` primary; `Shift+Enter` only when extended-key reporting is confirmed; `Enter` always sends. |
+| O-056 | TUI markdown rendering depth | **Closed (D-061).** Emphasis, code spans, fenced blocks; everything else as text. |
+| O-057 | TUI approval queue shape | **Closed (D-061).** One card plus a queue count. |
+| O-058 | Terminal rendering of Bengali | **Closed (D-062).** Cluster-aware widths, cluster-boundary truncation, no grid alignment for non-Latin, English chrome, stated limit. |
+| O-059 | TUI key configurability | **Closed (D-061).** Keys fixed in v1; no configuration surface. |
+| O-060 | CLI task run blocking behavior | **Closed (D-063).** Blocks; `--detach` for scripts. |
+| O-061 | CLI watch stream contract | **Closed (D-063).** NDJSON with per-task `seq`. |
+| O-062 | Waiting for an approval from a script | **Closed (D-063).** Exits `3`; `--wait-approval <n>` is the opt-in. |
+| O-063 | Shell completion and generated reference | **Closed (D-063).** Completion generated from the registry; no man page. |
 
 **Open here means genuinely undecided.** A row marked closed must stay consistent with the decision it cites.
 
@@ -196,17 +206,18 @@ least once below. Adding a decision without naming its enforcer is a documentati
 
 | Enforced by | Decisions |
 | --- | --- |
+| `DECISIONS.md` itself (register governance, review status) | D-059 |
 | `PROJECT_BRIEF.md` (product scope, platforms, principles) | D-001, D-002, D-003, D-004, D-016, D-017, D-019, D-021 |
-| `ARCHITECTURE.md` (structure, contracts, platform) | D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-015, D-032, D-045, D-048, D-049, D-050, D-053 |
+| `ARCHITECTURE.md` (structure, contracts, platform) | D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-015, D-032, D-045, D-048, D-049, D-050, D-053, D-060, D-066, D-068|
 | `AGENT_RUNTIME.md` (execution lifecycle) | D-018, D-022, D-023, D-024, D-025, D-026, D-027, D-028, D-029, D-044 |
-| `SECURITY.md` (policy, authn, secrets, exposure) | D-005, D-013, D-014, D-020, D-030, D-031, D-033, D-040, D-043, D-046, D-047, D-051, D-052, D-053, D-054 |
-| `EXTENSIONS.md` (packaging, compatibility, trust) | D-035, D-036, D-037, D-038, D-039, D-040 |
-| `PROVIDERS_AND_TOOLS.md` (adapters, tools, tiers) | D-041, D-042, D-043, D-044, D-045, D-046, D-047, D-057 |
-| `docs/DATA_AND_MEMORY.md` (persistence, memory, deletion) | D-017, D-018, D-019, D-020, D-021 |
-| `docs/INTERFACES_AND_API.md` (API surface, parity) | D-005, D-030, D-048, D-049, D-051, D-052, D-053, D-057, D-058 |
-| `docs/UI_UX_SPEC.md` + `docs/DESIGN_SYSTEM.md` (presentation) | D-005, D-045, D-046, D-052, D-057, D-058 |
-| `docs/review/*.md` (element inventories, per D-055/D-056) | D-005, D-045, D-046, D-052, D-055, D-056, D-057, D-058 |
-| `docs/ROADMAP.md` + `docs/DEVELOPMENT.md` (sequencing, workflow) | D-016, D-034, D-050, D-051 |
+| `SECURITY.md` (policy, authn, secrets, exposure) | D-005, D-013, D-014, D-020, D-030, D-031, D-033, D-040, D-043, D-046, D-047, D-051, D-052, D-053, D-054, D-064, D-065, D-066, D-067|
+| `EXTENSIONS.md` (packaging, compatibility, trust) | D-035, D-036, D-037, D-038, D-039, D-040, D-065|
+| `PROVIDERS_AND_TOOLS.md` (adapters, tools, tiers) | D-041, D-042, D-043, D-044, D-045, D-046, D-047, D-057, D-064, D-066|
+| `docs/DATA_AND_MEMORY.md` (persistence, memory, deletion) | D-017, D-018, D-019, D-020, D-021, D-065|
+| `docs/INTERFACES_AND_API.md` (API surface, parity) | D-005, D-030, D-048, D-049, D-051, D-052, D-053, D-057, D-058, D-063, D-067|
+| `docs/UI_UX_SPEC.md` + `docs/DESIGN_SYSTEM.md` (presentation) | D-005, D-045, D-046, D-052, D-057, D-058, D-061, D-062, D-068 |
+| `docs/review/*.md` (element inventories, per D-055/D-056) | D-005, D-045, D-046, D-052, D-055, D-056, D-057, D-058, D-059, D-061, D-063|
+| `docs/ROADMAP.md` + `docs/DEVELOPMENT.md` (sequencing, workflow) | D-016, D-034, D-050, D-051, D-060, D-066 |
 | `AGENTS.md` (agent contract) | D-013, D-014, D-016, D-026, D-034, D-038, D-040, D-043, D-044, D-052 |
 
 Rules: a decision may be enforced by several documents but must be enforced by at least one; the enforcing document
@@ -217,14 +228,15 @@ exactly how the stored-approval and export-endpoint contradictions described in
 ## 4B. Element Review Progress (`docs/review/`)
 
 Per D-055, interface review proceeds as element inventories. An element counts as reviewed only when its row's
-`Status` changes from `PROPOSED`; `scripts/check-docs.py` counts the rows so progress is measured, not estimated.
+`Status` changes from `PROPOSED`; `scripts/check-docs.py` counts the rows so progress is measured, not estimated, and
+`python3 scripts/count-inventory.py --markdown` prints the table below so it is pasted, never typed.
 
 | File | Surfaces covered | Elements | Approved | Remaining |
 | --- | --- | --- | --- | --- |
-| `docs/review/WEB.md` | 19 regions of the Web UI | 185 | 0 | 185 |
-| `docs/review/TUI.md` | 21 regions of the TUI | 202 | 0 | 202 |
-| `docs/review/CLI.md` | 15 regions of the CLI | 158 | 0 | 158 |
-| `docs/review/TELEGRAM.md` | 11 regions of the Telegram interface | 129 | 0 | 129 |
+| `docs/review/WEB.md` | 19 regions of the Web UI | 185 | 6 | 179 |
+| `docs/review/TUI.md` | 21 regions of the TUI | 203 | 12 | 191 |
+| `docs/review/CLI.md` | 15 regions of the CLI | 158 | 6 | 152 |
+| `docs/review/TELEGRAM.md` | 11 regions of the Telegram interface | 129 | 1 | 128 |
 
 Review medium (D-056): `python3 docs/review/mockups/build.py` renders `docs/review/WEB.md` into
 `docs/review/mockups/crabby-web-ui.html` — one self-contained file, no network, no CDN. The build fails if the mockup
@@ -232,11 +244,16 @@ references an element the inventory does not define, or if the inventory has a r
 the picture cannot drift from the document. Decisions made in the mockup leave it as paste-ready rows; nothing
 the mockup stores counts until it is written back into the `.md`.
 
-All four inventories exist now: 185 Web + 202 TUI + 158 CLI + 129 Telegram = 674 elements awaiting a decision, and
-the review is the gate before `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are regenerated from them.
+All four inventories exist: 185 Web + 203 TUI + 158 CLI + 129 Telegram = 675 elements, and the review is the gate
+before `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are regenerated from them. 25 rows left `PROPOSED` in the
+(R) round of 2026-10-10, and one row was added by it — T-A14, the approval queue walk that D-061 makes necessary.
+The rule the round held itself to: a row was flipped only when the one thing blocking it was an open question that
+D-060…D-068 has now answered, and the row names its decision inline, so rejecting a decision puts its rows back
+with one search. Nothing was flipped for looking obviously fine. The remaining 650 wait on the owner looking at the
+screens, which is what the mockup is for; `docs/review/DECISION-QUEUE.md` is the veto surface for the rest.
 
 An open question written in an inventory is not left inside the inventory: each one that changes what gets built is
-registered as an `O-` row in section 4 (the Web and TUI questions became O-053…O-059), so review progress and
+registered as an `O-` row in section 4 (the Web, TUI and CLI questions became O-053…O-063, and all eleven are closed by D-061…D-067; the measurements they were entangled with are not — O-006 and O-051 on repaint cost still gate rows like T-C6 and the transcript caps that hang off it (T4-05, T15-08), which is why those rows stay labelled as unvalidated instead of approved), so review progress and
 unresolved questions are counted in the same register as everything else.
 
 After all four are reviewed: regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from the accepted
@@ -342,12 +359,17 @@ D-033 (`termux-api` tiers) accepted and propagated.
 
 | Counter | Value |
 | --- | --- |
-| Accepted decisions | 58 (D-001…D-058) |
+| Accepted decisions | 68 (D-001…D-068) |
 | Proposed technical choices | 10 (P-001…P-010) |
-| Open / needs-validation items | 63 tracked; new in M-D from the element review: O-053…O-063; closed as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033 (O-006 stays open until M0 P5 measures). Remaining blockers are device measurements, not opinions: O-002, O-006, O-051 |
+| Open / needs-validation items | 63 tracked, 50 of them closed by D-060…D-068 in the (R) round of 2026-10-10; closed earlier as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033. Six items carry work and each has its closing protocol in `docs/review/DECISION-QUEUE.md` §2 rather than a vague promise: four open rows (O-006 and O-051 need a phone render, O-008 needs real extensions, O-052 is a post-v1 design question) and two with one measured clause left (O-001, O-002: a clean Termux build and a WAL torture). The row count stays 63 because a closed question keeps its number — otherwise a register that renumbers itself cannot be cited by a document that was written against it |
 | Planning docs written | 16 — includes `docs/CONSISTENCY_REVIEW.md` (M-D record) |
 | Custom endpoint / fallback decisions | D-041…D-047 accepted this round |
 | Planning docs remaining | 0 (M-D review is the last step) |
+
+**About the (R) marker.** D-059…D-068 were recorded on 2026-10-10 under the owner's instruction to research the open
+items and arrange everything according to the agent's recommendations. Each names the evidence behind it, and rejecting
+one sends that row back to `Proposed` or `Open` without disturbing its neighbours. The owner's authority is unchanged:
+**(R)** says how a row got here, not that it is untouchable.
 
 Run `python3 scripts/check-docs.py` after editing any planning document; it verifies ID references,
 cross-references, section anchors, capability coverage, traceability of every accepted decision to a document that

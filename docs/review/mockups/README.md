@@ -11,7 +11,7 @@ code, and is never referenced by a runtime. When the inventories are approved th
 | --- | --- |
 | `build.py` | parses the inventory tables, then writes `crabby-web-ui.html`; fails if the mockup references an element the inventory does not define, or leaves a row unplaced |
 | `shell.html` | the drawn screens — markup only, no invented element names (each carries `data-el="<inventory ID>"`) |
-| `tokens.css` | semantic tokens, placeholders until `docs/DESIGN_SYSTEM.md` is regenerated from approved elements |
+| `tokens.css` | semantic tokens — the accepted §2.3 palette of `docs/DESIGN_SYSTEM.md` for both themes, so the mockup shows what the document promises and not a draft of it |
 | `app.js` | selection, drawer, viewport/theme/density toggles, review notes, export |
 | `crabby-web-ui.html` | **generated, committed for convenience** — the file to open (one file: inline CSS, inline data, no assets). Regenerate with the command below; do not hand-edit |
 

@@ -115,13 +115,13 @@
 
 | ID | Element | Content | Sizes | Behavior | Status |
 | --- | --- | --- | --- | --- | --- |
-| C6-01 | task run | `crabby task run "<objective>"` | n/a | creates the task through the same endpoint the Web uses; see open question **C6-A** about what it prints when the task is not finished | PROPOSED |
+| C6-01 | task run | `crabby task run "<objective>"` | n/a | creates the task through the same endpoint the Web uses; Open question **C6-A** — closed below — about what it prints when the task is not finished — decided in D-063 | ACCEPTED |
 | C6-02 | task run: detach | `--detach` returns the id immediately | one line | for cron and scripts; the id is the only thing on stdout with `--quiet` | PROPOSED |
 | C6-03 | task run: tier floor | `--tier-floor T2` | n/a | can only raise the floor, never lower it below the configured minimum | PROPOSED |
-| C6-04 | task run: capability narrowing | `--fs-root`, `--no-net`, `--no-shell` | one line each | the same per-task narrowing as Web W11-08 and TUI T12-08 (open O-025) | PROPOSED |
+| C6-04 | task run: capability narrowing | `--fs-root`, `--no-net`, `--no-shell` | one line each | the same per-task narrowing as Web W11-08 and TUI T12-08 (open O-025) — decided in D-066 | ACCEPTED |
 | C6-05 | task ls | id, state, objective, model, elapsed, pending-approval count | compact by default | `--wide` adds columns; `--state running` filters; empty list prints nothing with `--quiet` and a sentence without it | PROPOSED |
 | C6-06 | task show | the same content as Web W6 and TUI T7 | up to 40 lines | plan tree with indentation, checkpoint, ladder, artifacts, result; `--json` gives the whole object | PROPOSED |
-| C6-07 | task watch | streams this task's events until terminal | n/a | NDJSON on stdout with `--json` (one event per line, per-task `seq`, D-049), human lines otherwise; see open question **C6-B** | PROPOSED |
+| C6-07 | task watch | streams this task's events until terminal | n/a | NDJSON on stdout with `--json` (one event per line, per-task `seq`, D-049), human lines otherwise; Open question **C6-B** — decided in D-063 | ACCEPTED |
 | C6-08 | task watch exit | `Ctrl-C` while watching | n/a | detaches the watcher only; the task keeps running. Cancel is a separate command, and mixing the two is the classic way to lose work | PROPOSED |
 | C6-09 | task cancel | `crabby task cancel <id>` | 2 lines | the three-phase cancel is printed as it happens (requested → finishing current step → settled), and the command exits after the terminal state | PROPOSED |
 | C6-10 | task resume | `crabby task resume <id>` | 2 lines | resumes from the checkpoint and prints what will be skipped vs repeated, so nothing re-runs silently (D-044) | PROPOSED |
@@ -133,11 +133,15 @@ session) or queue and return the id (scriptable, but the user has to run a secon
 default, with `--detach` for scripts, and the printed id + resume command on the first line so losing the terminal
 costs nothing.
 
+> **C6-A — closed (D-063).** Decided: **it blocks**, with the task id and the resume command on the first line so a closed terminal loses nothing, and `--detach` for scripts.
+
 **Open question C6-B:** the watch stream contract. NDJSON with per-task `seq` is proposed so a script can detect a
 gap the same way the Web does; the alternative is a human-only tail with no machine mode. Machine-readable is
 strongly preferred — a capability that exists in the Web and TUI but not in scripts breaks the parity rule.
 
 ---
+
+> **C6-B — closed (D-063).** Decided: **NDJSON**, one event per line, each carrying the per-task `seq` (D-049) so a script notices a dropped event exactly as the Web does. A `--json` snapshot stays one document; the stream is the only multi-line output and the help says so.
 
 ## 4. Approvals
 
@@ -153,7 +157,7 @@ strongly preferred — a capability that exists in the Web and TUI but not in sc
 | C-A6 | Already answered | second answer from another interface | one line | prints the `conflict` outcome and that the first answer won; exit `1`, so scripts do not assume success | PROPOSED |
 | C-A7 | Expired item | answering after expiry | one line | says it expired and what the user can do now; a stale approval is never silently approvable | PROPOSED |
 | C-A8 | Approve by task, not by id | `--task <id> --all-pending` | n/a | absent in v1: approving a set is how a wrong write becomes permanent, and the row exists so the absence is a decision | PROPOSED |
-| C-A9 | Waiting for an approval in a script | `--wait-approval <seconds>` | n/a | open question **C-A-A** below; without something like it, `crabby task run` from cron is either a hang or a failure | PROPOSED |
+| C-A9 | Waiting for an approval in a script | `--wait-approval <seconds>` | n/a | open question **C-A-A** below; without something like it, `crabby task run` from cron is either a hang or a failure — decided in D-063 | ACCEPTED |
 | C-A10 | Non-interactive denial | no stdin and no `--yes` where the command needs one | one line | fails with exit `3` and the exact command to approve, rather than prompting into the void | PROPOSED |
 
 **Open question C-A-A:** should a CLI run be allowed to block until a human answers (`--wait-approval`), or should it
@@ -162,6 +166,8 @@ matches the mental model of "I am running this now". Proposal: exit `3` by defau
 `--wait-approval <n>` opt-in, because a silent blocking command in a cron job is an outage.
 
 ---
+
+> **C-A-A — closed (D-063).** Decided: **exit `3` immediately** when no human is reachable, `--wait-approval <n>` as the explicit opt-in. A command that silently waits inside a cron job is an outage that waits to be discovered.
 
 ## 5. Providers, models, config
 
@@ -176,7 +182,7 @@ matches the mental model of "I am running this now". Proposal: exit `3` by defau
 | C7-05 | provider test | latency and the error class | one line | the same test the UI triggers; a pass here must mean the UI will pass too | PROPOSED |
 | C7-06 | Insecure transport warning | plain HTTP or non-loopback with a key stored | 2 lines | refuses without `--allow-insecure` and prints why, rather than warning and continuing | PROPOSED |
 | C7-07 | model list | provider, model, context, output cap, cost class, overrides | 1 line per model | `--json` includes the capability descriptor with the priority order the data model already fixes (user → preset → discovery → adapter) | PROPOSED |
-| C7-08 | model edit | per-field prompts, or flags, or both | n/a | the interaction shape is open (O-037); both paths must reach the same stored value | PROPOSED |
+| C7-08 | model edit | per-field prompts, or flags, or both | n/a | the interaction shape is open (O-037 closed by D-064); both paths must reach the same stored value — decided in D-064 | ACCEPTED |
 | C7-09 | model probe | per-capability pass/fail table | up to 10 lines | same probe the UI calls; output is stable enough to diff | PROPOSED |
 | C7-10 | config get / set | `crabby config set <key> <value>` | one line | shows the diff before writing (the same rule as Web W12-02), and `--yes` is required for T3 keys | PROPOSED |
 | C7-11 | config path / schema | where the file is; the full schema | n/a | `config schema --json` is what a completion script or an editor plugin would read | PROPOSED |
@@ -319,7 +325,7 @@ end up with forty sessions they cannot tell apart.
 | C-S10 | Timeouts | every network call has one | n/a | a default with a flag to change it; a hung CLI with no timeout is indistinguishable from a hung agent | PROPOSED |
 | C-S11 | No writes outside roots | config and export paths | n/a | the same root and deny-list rule as `file.write`, applied to the CLI's own output files | PROPOSED |
 | C-S12 | Dry run | `--dry-run` where a side effect exists | n/a | prints what would change and the exit code it would have had; unsupported on commands with no side effect rather than accepted and ignored | PROPOSED |
-| C-S13 | Completion | shell completion for bash and zsh | n/a | see open question **C-S-A** | PROPOSED |
+| C-S13 | Completion | shell completion for bash and zsh | n/a | Open question **C-S-A** — decided in D-063 | ACCEPTED |
 | C-S14 | Man page or docs site | reference documentation | n/a | `--help` is the contract in v1; a generated reference is listed as an open item, not a promise | PROPOSED |
 
 **Open question C-S-A:** shell completion and a generated reference page — in v1 or not? It is real convenience and
@@ -327,6 +333,8 @@ it is also a second surface that can drift from the registry. Proposal: generate
 v1 (cheap, impossible to drift once generated), skip the man page.
 
 ---
+
+> **C-S-A — closed (D-063).** Decided: **completion generated from the command registry**; no man page and no second reference surface to contradict the first.
 
 ## 11. Coverage check
 
@@ -347,5 +355,8 @@ v1 (cheap, impossible to drift once generated), skip the man page.
 Every `C` element above has to exist for the parity test to pass: if a capability is in `docs/INTERFACES_AND_API.md`
 §8 and there is no row here, this file is wrong, not the matrix.
 
-**Open questions:** C6-A (`task run` block or return) · C6-B (watch stream contract) · C-A-A (waiting for an approval
-from a script) · C-S-A (completion and reference in v1).
+**Open questions:** C6-A, C6-B, C-A-A and C-S-A are closed by D-063.
+
+
+
+

@@ -347,11 +347,11 @@ Recorded and tracked in `DECISIONS.md`:
 | Native extension format for third parties (**follow-on of O-008**) | Open. Contract drafted here; publication of a stable third-party API waits for the isolation decision. |
 | Event-hook capability surface | Deferred with isolation. |
 | Extension API versioning policy | Open: how host API versions are declared, negotiated, and deprecated. |
-| Skill frontmatter field set (feeds **O-021**) | Open: exactly which imported fields are honored versus recorded as ignored. |
+| Skill frontmatter field set (feeds **O-021**) | Open as a field list; the rule behind it is not — D-065 closed O-021 by deciding that imported text is data, tagged by source and never parsed as an instruction. Which fields are honored versus recorded as ignored is a reviewable detail, and recording an ignored field is a requirement rather than a nicety: silence is what makes a user believe a `permissions:` line did something. |
 | Signing/integrity mechanism for `verified-community` | Open; must not require a hosted service. |
 | Sandbox on Termux | Needs Validation: practical options are limited (`SECURITY.md` §15); document as a platform limitation if none prove viable. |
 | MCP server role | **Decided: non-goal (D-040).** Crabby is a client only. |
-| Conversion-report history depth | Accepted in D-039 (retained, diffable). Open remainder tracked as **O-027**: how many versions to keep before pruning, and whether reports ship inside user exports/backups. |
+| Conversion-report history depth | **Closed by D-065** (O-027): the report for the installed version and the one before it are kept, older ones pruned, and reports are included in user exports. Accepted in D-039 as retained and diffable. Two versions is the whole answer to "when did this start failing" while unbounded retention is only an answer to storage pressure | before pruning, and whether reports ship inside user exports/backups. |
 
 ## 16. Acceptance Criteria
 

@@ -353,7 +353,10 @@ Context management must include token budgeting, relevant-history selection, com
 
 Memory retrieval must be selective: not all stored information should be included in every model call.
 
-The exact compaction algorithm, retrieval method, memory format, and token-budget strategy remain open for the runtime specification and later validation.
+The compaction design is D-027's hybrid (summarize, pin, keep originals reachable), the retrieval method is decided
+(D-065: SQLite FTS5, no vector index before a measured need), and the memory format is `docs/DATA_AND_MEMORY.md` §5.
+What remains for the runtime specification and later validation is the tuning: threshold numbers, and the token-budget
+allocation that M2 sets against real usage (D-065, closing O-011) rather than against a benchmark nobody will run.
 
 ## 12. Model Provider Architecture
 
@@ -599,20 +602,34 @@ The exact TUI library, workspace manager, and packaging approach are not finaliz
 
 ## 21. Open Technical Decisions
 
-The following topics require separate evaluation and must not be silently treated as finalized. They are tracked in `DECISIONS.md` §4, and at time of writing the key ones are:
+These ten topics were the ones this document refused to close. Their state now, item by item, because a list of
+"still open" that outlives the decisions it was written against is how a document starts lying politely:
 
-01. Exact streaming transport, event ordering, replay, and reconnection semantics.
-02. SQLite driver selection and Termux reproduction.
-03. Context compaction, retrieval, and long-term memory algorithms.
-04. Plugin execution isolation and supported trust levels.
-05. External extension compatibility priorities and import behavior.
-06. Cloudflare Quick Tunnel authentication and lifecycle management.
-07. Windows support strategy beyond the initial WSL evaluation.
-08. Packaging, dependency installation, upgrades, and recovery.
-09. TUI library and terminal compatibility.
-10. Task checkpoint format and recovery guarantees.
+01. **Closed** — D-048 (SSE over HTTP) and D-049 (per-task `seq`, count-bounded replay, gap → reconcile by `GET`).
+02. **Driver closed** (D-066: `better-sqlite3 ^13`, built from source on Termux); the **reproduction stays open** as
+    O-001/O-002, because it is a measurement on a phone and this workspace has no phone.
+03. **Closed** — D-027 (hybrid compaction), D-065 (FTS5 retrieval, retention, propagation) and D-064 (the estimation
+    heuristic). Threshold *numbers* are tuned in M2 against usage, which is a different thing from an undecided design.
+04. **Open, and deliberately** — O-008. The v1 stance is closed (D-038: no third-party executable code, no override);
+    the isolation strategy waits on the first real extensions, because a sandbox designed before there is anything to
+    contain is a sandbox sized to a guess.
+05. **Closed** — D-038, D-039 and D-065 (conversion reports kept for the installed version plus the one before,
+    included in exports).
+06. **Closed** — D-051 (auth) and D-066 (lifecycle: URL printed on every start, old URL abandoned, 5 s drain).
+07. **Closed** — D-066: WSL only in v1, native Windows documented-unsupported. "Beyond the WSL evaluation" is now a
+    post-v1 question with a recorded owner, not a hole.
+08. **Closed** — D-050 (clone + `npm install`, no self-updater) and D-060 (npm workspaces, `packages/*` unpublished).
+09. **Partly open, honestly** — the *contract* is decided (D-061: inline rendering, incremental repaints, `Ctrl+J`,
+    a named markdown subset), while **Ink 8 itself stays Proposed** (O-006, O-051). It was released 2026-10-03, a week
+    before this review; adopting a one-week-old renderer for the hardest interface in the product is the sort of
+    confidence this project does not permit itself. M0 P5 measures it on a phone and P-010 moves or dies.
+10. **Closed** — D-065: committed step boundaries, and a resume may pass a step only if that step is declared
+    idempotent or recorded its effect.
 
-No open decision may be silently treated as final by an AI coding agent.
+Two sentences in this list used to be one rule with no exception clause. It now has one, and the rule is intact: no
+open decision may be treated as final, **and** a decision the owner delegated (D-059) may be recorded — the difference
+is that a delegated decision is *marked* `(R)`, carries its evidence, and is reversible one row at a time in
+`docs/review/DECISION-QUEUE.md`. Silent is the forbidden word in this rule; decided is not.
 
 ## 22. Architecture Acceptance Criteria
 

@@ -22,12 +22,24 @@ tools, memory, skills, plugins, and permission-controlled execution — all behi
 | [`SECURITY.md`](SECURITY.md) | Trust boundaries, threat model, capabilities, risk tiers, secrets, injection, remote exposure. |
 | [`DECISIONS.md`](DECISIONS.md) | Accepted vs proposed vs open decisions, validation records, decision process. |
 | [`docs/DATA_AND_MEMORY.md`](docs/DATA_AND_MEMORY.md) | Persistence requirements, history, checkpoints, memory, search, deletion, backup. |
+| [`PROVIDERS_AND_TOOLS.md`](PROVIDERS_AND_TOOLS.md) | Provider adapters, capability flags, tool contract, initial tool set with risk tiers. |
+| [`EXTENSIONS.md`](EXTENSIONS.md) | Extension kinds, the skill format, validation gate, what may not run in v1. |
+| [`docs/INTERFACES_AND_API.md`](docs/INTERFACES_AND_API.md) | The contract all four interfaces share: auth, routes, events, errors, and the parity matrix. |
+| [`docs/UI_UX_SPEC.md`](docs/UI_UX_SPEC.md) | Interaction rules per surface, states, accessibility, first run. Regenerated from `docs/review/` once the element review is done. |
+| [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md) | Tokens, type, spacing, color tiers, motion. §2.3 holds the palette with its measured contrast. |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phases M0–M6, entry and exit conditions, and which open items block which phase. |
+| [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Environment, scripts, testing, CI, release and Termux development rules. |
+| [`docs/review/`](docs/review/README.md) | **The gate in front of M0:** 675 elements across the four interfaces, one status per row, reviewed element by element (D-055). `docs/review/mockups/crabby-web-ui.html` is the Web UI as one file, generated from the inventory. |
+| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-16), what it could not verify, and the owner's checklist. |
+| [`AGENTS.md`](AGENTS.md) | The rules a coding agent works under, including the forbidden shortcuts. |
 
 `python3 scripts/check-docs.py` lints this planning set — decision-ID references, cross-links, section anchors,
-capability coverage, and the rule that no planning document may claim an implementation exists.
+capability coverage, the review-progress counts, the palette's contrast arithmetic, and the rule that no planning
+document may claim an implementation exists. `python3 scripts/count-inventory.py` prints the numbers §4B of
+`DECISIONS.md` states, so progress is pasted rather than remembered.
 
-Planned next: `docs/INTERFACES_AND_API.md`,
-`docs/UI_UX_SPEC.md`, `docs/DESIGN_SYSTEM.md`, `docs/ROADMAP.md`, `docs/DEVELOPMENT.md`, `AGENTS.md`.
+`CHANGELOG.md` and `LICENSE` are the two files this set deliberately does not have yet: the first is written at the
+first release, the second at the moment code is distributed.
 
 ## Non-negotiable principles
 
@@ -35,7 +47,9 @@ Planned next: `docs/INTERFACES_AND_API.md`,
 - Free-first: open-source dependencies, local models and free-tier APIs where practical — never a promise of unlimited free inference.
 - One core: no interface implements its own agent loop, memory engine, or permission rules.
 - Secure by default: loopback only, risk-based approvals, centrally enforced policy, secrets out of logs.
-- Documented uncertainty: an open decision stays open until researched or prototyped.
+- Documented uncertainty: an open decision stays open until researched or prototyped. An answer recorded under the
+  owner's delegation is marked `(R)`, carries its evidence, and can be reversed one row at a time — delegation is not
+  drift (`DECISIONS.md` D-059, `docs/review/DECISION-QUEUE.md`).
 
 ## License
 

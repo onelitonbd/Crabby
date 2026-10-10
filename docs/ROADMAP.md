@@ -11,7 +11,7 @@
 ```
 Documentation ────────────────────────────► [YOU ARE HERE: M-D review] ─► M0 ─► M1 ─► M2 ─► …
  PROJECT_BRIEF ✓   ARCHITECTURE ✓   AGENT_RUNTIME ✓   SECURITY ✓   EXTENSIONS ✓
- PROVIDERS_AND_TOOLS ✓   DECISIONS ✓ (47 accepted · 45 open)   README ✓
+ PROVIDERS_AND_TOOLS ✓   DECISIONS ✓ (68 accepted · 10 proposed · 13 open)   README ✓
  docs/  DATA_AND_MEMORY ✓   INTERFACES_AND_API ✓   UI_UX_SPEC ✓   DESIGN_SYSTEM ✓
         ROADMAP ✓   DEVELOPMENT ✓            AGENTS.md ✓
 ```
@@ -36,8 +36,9 @@ the owner's go-ahead.
 | Item | Detail |
 | --- | --- |
 | Entry | This document, `docs/DEVELOPMENT.md`, `AGENTS.md` written. |
-| Work | Cross-document review of all planning files; resolve terminology drift; verify every acceptance criteria list is checkable; ensure each open decision has an owner-visible status. |
-| Exit | `python3 scripts/check-docs.py` clean; every `Accepted` decision reflected in the doc that enforces it; no document claims implementation; the four blocking decisions in §6 are closed or explicitly deferred with a stated consequence. |
+| Work | Cross-document review of all planning files; resolve terminology drift; verify every acceptance criteria list is checkable; ensure each open decision has an owner-visible status. Element-by-element review of the four interfaces (`docs/review/`, D-055) with the single-file Web mockup as the review instrument (D-056). The (R) round of 2026-10-10 recorded the answers to everything research could settle (D-059…D-068) and left the rest as measurements. |
+| Exit | `python3 scripts/check-docs.py` clean — which now also means the §4B review counts and the §2.3 palette ratios are recomputed rather than asserted; `python3 scripts/count-inventory.py --markdown` agrees with `DECISIONS.md` §4B; every `Accepted` decision reflected in the document that enforces it; no document claims implementation; and every item still open in §11 is open because it needs a device, real extensions, or a post-v1 design (not because nobody reached it). |
+| Left to the owner | The 650 `PROPOSED` element rows: a question of judgement about how a screen reads, which no research settles. Work them in `docs/review/mockups/crabby-web-ui.html`; `docs/review/DECISION-QUEUE.md` is the veto surface for the 25 rows the (R) round moved. |
 | Deliberately not here | Any product code, any package, any dependency installation. |
 
 ## 2. Phase M0 — Termux validation prototype
@@ -50,8 +51,8 @@ the phase that prevents an expensive rewrite; `ARCHITECTURE.md` §22 makes it an
 | P1 | Node.js LTS install + `npm install` + a plain TS build on Termux | Installs and runs from a clean Termux; no glibc-only assumption |
 | P2 | Fastify Gateway binding `127.0.0.1`, one `GET /health`, one SSE stream | Streams to a local client; survives a forced process kill and restarts cleanly |
 | P3 | Storage: `better-sqlite3` source build, WAL, crash-during-write | Reproduces the report in `DECISIONS.md` §5 on a clean environment; `integrity_check` ok; compare against `node:sqlite` for the same case |
-| P4 | React + Vite production build served by the Gateway | Built assets load from a phone browser at 360px; no dev server required |
-| P5 | TUI candidate at 40 columns — Ink 8 (P-010), with the `node:readline` fallback as a control | Renders; token-by-token streaming does not force a full-screen repaint; `Ctrl-C` maps to cancel not quit; 8-color fallback usable; no native build step. Result decides OpenTUI's deferral (O-051) |
+| P4 | The Web UI built and served by the Gateway — **not** a React/Vite build: D-068 chose framework-free custom elements, so P4 compiles the small no-dependency bundle the design actually specifies and serves it from the Gateway origin | Built assets load from a phone browser at 360px from the same origin as the API, with no dev server and no second listener; `tokens.css`-equivalent values are the §2.3 palette, and the 360px bar holds exactly four chips plus the `more` sheet (D-067) |
+| P5 | TUI candidate at 40 columns — Ink 8 (P-010), with the `node:readline` fallback as a control | Renders; token-by-token streaming holds ≤4 fps repaint without dropping input; **`Ctrl+J` inserts a newline on Termux**, and whether `Shift+Enter` can be negotiated after a `CSI ? u` query is *recorded*, not assumed (D-061 decided the design so this measurement can only widen the hint text, never rewrite it); `Ctrl-C` maps to cancel not quit; 8-color fallback usable with every state word readable; Bengali pasted into the composer truncates at a cluster boundary and does not shift the frame (D-062); no native build step. Result decides OpenTUI's deferral (O-051) and Ink's adoption (O-006) |
 | P6 | Background behavior | Document what Android does to a long-running Termux process (wakelock requirement, kill under pressure) and whether recovery is adequate |
 | P7 | Hostile extension probe (informs O-008) | Attempt `fs`/`net`/`child_process` access from a restricted candidate; record what is and is not enforceable |
 
@@ -71,6 +72,11 @@ outcome* — it is why the phase exists.
 - Policy engine skeleton with the capability vocabulary and tier model enforced (`SECURITY.md` §6), and the fake
   provider (`PROVIDERS_AND_TOOLS.md` §3.3) so tests need no live API.
 - Test scaffolding for the parity and contract suites — before interfaces exist.
+- CI per `docs/DEVELOPMENT.md` §12 (D-060): the ubuntu matrix plus `termux/termux-docker` for the toolchain half, with
+  `scripts/check-docs.py` a **required** job. `scripts/count-inventory.py` is what keeps the review-progress table honest.
+- The parity generator (D-067): `docs/INTERFACES_AND_API.md` §8 emitted from the tool registry plus annotations, with
+  rules 10–12 of `scripts/check-docs.py` retiring the day the generator lands — not before, because until the
+  generator exists the checker is the only thing standing between three lists and drift.
 
 Exit: `crabby init`, `crabby status`, `crabby doctor` work against a real local Gateway; the contract test harness
 runs; a task can be created and read back with an id, and nothing else.
@@ -181,19 +187,26 @@ Blocking means the shape of code depends on it, so guessing would be expensive:
 
 | ID | Why it blocks |
 | --- | --- |
-| O-002 (`better-sqlite3` reproduction) | Storage abstraction and migrations depend on the driver; needs a real device |
-| O-006 / O-051 (TUI: Ink 8 pending measurement) | P-010 stays Proposed until M0 P5 measures repaint cost; the TUI workstream waits on the result, not on a preference |
-| O-053…O-063 (element review, `docs/review/`) | These are the open questions raised while reviewing the four interfaces element by element (D-055). All four inventories are drafted (590 elements, 0 approved) and waiting on the owner, not on research. They block regenerating `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from approved elements — M-D work — and they do not block running the M0 probes |
+| O-001, O-002 (`better-sqlite3` on Termux) | Storage abstraction and migrations depend on the driver's build behaviour on a phone; the driver itself is chosen (D-066), so what is left is the measurement, not the decision |
+| O-006 / O-051 (TUI: Ink 8 pending measurement) | P-010 stays Proposed until M0 P5 measures repaint cost; the TUI workstream waits on the result, not on a preference. Everything the measurement could change about *layout* is already decided (D-061), so a negative result costs a renderer, not a redesign |
+| O-008 (extension isolation) | Deliberately open (D-038 keeps v1 free of third-party executable code), and it gates nothing before M4 |
+| The 650 undecided rows in `docs/review/` | Rows still `PROPOSED` because they need the owner to look at them, not research. They block regenerating `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from approved elements — M-D work — and they do not block running the M0 probes |
 
 **Closed during M-D (2026-10-09):** O-004 transport → D-048 (SSE + HTTP, no WebSocket in v1); O-010 replay →
 D-049 (per-task `seq`, count-bounded window, gap + reconcile-by-GET); O-012 install path → D-050; O-019
 token/expiry → D-051.
 
-What that leaves blocking nothing but *shaping* M0: the only way to close O-002 and O-006 is to run the probes, so
-M0 is now unblocked by decision and blocked only by the owner's go-ahead.
+**Closed in the (R) round (2026-10-10, D-059…D-068):** fifty of the sixty-three tracked items, including all eleven
+questions the element review had raised (O-053…O-063) and everything the toolchain, terminal contract, provider
+runtime policies, data policies, platform boundaries and interface shapes were waiting on. `docs/review/DECISION-QUEUE.md`
+is the row-by-row record, with the evidence and the veto path.
 
-Not blocking, and safe to decide during the phase that needs them: O-001, O-003, O-005, O-007, O-011, O-013…O-018,
-O-021…O-025, O-027, O-029…O-052 — the rest of the tracked open items, each recorded where it applies (the count itself is checked against the register by `scripts/check-docs.py`).
+What that leaves is a short list and an honest one: M0 is unblocked by decision, and the only way to close the items
+above is to run the probes. Six items carry work in the register — O-006, O-051, O-008 and O-052 open, plus the one
+measured clause left in O-001 and O-002 — and each is open because it needs a phone, needs real extensions, or is a
+post-v1 design question (D-052), never because nobody got to it. `scripts/check-docs.py` counts the register on every
+run, so a stale "still open" cannot survive a commit. The 63 `O-` rows are not 63 open questions: a closed question
+keeps its number so that documents citing it stay true.
 
 ## 12. Roadmap Acceptance Criteria
 

@@ -45,6 +45,8 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 
 ### Region W2 — Bottom navigation (mobile) / left rail (≥960px)
 
+> **W1-A — closed (D-067).** Decided: **four chips inline — model, connection, approvals, vault — and the rest in the `more` sheet (W1-11)**, with one exception written into the layout rule rather than left to taste: a locked vault and an offline state escape the sheet into the bar, because those are the two states where the bar is the only place a user looks. The rule lives in `docs/UI_UX_SPEC.md` §2.
+
 | ID | Element | Items | Behavior | Status |
 | --- | --- | --- | --- | --- |
 | W2-01 | Primary nav | Chat · Tasks · Scheduled · Extensions · Settings | 5 tabs at 360px = 72px each, still ≥44px (D-057); approvals reachable from W1-05 and always from tab 2 badge | PROPOSED |
@@ -141,7 +143,7 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | W4-06 | Capability summary chip | what this turn may touch: fs root, net, shell off/on | tap → config; visible *before* sending, not after | PROPOSED |
 | W4-07 | Send / stop | one button, two states | stop = `POST /tasks/{id}/cancel` (finish current step), never a local hide | PROPOSED |
 | W4-08 | Queue indicator | "queued 2" while a task runs; send queues rather than interrupts | tap → list and reorder or drop | PROPOSED |
-| W4-09 | Character/token estimate | approximate context usage of the draft | estimate labeled as estimate (O-031) | PROPOSED |
+| W4-09 | Character/token estimate | approximate context usage of the draft | estimate labeled as estimate (O-031 closed by D-064) | ACCEPTED |
 | W4-10 | Bengali input | composition-safe; no submit on `Enter` while composing | tested on a phone keyboard, not assumed | PROPOSED |
 | W4-11 | Composer container | docked above the nav bar, grows to 8 lines then scrolls, keeps focus while the stream updates | never covers the last message row; survives route changes within a session (draft is per session) | PROPOSED |
 
@@ -190,7 +192,7 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | W-A2 | Card: action summary | one sentence, second person, no hedging (`docs/UI_UX_SPEC.md` §10) | PROPOSED |
 | W-A3 | Card: exact target | the real command / path / recipient / URL / SQL — never a paraphrase | PROPOSED |
 | W-A4 | Card: consequence + reversibility | what changes, whether undo exists, what an undo costs | PROPOSED |
-| W-A5 | Expiry countdown | with the reason it expires; per-tier duration still open (O-041) | PROPOSED |
+| W-A5 | Expiry countdown | with the reason it expires; per-tier duration decided in D-064 | ACCEPTED |
 | W-A6 | Approve once | only affirmative action in v1 (D-052) | PROPOSED |
 | W-A7 | Deny | with optional reason field; reason is recorded on the task | PROPOSED |
 | W-A8 | Show related task | deep link, keeps context available without leaving the decision | PROPOSED |
@@ -207,7 +209,7 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 
 | ID | Element | Content | Status |
 | --- | --- | --- | --- |
-| W7-01 | Budget bar | used / available tokens, with estimate-vs-count flag (O-031) and reserve-for-output | PROPOSED |
+| W7-01 | Budget bar | used / available tokens, with estimate-vs-count flag (O-031 closed by D-064) and reserve-for-output — decided in D-064 | ACCEPTED |
 | W7-02 | What is in context | sections: system, pinned, recent messages, retrieved memory, tool results — each with token cost | PROPOSED |
 | W7-03 | What was compacted | summary card linking to the original records; **never** implies the original is gone (D-027) | PROPOSED |
 | W7-04 | Pin / unpin | per message, per file, per decision | PROPOSED |
@@ -270,8 +272,8 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | W11-04 | Deferred tools | greyed with "not in this version" and the reason, not silently missing (`EXTENSIONS.md` §3) | PROPOSED |
 | W11-05 | Shell toggle | off by default; enabling is a described, T2/T3 action with the no-sandbox sentence | PROPOSED |
 | W11-06 | Workspace roots editor | add/remove roots; shows the sensitive deny-list applied to each | PROPOSED |
-| W11-07 | Limits editor | timeouts, output caps, temp lifetime, parallel steps (O-035) | PROPOSED |
-| W11-08 | Per-task narrowing | mandatory vs opt-in still open (O-025); UI present for both | PROPOSED |
+| W11-07 | Limits editor | timeouts, output caps, temp lifetime, parallel steps (O-035 closed by D-064) | ACCEPTED |
+| W11-08 | Per-task narrowing | mandatory vs opt-in decided in D-066; UI present for both — decided in D-066 | ACCEPTED |
 
 ---
 
@@ -306,7 +308,7 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | W12-02 | Diff-before-apply | shows exactly what changed | PROPOSED |
 | W12-03 | T3 markers | security-relevant rows flagged before edit, not after | PROPOSED |
 | W12-04 | Density mode | comfortable / compact / reduced, explicit user choice (`docs/DESIGN_SYSTEM.md` §8) | PROPOSED |
-| W12-05 | Theme | dark / light (O-045), with contrast verified | PROPOSED |
+| W12-05 | Theme | dark / light (O-045 closed by D-068), with contrast verified — decided in D-068 | ACCEPTED |
 | W12-06 | Retention controls | event and history retention, `docs/DATA_AND_MEMORY.md` §7-§8 | PROPOSED |
 | W12-07 | Reset / export config | sanitized export; plaintext config never contains a key | PROPOSED |
 | W12-08 | Language | UI copy strings; Bengali first-class, not an afterthought | PROPOSED |
@@ -377,3 +379,4 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | **Total** | **19 regions** | **185 elements** | — |
 
 Owner review surface: 161 rows to read, edit, cut, or approve. Nothing in this file is optional by size.
+

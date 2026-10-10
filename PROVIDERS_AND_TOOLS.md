@@ -140,8 +140,11 @@ server, and is not promised — device capability, storage, and thermal limits d
 
 - The runtime computes a token budget from the model descriptor minus reserve-for-output, and constructs context to
   fit (`AGENT_RUNTIME.md` §8).
-- Without `countTokens`, estimation uses a documented heuristic (character-ratio based), and the estimate is
-  reported as an estimate, never as a measurement.
+- Without `countTokens`, estimation uses the documented heuristic `max(chars / 4, grapheme clusters × 1.35)`,
+where the cluster count comes from `Intl.Segmenter` (O-031 closed by D-064). The second term exists because a
+character ratio calibrated on English over-counts Bengali and other Indic scripts — measured here, `দিয়েছি` is 7 code
+units but 3 clusters. The estimate is reported as an estimate, never as a measurement, and a screen that shows one
+labels it `estimated` rather than dimming it.
 - On approaching the ceiling the runtime compacts (hybrid compaction, D-027); on provider-reported context overflow
   it retries once after compaction, then surfaces the failure rather than silently truncating mid-task.
 - Per-provider limits live in configuration and in the descriptor; the smaller of the two wins.
@@ -161,7 +164,10 @@ server, and is not promised — device capability, storage, and thermal limits d
 | `billing` | Out of credit / paid tier required | No | Especially important given free-first expectations |
 | `cancelled` | Abort requested | No | Terminal, not an error worth retrying |
 
-Retry policy per class is an open decision (O-029).
+The per-class retry schedule is fixed by D-064 (O-029 closed): attempts wait `1s, 2s, 4s, 8s, 16s` with ±25%
+jitter, and a provider-supplied `Retry-After` (or a Telegram `retry_after`) **overrides the schedule upward** for
+that attempt rather than being treated as a suggestion. Jitter is not decoration: a fleet of phones on one free
+tier that retries in lockstep manufactures its own outage.
 
 ### 3.6 Selection, routing, and fallback
 
@@ -194,7 +200,7 @@ Stage 1 rules:
 
 - **5 attempts is a floor, not a ceiling**, and it is configurable; it applies *per failing stage*, so recovering
   and then hitting a new error starts a fresh budget rather than continuing a spent one.
-- Retries obey the per-class policy (O-029): honor a provider `Retry-After` when present, always with jitter, and
+- Retries obey the per-class policy (O-029 closed by D-064): honor a provider `Retry-After` when present, always with jitter, and
   never retry a non-retryable class (`auth`, `billing`, `content-filter`, `cancelled`, denied permission).
 - A retry re-issues the **failed call only**. It never re-runs earlier steps, and it never re-sends an action whose
   side effect is already recorded as complete.
@@ -361,7 +367,8 @@ Tier is computed per call, from the validated arguments:
 - `shell.run` — a static command classifier maps argv to a tier. Known-destructive patterns (`rm -rf`, `dd`,
   `mkfs`, `:(){:|:&};:`, force pushes, `chmod -R 777`, curl-pipe-shell) → **T3**. Read-only commands inside the
   workspace (`ls`, `cat`, `grep`, `git status`) → **T0/T1**. Everything else → **T2**. The classifier is *friction
-  and information*, not a boundary: the boundary remains capability + approval (`SECURITY.md` §9).
+  and information*, not a boundary: the boundary remains capability + approval (`SECURITY.md` §9). The table lives
+  in-tree and is versioned with the release (O-032 closed by D-066); it is deliberately not updatable by a skill.
 - Redirection, command substitution, and `;`/`&&` chains force a re-evaluation of the *whole* chain — a `T0`
   command with a `> ~/.bashrc` redirect is a write.
 - `file.*` — escalation by resolved path after symlink resolution.
@@ -452,21 +459,26 @@ Tracked in `DECISIONS.md`:
   approval (§4.5), `history.export` T2.
 - ~~**O-028**~~ — **closed as the lean set** (D-042): `groq`, `openrouter`, `ollama`, `anthropic`, `gemini`,
   `mock/fake`, plus user-defined `openai-compatible` endpoints (D-041) rather than a wide preset catalogue.
-- **O-029** — retry/backoff policy per error class, including `Retry-After` handling and jitter bounds. The 5-attempt
-  floor per stage is fixed (D-043); the schedule inside it is still open.
+- ~~**O-029**~~ — **closed (D-064).** `1s, 2s, 4s, 8s, 16s` ±25% jitter inside the D-043 floor; `Retry-After` wins.
 - ~~**O-030**~~ — **closed** (D-043): no silent switching; the user is asked. A per-identity pre-approved narrow
   ladder is the only exception.
-- **O-037** — override UX: whether `crabby model edit` is one prompt per field, or an editor-style screen on Web
-  and TUI. Same data model either way.
-- **O-038** — whether a user may override a capability for *all* models of one provider at once (convenient for
-  proxies; makes drift reports harder to read).
-- **O-031** — token estimation method when a provider exposes no counter, and how estimates are labeled.
-- **O-032** — the initial `shell.run` command-classifier ruleset and where its data lives (in-tree table vs
-  updatable skill).
+- ~~**O-037**~~ — **closed (D-064).** An editor screen, not a prompt chain: `crabby model edit` opens the field
+  editor, per-field prompts remain available for scripting, and the Web and TUI render the same fields from the
+  and TUI. Same data model either way — one prompt per field would make the CLI the only interface that can do this,
+  which is the parity rule in reverse.
+- ~~**O-038**~~ — **closed (D-064).** Allowed as an explicit bulk action that repeats the warning per affected model,
+  never as a default. A provider-wide override that reports as one line is a drift report that hides its own size.
+- ~~**O-031**~~ — **closed (D-064).** `max(chars/4, clusters × 1.35)`, always labeled `estimated` (§3.4).
+- ~~**O-032**~~ — **closed (D-066).** The ruleset above is the initial table; it ships in-tree and is versioned with
+  the code. Updatable-by-skill was rejected on one ground: a table that decides whether a command needs a human is an
+  extension point, and D-038 does not hand extension points to the thing they gate.
 - ~~**O-033**~~ — **closed as rejected:** user-authored request templates are out; D-041 covers the practical cases.
-- **O-034** — local inference on Android: unsupported, documented-unsupported, or supported only via an external
-  server (which is what §3.3 already assumes).
-- **O-035** — output cap and temp-file lifetime defaults per platform.
+- ~~**O-034**~~ — **closed (D-066).** Documented unsupported on Android, supported only via an external server the
+  user runs — which is what §3.3 already assumes, so the decision is to say the quiet thing out loud in the README
+  rather than let a user discover it as a crash.
+- ~~**O-035**~~ — **closed (D-064).** 64 KiB inline; the rest to the session scratch directory with the path
+  printed, so the file is discoverable rather than assumed. Scratch files older than 24 h are pruned at startup
+  and the prune is logged, because an invisible delete in a tool that also has `rm` is a bad precedent.
 
 ## 9. Acceptance Criteria
 

@@ -29,7 +29,7 @@
 | ID | Element | Content | Sizes | Behavior | Status |
 | --- | --- | --- | --- | --- | --- |
 | G1-01 | Allow-list gate | user id and chat id check before anything else | n/a | an unauthorized sender gets nothing at all — no refusal, no "unknown user", no reaction (`docs/INTERFACES_AND_API.md` §7.4) | PROPOSED |
-| G1-02 | First /start from an allowed user | the pairing step for a new chat | ≤6 lines | the pairing UX on a phone is still open (O-019 remainder); what is fixed is that the code is short-lived, single-use, and never logged (`SECURITY.md` §5.1) | PROPOSED |
+| G1-02 | First /start from an allowed user | the pairing step for a new chat | ≤6 lines | the pairing UX on a phone is decided in D-067; what is fixed is that the code is short-lived, single-use, and never logged (`SECURITY.md` §5.1) — decided in D-067 | ACCEPTED |
 | G1-03 | Bot token handling | stored in the vault, referenced as `vault://telegram` | one line in config | never in argv, never in a URL, never printed by any command (the same rule as CLI C7-02) | PROPOSED |
 | G1-04 | One identity per chat | which session this chat belongs to | n/a | a chat maps to one session; `/new` starts another, and the audit record says `telegram` plus the chat, not "the owner" | PROPOSED |
 | G1-05 | Group registration | adding the bot to a group | 2 lines | refused unless the group id is on the allow-list; the refusal explains what to change, in the owner's chat, not in the group | PROPOSED |
@@ -255,5 +255,4 @@ Nothing in this file may become a capability the other three interfaces lack, an
 "less capable" — that is the parity rule, and `docs/INTERFACES_AND_API.md` §8 is where the two accepted limitations
 (G6-06, G7-03) are already recorded.
 
-**Open questions:** none that invent a feature. The two real unknowns are inherited and already tracked: O-019's
-pairing-UX remainder (G1-02) and O-041's per-tier approval expiry (G-A6).
+**Open questions:** none that invent a feature. Both inherited unknowns are now decided: pairing UX (O-019) by D-067 and per-tier expiry (O-041) by D-064, so this inventory has no row waiting on a decision.

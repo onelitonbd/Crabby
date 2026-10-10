@@ -23,7 +23,7 @@ The design must support local-first operation, Android through Termux, safe reco
 - Generated summaries must not silently replace or destroy original conversation records.
 - Data deletion must define how related summaries, indexes, and derived memory are handled.
 
-**Unresolved:** Export format, retention exceptions, deletion scope, and backup behaviour.
+**Decided (D-065).** Export is one artifact for all four interfaces (the per-session export W14-05, `crabby history export` and the memory export share a serializer), so "my export" is one thing to reason about. Retention is 30 days or 5 000 events per task, whichever comes first, with the count visible in the task record — a phone has the least free storage and a runaway job must not be able to fill it. Backup is `db.backup()` plus the config directory into a timestamped archive; restore is a documented manual step behind an integrity check.
 
 ### 2.2 Task State and Checkpoints
 
@@ -37,7 +37,7 @@ The design must support local-first operation, Android through Termux, safe reco
 
 Checkpointing does not guarantee that every external operation can be resumed automatically.
 
-**Unresolved:** Checkpoint frequency, checkpoint schema, checkpoint retention, and exact resume policy.
+**Decided (D-065).** A checkpoint is written at committed step boundaries, which the task model already defines, so "checkpoint frequency" is not a tuning knob. The resume policy is one conservative rule: resume may pass a step only if that step's tool declares itself idempotent or the step recorded its external effect; anything else re-asks rather than repeating. That is the whole of O-013, and it is what makes "resumes mid-way, never restarts" (D-044) safe to promise.
 
 ### 2.3 Long-Term Memory
 
@@ -50,7 +50,7 @@ Crabby uses a hybrid memory approach (D-019):
 - Memory retrieval should be relevant to the current task and respect access and deletion rules.
 - Automatic memory creation must be possible to disable entirely for users who require that.
 
-**Unresolved:** Memory categories, confidence rules, automatic extraction thresholds, and user-facing memory management controls.
+**Unresolved:** confidence rules and automatic extraction thresholds — numbers to set against real usage in M2. Memory categories and the user-facing controls are not open in the same sense: they are specified by the inventories (`docs/review/WEB.md` regions W7/W8, `docs/review/TUI.md` region T9) and await the owner's element review (D-055), which is a different status from undecided.
 
 ### 2.4 Memory Search
 
@@ -60,7 +60,7 @@ Crabby uses a hybrid memory approach (D-019):
 - Search indexes must not become an uncontrolled source of stale or undeletable personal data.
 - Indexes should be rebuildable from authoritative records.
 
-**Unresolved:** Search implementation (e.g. FTS-style index vs application-level index), indexing strategy, multilingual support (Bengali and English content are both expected), and criteria for adding vector search.
+**Decided (D-065).** SQLite FTS5, indexed from the authoritative records and rebuildable from them. Bengali and English share one tokenizer, and because FTS5's `unicode61` does not segment Bangla the way a purpose-built library might, the index is documented as *recall-imperfect* rather than quietly patched with a hand-written splitter nobody tested. A vector index needs a measured need and a model nobody has chosen; until then the UI says "text search", not "search" (O-015).
 
 ### 2.5 Events and Audit Records
 
@@ -70,7 +70,7 @@ Crabby uses a hybrid memory approach (D-019):
 - Event retention must balance recovery needs, storage consumption, privacy, and user control.
 - Event records are descriptive, not authoritative for current task state (`AGENT_RUNTIME.md` §4.4).
 
-**Unresolved:** Retention duration, pruning rules, replay windows, event payload limits, and export behaviour.
+**Decided (D-065).** Retention 30 days or 5 000 events per task. Pruning runs at startup and after a task completes — never lazily during replay, because a replay that prunes while it replays lies about what it showed. Payload limit is the same 64 KiB inline cap as tool output (D-064), overflow written to the session scratch and referenced by path. Export includes a task's event list, so "what happened" is portable.
 
 ### 2.6 Configuration and Secrets
 
@@ -79,7 +79,7 @@ Crabby uses a hybrid memory approach (D-019):
 - Secrets must not be exposed in ordinary logs, conversation exports, or memory search results.
 - Configuration migrations must be considered when upgrading Crabby.
 
-**Unresolved:** Secret storage mechanism and platform-specific protection — see `SECURITY.md` §7 and O-018.
+**Decided (D-066).** No secret material lives in the database at all: rows carry `vault://<name>` references and the values live in the vault `SECURITY.md` §7 describes. That keeps exports, backups and raw `sqlite3` inspection free of credentials without depending on redaction being correct at every call site (O-018).
 
 ## 3. Data Categories
 
@@ -148,15 +148,16 @@ The first implementation should avoid unnecessary distributed storage or a manda
 - Users must be able to delete conversation history.
 - The deletion policy must explicitly address linked memories, summaries, search indexes, task artifacts, and exported backups.
 - Deleting data from the active database does not automatically delete previously exported backups; exports must be listed so the user can act on them.
-- Cascade deletion may be used for strictly derived, non-judgemental records (indexes, cached summaries). It must **not** be the automatic default for long-term memories, because a memory may be referenced by other conversations. Deletion propagation is defined in O-016.
-- Logs should avoid unnecessary message contents and secrets.
-- Data retention defaults must be documented before implementation.
+- Cascade deletion may be used for strictly derived, non-judgemental records (indexes, cached summaries). It must **not** be the automatic default for long-term memories, because a memory may be referenced by other conversations. Propagation is decided in D-065 (closing O-016) and stated below.
+- Logs should avoid unnecessary message contents and secrets. The rule is in `SECURITY.md` §12 and D-065: no secret-shaped values in logs or exports, and the audit record keeps the exact target in plaintext.
+- Data retention defaults are documented: 30 days or 5 000 events per task (D-065).
 
-**Proposed default (pending owner approval):** deleting a conversation removes its messages, its derived search entries, and marks memories whose only provenance is that conversation for user review; memories with other sources are retained and re-attributed.
+**Default (D-065):** deleting a conversation removes its messages and its derived search entries, and marks memories whose only provenance is that conversation for user review; memories with other sources are retained and re-attributed. Propagation happens **on read** — a summary whose source is gone is displayed as `source deleted` rather than rewritten, because rewriting derived text to match a deletion is how a memory system starts telling a story it never stored.
 
 ## 8. Backup, Restore, and Migration
 
-The system should define before release:
+Defined for release by D-065 (closing O-017); the bullets below are the requirements each answer meets.
+
 
 - A backup method safe for the selected storage engine (online backup preferred over raw file copy).
 - Restore validation and failure handling.
@@ -183,7 +184,8 @@ The system should define before release:
 - Long-term memory supports automatic creation and user control.
 - Necessary events are retained without prematurely fixing a retention period.
 - Ordinary text search is sufficient for the initial release.
-- Database and driver choices remain open until the required evaluation is complete.
+- Database and driver choices are made (D-066: SQLite with `better-sqlite3 ^13`, built from source on Termux); the
+  evaluation that remains is the one on a device — a clean install and a crash-during-write, recorded as O-001/O-002.
 - Deletion semantics for derived data are explicit rather than implied by cascade rules.
 
 This document specifies intended behaviour, not a finalized database implementation.

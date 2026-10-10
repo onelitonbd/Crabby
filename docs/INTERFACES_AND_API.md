@@ -25,7 +25,7 @@ Three properties every design choice below must keep:
 
 | Rule | Requirement |
 | --- | --- |
-| Base path | `/api/v1/...`; breaking changes require a new version, additive changes do not. |
+| Base path | `/api/v1/...`, chosen in D-067 (closing O-039) over header-based versioning, because a path prefix is visible in a browser address bar, in a proxy log and in a `curl` example — three places a header is not. Breaking changes require a new version; additive changes do not. **The route tables here and in `docs/review/` omit the prefix on purpose**: every client builds URLs from a base URL that already contains it, so a path written in a table is a suffix, and nothing has to be re-edited when `/api/v2` exists. |
 | Content type | `application/json; charset=utf-8`. UTF-8 is assumed everywhere — Bengali content is a first-class case, not an edge case. |
 | Validation | Every body and query is schema-validated before routing; unknown fields are rejected with the field named. |
 | Idempotency | Any request that can cause a side effect accepts `Idempotency-Key`; a replayed key returns the recorded result, never a second execution. |
@@ -71,12 +71,20 @@ Requirements:
 - Unauthenticated responses must not reveal which routes exist, and `GET /health` is authenticated too (it leaks
   too much about configuration to be public).
 
-### 3.2 Open detail
+### 3.2 Pairing presentation (O-019 closed by D-067)
 
 Token format and expiry are settled by D-051: an opaque random token with no expiry by default, since revocation is
-the control and a phone cannot reliably run a rotation UX. **O-019 now has one remainder: pairing UX on a phone** —
-a code that is readable, typeable, and copyable in one screen. On Termux the code must be readable
-and typeable in one screen; copy/paste is not guaranteed to work.
+the control and a phone cannot reliably run a rotation UX. The presentation question is answered the way the composer
+question in the TUI is — by assuming nothing about a phone's clipboard:
+
+- `crabby auth pair` prints the URL and the code **each on its own line**, with no other text on either line, so a
+  long-press selects one of them without also selecting a sentence.
+- The code is **8 characters** from an alphabet without `0/O` and `1/I`, typed once into the Web UI's first-run field.
+  Short enough to read aloud, long enough not to be guessable at a few hundred attempts per minute against a
+  single-use, short-lived record.
+- The code is single-use and short-lived; the long-lived credential is delivered **once**, over the authenticated
+  channel, and never written to a log, an audit payload or a diagnostic report (`SECURITY.md` §14).
+- Failure text names the next action (`crabby auth pair` again), never a bare "invalid code".
 
 ## 4. Endpoints
 
@@ -268,7 +276,18 @@ pipeable and free of color when not a TTY.
 | Diagnostics | `diagnostics` — writes the sanitized report and prints where it went |
 
 Rule: `crabby --help` and `crabby <noun> --help` are generated from the same contract that the Web UI and Telegram
-use, so a command cannot exist in one interface only (the D-005 test).
+use, so a command cannot exist in one interface only (the D-005 test). Shell completion is generated from that same
+registry in v1, and there is no man page (D-063, closing O-063) — a second reference surface is a second way to be
+wrong.
+
+Three CLI behaviors were open questions until D-063 closed them, and they belong to this contract rather than to the
+terminal:
+
+| Behavior | Contract |
+| --- | --- |
+| `task run "…"` | **Blocks**, printing `task <id>` and the `task resume <id>` line first, so a dropped SSH session loses nothing. `--detach` is the script path. |
+| `task watch <id> --json` | **NDJSON**: one event per line, each carrying the per-task `seq` (§5.4) so a script notices a gap the way a browser does. A `--json` snapshot stays one document. |
+| Approval needed, no answer reachable | **Exit `3`** immediately. `--wait-approval <n>` is the opt-in to keep waiting, and only that; a command that silently blocks inside a cron job is an outage that waits to be discovered. |
 
 ### 7.2 TUI
 
@@ -287,6 +306,13 @@ Interactive terminal client over `/events` + HTTP.
   (`SECURITY.md` §4, T-05).
 
 ### 7.3 Web UI
+
+Served by the Gateway from its build directory (D-067, closing O-040): `crabby web open` starts no second process and
+opens the same origin the API is on, so there is one port, one TLS story through the tunnel, and one thing to keep
+alive on a phone. The client itself is framework-free — custom elements, `<dialog>`, CSS custom properties for tokens,
+SSE for events (D-068, closing O-043) — because this interface is a consumer of the contract rather than an
+application platform, and every dependency here is install weight and audit surface on the least powerful device in
+the system.
 
 React + Vite per `ARCHITECTURE.md` §6.3; served as built assets by the Gateway in production.
 
@@ -324,6 +350,12 @@ Adapter over grammY (P-009); translates Telegram updates into the same internal 
 
 Every capability must exist on all four rows. A blank cell is a defect unless it carries a documented platform
 limitation **and** an accepted alternative interaction, which is what `ARCHITECTURE.md` §6.5 requires.
+
+This table is **generated** from the tool registry plus per-tool interface annotations (D-067, closing O-042); the
+generator is committed, the output is checked in so a reviewer can read it, and CI fails on a diff. The reason is
+history rather than taste: `docs/CONSISTENCY_REVIEW.md` F-08, F-10 and F-11 were the same defect three times — three
+hand-maintained lists — and `scripts/check-docs.py` rules 10–12 stand in for the generator until it exists in M0, so
+even the hand-maintained version cannot drift silently.
 
 | Capability | API | CLI | TUI | Web | Telegram |
 | --- | --- | --- | --- | --- | --- |
@@ -378,8 +410,10 @@ them later as an implementation shortcut.
   and no reliance on a connection to make progress.
 - Battery: an idle interface must not poll aggressively. Default backoff when backgrounded, tightened further in a
   documented low-resource mode (`SECURITY.md` §12).
-- Through a Quick Tunnel the public URL changes on restart: clients must discover the current URL from the Gateway
-  rather than storing one permanently, and stale URLs must fail with an actionable error.
+- Through a Quick Tunnel the public URL changes on restart — decided in D-066 (closing O-009): the Gateway prints the
+  new URL on every start, never redirects or resurrects the old one, and shutdown drains in-flight requests for 5 s so
+  a paired client sees a clean end rather than a hang. Clients must discover the current URL from the Gateway rather
+  than storing one permanently, and stale URLs must fail with an actionable error.
 - Latency: typing on a phone is expensive. Command names stay short, ids are copyable, and defaults are meaningful
   so `crabby task run "…"` needs no flags for the common path.
 
@@ -396,25 +430,29 @@ them later as an implementation shortcut.
 - **Auth tests:** expired/revoked token, wrong origin, unauthorized Telegram sender — all rejected before routing.
 - Fixtures and fakes come from the `mock/fake` provider so no test depends on a live API (`SECURITY.md` §17).
 
-## 12. Open Decisions
+## 12. Decisions that used to be open here
 
-Recorded in `DECISIONS.md`: **O-004** and **O-010** are closed by D-048/D-049; **O-019** keeps only its pairing-UX
-remainder; still open here: **O-009** remainder (tunnel lifecycle), **O-036** (doc checker in CI), plus:
+Nothing in this document is undecided. The list stays, with the answers, because "the spec stopped short of a call"
+was the most common finding in `docs/CONSISTENCY_REVIEW.md` and a reader should be able to see which claims have moved:
 
-Decided with this document's review round: transport (D-048) and replay semantics (D-049). Still open:
-
-- **O-039** — URL scheme: `/api/v1` prefix vs header-based versioning.
-- **O-040** — whether the Web UI is served by the Gateway or by a separate static step in `crabby web open`.
-- **O-041** — approval expiry duration, and whether expiry is per tier (a T3 prompt should not age on the same
-  clock as a T2 one).
-- **O-042** — whether the §8 parity matrix is generated from the tool registry plus annotations rather than
-  hand-maintained. Recommended, because a hand-maintained table is how drift starts.
+- ~~**O-004**~~, ~~**O-010**~~ — transport and replay semantics: D-048, D-049 (§5).
+- ~~**O-009**~~ — tunnel lifecycle: D-066 (§10).
+- ~~**O-019**~~ — pairing presentation: D-067 (§3.2).
+- ~~**O-036**~~ — the document checker is a required CI job: D-060, `docs/DEVELOPMENT.md` §12.
+- ~~**O-039**~~ — `/api/v1` path prefix: D-067 (§2).
+- ~~**O-040**~~ — the Web UI is served by the Gateway from its build directory; `crabby web open` starts nothing new
+  and points the browser at the same origin, because a second server on a phone is a second certificate story and a
+  second thing to keep alive (D-067, §7.3).
+- ~~**O-041**~~ — approval expiry per tier (T1 15 min, T2 10 min, T3 5 min): D-064, `SECURITY.md` §6.3.
+- ~~**O-042**~~ — this §8 is generated from the registry plus annotations: D-067.
+- ~~**O-060**, **O-061**, **O-062**, **O-063**~~ — CLI blocking, NDJSON watch, exit `3`, completion-only docs: D-063 (§7.1).
 
 ## 13. Acceptance Criteria
 
 01. Every capability in `PROVIDERS_AND_TOOLS.md` §4.2 appears in the §8 matrix with a real command per interface or a
     documented limitation.
-02. The event envelope, `seq` rule, and gap-handling contract are agreed (D-049); retention *size* tuning stays open.
+02. The event envelope, `seq` rule, and gap-handling contract are agreed (D-049); the retention figures are decided
+    (D-065: 30 days or 5 000 events per task), and what is left is tuning them against usage in M2, not choosing them.
 03. Pairing and revocation are specified well enough that no implementer invents a trust rule (D-030, D-051).
 04. Error classes and codes are frozen enough to build a CLI exit-code convention against.
 05. The Telegram adapter has no capability of its own: everything is expressible through §4 endpoints.

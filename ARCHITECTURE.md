@@ -436,6 +436,8 @@ AI judgments must not replace deterministic checks where those checks are availa
 
 Imported extensions must not bypass Crabby's Policy Engine.
 
+Manifest fields, lifecycle states, verdict semantics, and the external-harness conversion plan are specified in `EXTENSIONS.md`.
+
 ### Lightweight implementation strategy
 
 The initial implementation should favor a documented manifest, a narrow native extension interface, capability declarations, and adapters for selected external formats.

@@ -52,6 +52,9 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-032 | Remote access adds no capability narrowing by default: a remote client may use exactly the permissions its paired identity holds, the same as a local client. Interface type may narrow only what the user configures, never what the core allows. | Accepted |
 | D-033 | `termux-api` device capabilities (SMS, contacts, camera, location, sensor read) may be exposed to the agent, classified T3 with per-action approval and no stored blanket grant; each capability is independently enable-able. | Accepted |
 | D-034 | Security decisions taken in `SECURITY.md` review are recorded here and must be reflected in that document; neither file may state a rule the other contradicts. | Accepted |
+| D-035 | Extension strategy is content-first: skills, command templates, and MCP configuration are supported in the initial release; third-party executable code is blocked until the isolation gate passes. | Accepted |
+| D-036 | No "install anyway" override exists for an `unsafe` compatibility verdict while untrusted executable isolation is unresolved. | Accepted |
+| D-037 | External harness support is implemented as converters with a stored conversion report; dropped or reinterpreted features must be reported, never silently ignored. | Accepted |
 
 ## 3. Proposed Technical Choices
 
@@ -82,7 +85,7 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-005 | Zod vs TypeBox | Open: confirm schema validation and API contract requirements. |
 | O-006 | TUI library | Open: compare terminal UI libraries for mobile terminal usability and platform support. |
 | O-007 | Windows support | Open: define the initial WSL support boundary and assess native Windows support. |
-| O-008 | Extension isolation | Needs Validation: evaluate permissions, process isolation, and practical sandboxing on Termux. |
+| O-008 | Extension isolation | Needs Validation. Candidates and the hard gate are written up in `EXTENSIONS.md` §15: filtered in-process for bundled/first-party only, child process + capability RPC for everything else; `worker_threads` and `node:vm` rejected as security boundaries. Blocking item: hostile-extension test on Termux. |
 | O-009 | Tunnel lifecycle | Partly resolved: authentication is defined in `SECURITY.md` §5 and D-030/D-032. Open remainder: URL rotation on restart, reconnect handling, shutdown ordering, and exposure auditing. |
 | O-010 | Event replay | Open: define event IDs, ordering, retention window, replay, and reconnection semantics. |
 | O-011 | Context management algorithms | Needs Validation: evaluate token budgeting, compaction, retrieval, checkpointing, and recovery. |
@@ -183,15 +186,16 @@ For each open item:
 **Done this round:** `SECURITY.md` written; D-030 (pairing tokens), D-031 (secrets), D-032 (remote posture),
 D-033 (`termux-api` tiers) accepted and propagated.
 
-1. Write `EXTENSIONS.md` — manifest format, compatibility check pipeline, import trust, sandbox gate (O-008).
-2. Write `PROVIDERS_AND_TOOLS.md` — provider interface, capability declaration, tool registry, and the per-tool
+1. ~~Write `EXTENSIONS.md`~~ done — D-035…D-037 accepted, O-008 narrowed to a validation gate.
+2. Review `EXTENSIONS.md` for scope: confirm the initial release really only needs skills + commands + MCP client + first-party tools.
+3. Write `PROVIDERS_AND_TOOLS.md` — provider interface, capability declaration, tool registry, and the per-tool
    risk-tier assignment that closes O-020.
-3. Write `docs/INTERFACES_AND_API.md` — API contract, event envelope, pairing/revocation flow, reconnect and
+4. Write `docs/INTERFACES_AND_API.md` — API contract, event envelope, pairing/revocation flow, reconnect and
    replay rules (closes O-010).
-4. Write `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md`.
-5. Write `docs/ROADMAP.md` and `docs/DEVELOPMENT.md` (incl. `SECURITY.md` §17 test obligations).
-6. Write `AGENTS.md`.
-7. Final cross-document consistency review, then the Termux validation prototype.
+5. Write `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md`.
+6. Write `docs/ROADMAP.md` and `docs/DEVELOPMENT.md` (incl. `SECURITY.md` §17 test obligations).
+7. Write `AGENTS.md`.
+8. Final cross-document consistency review, then the Termux validation prototype.
 
 Remaining security-side open items: O-020 (tier per tool), O-021 (injection hardening depth), O-022 (audit
 redaction), O-024 (initial `termux-api` capability list), O-025 (mandatory task narrowing), plus

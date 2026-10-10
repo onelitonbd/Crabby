@@ -86,6 +86,8 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-066 | **Platform boundaries.** SQLite is confirmed as the engine (`docs/DATA_AND_MEMORY.md` §4's comparison stands; the clean-environment reproduction stays open as O-001's one remaining clause). `better-sqlite3 ^13` (13.0.3 verified, single native dependency) with `--build-from-source` on Termux per D-050. Windows: **WSL only** in v1; native Windows is documented-unsupported rather than half-supported (O-007). Secrets on Android/Termux: the vault file in `~/.crabby/vault`, scrypt KDF at N=2^15 with a per-install salt, and `termux-keystore` used only if the probe succeeds at first run — the probe result is printed at setup so the user knows which they have (O-018). Local inference on Android: **documented unsupported**, supported only through an external server the user runs, matching the §3.3 assumption (O-034). Tunnel lifecycle: a quick tunnel's URL is not sticky, it changes on restart, the Gateway prints the new one on every start and never redirects the old one, and shutdown drains for 5 s before exiting (O-009). The initial `termux-api` capability list is exactly: `notify`(T1), `tts`(T1), `clipboard-read`(T2), `clipboard-write`(T2), `share`(T2), `camera-capture`(T2), `location`(T2), `vibrate`(T1), `torch`(T1), `sms-send`(T3) (O-024). Per-task capability narrowing is **opt-in with a configured floor**, not mandatory: a mandatory prompt per task is friction that trains users to click through it, which is worse than the hole it closes (O-025). The `shell.run` classifier is a small table shipped in-tree with the release and versioned with the code, documented as an escalation hint and never as the security boundary (the boundary is path and capability checks, `SECURITY.md` §9); "updatable via a skill" was rejected because a table that gates T3 and updates itself is an extension point with less review than an extension gets (D-038), and that closes O-032. | Accepted (R) |
 | D-067 | **Interface shapes.** API versioning by path prefix `/api/v1`, with additive changes inside a minor version and a deprecation note for anything removed (O-039). The Web UI is **served by the Gateway** from a build directory — `crabby web open` starts nothing new and points at the same origin, because two servers means two certificate stories and a second thing to keep alive on a phone (O-040). `docs/INTERFACES_AND_API.md` §8 is **generated** from the tool registry plus per-tool interface annotations, with the generator committed and the table checked in so drift fails CI — this is the structural answer to F-08/F-11, whose root cause was three hand-maintained lists (O-042). Pairing on a phone: `crabby auth pair` prints the URL and an 8-character code on their own lines, the Web first-run field takes the code, and the long-lived credential is delivered once and never logged (O-019). A status bar that cannot fit its chips at 360px shows four inline plus a `more` sheet, and locked-vault and offline escape the sheet into the bar (O-053). Remembered, scoped approvals remain out of v1 (D-052); their design is deferred as O-052 rather than guessed at here (O-052). | Accepted (R) |
 | D-068 | **Web UI stack and colour values.** The Web UI is framework-free: native custom elements, `<dialog>`, CSS custom properties for tokens, SSE for events — no SPA framework, because this interface is a client of the contract rather than an application platform, and every dependency is install weight and audit surface on a phone (O-043). Palette values are recorded in `docs/DESIGN_SYSTEM.md` §2.3 with their measured WCAG 2.2 contrast, and `scripts/check-docs.py` recomputes them rather than trusting the table (O-044). Both themes ship on day one; light is specified, not inverted, and the measured numbers show why (a naive muted/accent pair for light fails AA on a raised surface — O-045). TUI colour detection is an explicit user setting first, with `$COLORTERM` sniffing only as the default when unset, and the 8-color tier keeps every state word readable — a probe that fails on a phone is worse than no probe (O-046). | Accepted (R) |
+| D-069 | **Dependency set for the runtime.** Accepted (R). Gateway framework **Fastify** (`^5.12.5`, 15 deps, published 2026-09-16): route-level validation is wired to the same TypeBox schemas the contract exports, through a `validatorCompiler`, so there is one schema and one validator rather than Fastify's `ajv` dialect sitting beside ours; SSE goes through `reply.hijack()`. **grammY** (`1.46.0`, 4 deps, pure JS) as the Telegram transport adapter only — update parsing, `retry_after` handling and 429 backoff live in Crabby's code, because the retry policy is a contract for all four interfaces (D-064) and cannot be delegated to a library's convenience. The test runner is **`node:test` with native type stripping**: measured here on Node 22.22.3, `node a.ts` runs a `.ts` file unflagged, `node --test` discovers `*.test.ts` and passed, and `--experimental-test-coverage` printed per-file tables — a complete stack with zero dependencies and no transform step, which also means the tests execute the same bytes production does. **Vitest and `tsx` are rejected as defaults, not forbidden**: both reach `esbuild`'s platform binaries (`tsx` → `esbuild`; `vitest` → `vite` → `esbuild`), and esbuild does publish `@esbuild/android-arm64` (registry, 0.28.2, 2026-08-08), so the argument is *not* "it cannot work on Termux" — a document claiming that would be the exact failure mode this register forbids. The argument is that the dev loop should not depend on a native binary the release path does not need, and that M0 should spend its measurements on things that can actually break. Adopting Vitest later is allowed with a named reason in `docs/DEVELOPMENT.md` §3. This row moves **P-001, P-002, P-005, P-009** to Accepted and **P-008** to Superseded, and it records that **P-006 (Zod)** and **P-007 (React + Vite)** were still written as open proposals after D-060 and D-068 had rejected them — the register contradicting itself, found only because this pass re-read the `P-` table (F-17). | Accepted (R) |
+| D-070 | **Runtime baseline, and what type stripping forbids.** Accepted (R). The requirement is behavioral, not a version number: **the installed Node must run `.ts` entry points and `node --test` with no flags and no loader**. That is what M0 P1 measures on Termux, and what `crabby doctor` refuses to start without. Two consequences are written into the codebase rules instead of left to taste: non-erasable TypeScript (`enum`, `namespace`, parameter properties) is simply unavailable, because the runtime rejects it — an error observed here, not inferred — so the language subset the project uses is the subset it can execute; and `package.json` `engines` is the single pin, so no document restates a Node version and no document can be separately wrong about one. | Accepted (R) |
 
 ## 3. Proposed Technical Choices
 
@@ -93,16 +95,16 @@ These choices are recommendations, not accepted technical decisions.
 
 | ID | Area | Candidate | Status |
 | --- | --- | --- | --- |
-| P-001 | Gateway framework | Fastify | Proposed |
-| P-002 | Streaming | SSE for server-to-client updates, ordinary HTTP endpoints for client actions | Proposed |
-| P-003 | Database engine | SQLite | Proposed — leading candidate, reported Termux validation |
-| P-004 | Database driver | `better-sqlite3` (source build on Termux) | Proposed default |
-| P-005 | Workspace tooling | npm workspaces | Proposed |
-| P-006 | Schema validation | Zod | Proposed |
-| P-007 | Web frontend | React + Vite | Proposed |
-| P-008 | Test framework | Vitest | Proposed |
-| P-009 | Telegram library | grammY | Proposed |
-| P-010 | TUI library | Ink 8 (React renderer for terminals) | Proposed — evidence below (O-006) |
+| P-001 | Gateway framework | Fastify | Accepted — chosen in D-069, with `validatorCompiler` over the TypeBox schemas instead of a second `ajv` dialect |
+| P-002 | Streaming | SSE for server-to-client updates, ordinary HTTP endpoints for client actions | Accepted — D-048 |
+| P-003 | Database engine | SQLite | Needs Validation — the design is accepted (D-066); O-001 and O-002 are the clean-build and WAL measurement |
+| P-004 | Database driver | `better-sqlite3` (source build on Termux) | Needs Validation — pinned at `^13.0.3` by D-066; O-001 and O-002 are the measurement, `node:sqlite` the named alternative it is compared against |
+| P-005 | Workspace tooling | npm workspaces | Accepted — D-060 |
+| P-006 | Schema validation | Zod | Superseded — D-060 chose TypeBox (O-005). The row stays so the reversal is visible |
+| P-007 | Web frontend | React + Vite | Superseded — D-068 chose framework-free custom elements (O-043). Six documents still named this stack and were corrected in the same pass (F-17) |
+| P-008 | Test framework | Vitest | Superseded — D-069 chose `node:test` with native type stripping; Vitest is allowed later with a named reason |
+| P-009 | Telegram library | grammY | Accepted — D-069, as a transport adapter with Crabby-owned retry and `retry_after` handling |
+| P-010 | TUI library | Ink 8 (React renderer for terminals) | Needs Validation — O-006 and O-051, measured on a phone in M0 P5. Ink 8.0.0 was published 2026-10-03, a week before this review, which is precisely why it is not Accepted |
 
 Each proposal remains pending until explicitly accepted or validated as required.
 
@@ -208,16 +210,16 @@ least once below. Adding a decision without naming its enforcer is a documentati
 | --- | --- |
 | `DECISIONS.md` itself (register governance, review status) | D-059 |
 | `PROJECT_BRIEF.md` (product scope, platforms, principles) | D-001, D-002, D-003, D-004, D-016, D-017, D-019, D-021 |
-| `ARCHITECTURE.md` (structure, contracts, platform) | D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-015, D-032, D-045, D-048, D-049, D-050, D-053, D-060, D-066, D-068|
+| `ARCHITECTURE.md` (structure, contracts, platform) | D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-015, D-032, D-045, D-048, D-049, D-050, D-053, D-060, D-066, D-068, D-069, D-070|
 | `AGENT_RUNTIME.md` (execution lifecycle) | D-018, D-022, D-023, D-024, D-025, D-026, D-027, D-028, D-029, D-044 |
 | `SECURITY.md` (policy, authn, secrets, exposure) | D-005, D-013, D-014, D-020, D-030, D-031, D-033, D-040, D-043, D-046, D-047, D-051, D-052, D-053, D-054, D-064, D-065, D-066, D-067|
 | `EXTENSIONS.md` (packaging, compatibility, trust) | D-035, D-036, D-037, D-038, D-039, D-040, D-065|
 | `PROVIDERS_AND_TOOLS.md` (adapters, tools, tiers) | D-041, D-042, D-043, D-044, D-045, D-046, D-047, D-057, D-064, D-066|
 | `docs/DATA_AND_MEMORY.md` (persistence, memory, deletion) | D-017, D-018, D-019, D-020, D-021, D-065|
-| `docs/INTERFACES_AND_API.md` (API surface, parity) | D-005, D-030, D-048, D-049, D-051, D-052, D-053, D-057, D-058, D-063, D-067|
+| `docs/INTERFACES_AND_API.md` (API surface, parity) | D-005, D-030, D-048, D-049, D-051, D-052, D-053, D-057, D-058, D-063, D-067, D-069|
 | `docs/UI_UX_SPEC.md` + `docs/DESIGN_SYSTEM.md` (presentation) | D-005, D-045, D-046, D-052, D-057, D-058, D-061, D-062, D-068 |
 | `docs/review/*.md` (element inventories, per D-055/D-056) | D-005, D-045, D-046, D-052, D-055, D-056, D-057, D-058, D-059, D-061, D-063|
-| `docs/ROADMAP.md` + `docs/DEVELOPMENT.md` (sequencing, workflow) | D-016, D-034, D-050, D-051, D-060, D-066 |
+| `docs/ROADMAP.md` + `docs/DEVELOPMENT.md` (sequencing, workflow) | D-016, D-034, D-050, D-051, D-060, D-066, D-069, D-070|
 | `AGENTS.md` (agent contract) | D-013, D-014, D-016, D-026, D-034, D-038, D-040, D-043, D-044, D-052 |
 
 Rules: a decision may be enforced by several documents but must be enforced by at least one; the enforcing document
@@ -359,12 +361,20 @@ D-033 (`termux-api` tiers) accepted and propagated.
 
 | Counter | Value |
 | --- | --- |
-| Accepted decisions | 68 (D-001…D-068) |
+| Accepted decisions | 70 (D-001…D-070) |
 | Proposed technical choices | 10 (P-001…P-010) |
 | Open / needs-validation items | 63 tracked, 50 of them closed by D-060…D-068 in the (R) round of 2026-10-10; closed earlier as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033. Six items carry work and each has its closing protocol in `docs/review/DECISION-QUEUE.md` §2 rather than a vague promise: four open rows (O-006 and O-051 need a phone render, O-008 needs real extensions, O-052 is a post-v1 design question) and two with one measured clause left (O-001, O-002: a clean Termux build and a WAL torture). The row count stays 63 because a closed question keeps its number — otherwise a register that renumbers itself cannot be cited by a document that was written against it |
 | Planning docs written | 16 — includes `docs/CONSISTENCY_REVIEW.md` (M-D record) |
 | Custom endpoint / fallback decisions | D-041…D-047 accepted this round |
 | Planning docs remaining | 0 (M-D review is the last step) |
+
+**The `P-` table, honestly counted.** Five of the ten rows are Accepted, four Superseded, and three are
+**Needs Validation** (P-003, P-004, P-010) because only a phone can move them. No row sits at `Proposed` with no
+blocker named, and rule 14 of `scripts/check-docs.py` keeps it that way: a `P-` row outside
+`Accepted`/`Superseded` must cite an `O-` row that is still open. The Superseded rows are kept rather than deleted —
+a register that erases its rejected options cannot be audited for having considered them. What this table looked like
+before this pass (Zod and React+Vite offered as live proposals after the decisions that killed them) is
+`docs/CONSISTENCY_REVIEW.md` F-17, and it is why the checker rather than a reviewer now keeps it honest.
 
 **About the (R) marker.** D-059…D-068 were recorded on 2026-10-10 under the owner's instruction to research the open
 items and arrange everything according to the agent's recommendations. Each names the evidence behind it, and rejecting

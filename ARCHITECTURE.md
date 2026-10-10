@@ -6,7 +6,7 @@
 >
 > **Primary runtime:** Node.js + TypeScript
 >
-> **Web frontend:** React + Vite
+> **Web frontend:** custom elements, no SPA framework (D-068; supersedes P-007)
 >
 > **License:** MIT (planned)
 
@@ -49,7 +49,7 @@ This document defines architectural requirements without pretending that every i
 +------------------------------------------------------+
 |                    User Interfaces                   |
 |                                                      |
-|    CLI        TUI        React Web UI      Telegram  |
+|    CLI        TUI         Web UI          Telegram  |
 +---------------------------+--------------------------+
                             |
                     HTTP + Streaming
@@ -161,11 +161,16 @@ It must remain usable in constrained terminal environments, including Android th
 
 The Web UI provides responsive browser-based access to conversations, tasks, tool activity, approvals, configuration, memory controls, extension management, and other supported capabilities.
 
-React and Vite are the proposed frontend technologies. Vite is a build tool and development server, not the production agent backend.
+**Custom elements, no SPA framework** (D-068, superseding P-007's React + Vite proposal). The Web UI is a client of
+the HTTP and SSE contract, not an application platform: native custom elements, `<dialog>`, CSS custom properties for
+tokens, and one build step that concatenates and minifies. The reason is stated once here and applies to every future
+proposal of this kind — on the primary device, a dependency is install weight, an audit surface, and a bundle the
+cache has to hold, while the capability being bought is a rendering abstraction for a screen list and a form.
 
 The production Web UI should be served as built assets through the Gateway or its associated local serving mechanism.
 
-The backend must remain usable without the Web UI or Vite development server.
+The backend must remain usable without the Web UI, and nothing in `apps/gateway` may import from the Web UI's
+source tree in either direction (`ARCHITECTURE.md` §19).
 
 ### 6.4 Telegram
 
@@ -581,22 +586,27 @@ Extension adapters should translate external formats into supported Crabby capab
 
 ## 20. Technical Stack
 
-The current proposed stack is:
+Every row names the decision that settled it, because a stack table that says "(proposed)" after the decision has
+landed is a document arguing with the register — which is exactly what this table did until 2026-10-10 (F-17). Rule 14
+of `scripts/check-docs.py` holds `DECISIONS.md` to the same discipline: a `P-` row may not sit at `Proposed` without
+citing an `O-` row that is still open.
 
 | Concern | Direction |
 | --- | --- |
-| Runtime | Node.js (accepted) |
-| Language | TypeScript (accepted) |
-| Web frontend | React (proposed) |
-| Frontend build | Vite (proposed) |
-| Gateway | Fastify (proposed) |
-| API | HTTP with a versioned contract (accepted) |
-| Streaming | SSE recommended, WebSocket alternative (proposed) |
-| Validation | Zod (proposed) |
-| Storage | SQLite behind an abstraction, driver `better-sqlite3` (proposed, validation reported) |
-| Model integrations | Provider adapters (direction) |
-| External tool integrations | MCP client (proposed) |
-| Testing | Vitest + unit, integration, security, platform tests (proposed) |
+| Runtime | Node.js, with the unflagged-type-stripping requirement in D-070 |
+| Language | TypeScript (D-003), erasable-syntax subset only (D-070) |
+| Web frontend | Custom elements, no SPA framework (D-068) |
+| Frontend build | One build step, no framework bundler (D-068) |
+| Gateway | Fastify, validation via `validatorCompiler` on the shared TypeBox schemas (D-069) |
+| API | HTTP with a versioned contract, `/api/v1` (D-048, D-067) |
+| Streaming | SSE; no WebSocket in v1 (D-048) |
+| Validation | TypeBox (D-060) |
+| Storage | SQLite behind an abstraction, driver `better-sqlite3 ^13` (D-066; build behavior is O-001/O-002) |
+| Model integrations | Provider adapters (D-041, D-042) |
+| External tool integrations | MCP client only — never a server (D-040) |
+| Telegram | grammY as transport adapter, retry owned here (D-069) |
+| TUI | Ink 8 pending phone measurement, `node:readline` fallback (P-010, O-006/O-051) |
+| Testing | `node:test` with native type stripping, plus unit, contract, security and platform suites (D-069) |
 
 The exact TUI library, workspace manager, and packaging approach are not finalized unless separately recorded as accepted decisions in `DECISIONS.md`.
 

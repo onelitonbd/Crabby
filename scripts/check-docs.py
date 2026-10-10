@@ -572,6 +572,26 @@ def main() -> int:
                             f"docs/DESIGN_SYSTEM.md: {tok} {label} measures {worst:.2f} against its stated minimum {minimum}"
                         )
 
+    # 14. a `P-` row is a proposal that something else has to validate. Once an Accepted decision covers the
+    #     same choice, the proposal must move to Accepted/Superseded/Needs Validation and name its blocker —
+    #     the F-17 class of defect is a `Proposed` row nobody was still deciding.
+    for line in bodies[decisions_path].splitlines():
+        m = re.match(r"^\|\s*(P-\d{3})\s*\|(.*)\|\s*$", line)
+        if not m:
+            continue
+        cells = [c.strip() for c in m.group(2).split("|")]
+        status = cells[-1] if cells else ""
+        if not status.startswith("Proposed"):
+            continue
+        blockers = re.findall(r"O-\d{3}", m.group(2))
+        live = [b for b in blockers if not re.match(
+            r"^\|\s*" + b + r"\s*\|[^|]*\|\s*\*\*Closed", bodies[decisions_path], flags=re.M)]
+        if not blockers or not live:
+            problems.append(
+                f"DECISIONS.md: {m.group(1)} is still Proposed without an open blocker — a proposal must cite the "
+                f"`O-` row that is waiting for evidence, or move to Accepted / Superseded / Needs Validation"
+            )
+
     if problems:
         print(f"✗ {len(problems)} documentation problem(s):")
         for prob in problems:

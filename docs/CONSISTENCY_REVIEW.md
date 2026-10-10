@@ -3,7 +3,9 @@
 > **Status:** In progress — first pass complete. Mechanical checks pass; human verification by the owner is the
 > remaining item (§6).
 >
-> **Reviewed:** 15 planning documents (`*.md`, `docs/*.md`) as of 2026-10-09.
+> **Reviewed:** 22 documents (16 planning at `*.md` and `docs/*.md`, 4 element inventories, the review index and
+> this file), most recently on 2026-10-10 — findings F-13…F-17 are from that pass, so every earlier finding has been
+> re-checked against the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
 > a scratch pad: every finding below is either fixed with a decision ID, or explicitly listed as still open.
@@ -255,6 +257,38 @@ inventory to 203 elements and was recomputed by `scripts/count-inventory.py` rat
 an answer makes a new control necessary, the control appears in the inventory with the size and the behavior, or it
 does not exist.
 
+### F-17 — The register itself was still offering technologies the decisions had killed
+**Severity: high, and it was invisible by construction.** `DECISIONS.md` §2 kept ten `P-` rows as "proposed"
+candidates: `P-006 Schema validation | Zod` two days after D-060 chose TypeBox, `P-007 Web frontend | React + Vite`
+after D-068 chose framework-free custom elements, `P-008 Test framework | Vitest` never decided at all, and the
+runtime/dev-loop question (`tsx`) undecided while `docs/DEVELOPMENT.md` §1 already listed it as the dev runner.
+Downstream of those rows, **six documents asserted the superseded stack**: `PROJECT_BRIEF.md` §5.3 and its
+technology table, `ARCHITECTURE.md` §6.3 plus the whole of §20, and `docs/INTERFACES_AND_API.md` §7.3. A reader who
+started at the brief — the correct place to start — would have implemented React, Vite, Vitest and Zod, and every
+document they consulted would have agreed with them.
+
+The checker could not see it: rule 4 validates that a *filename* exists and rule 7 that an *Accepted decision appears
+in the traceability map*. Neither compares a decision's content with the sentence that contradicts it. There is no
+general way to do that mechanically. There *is* a way to close the specific hole where it started, which is the
+`P-` table: a proposal that names no open blocker is a proposal nobody is still deciding.
+
+**Resolution:** D-069 and D-070 decide the dependency set and the runtime baseline — Fastify with `validatorCompiler`
+over the shared TypeBox schemas, grammY as transport adapter only with retry owned in Crabby, and `node:test` with
+native type stripping as the whole test stack. The runner choice was **measured here** rather than argued: on Node
+22.22.3, `node a.ts` runs unflagged, `node --test` discovers `*.test.ts` and passes, `--experimental-test-coverage`
+prints the table, and an `enum` fails with a platform error — which is why D-070 turns that error into the codebase's
+"erasable TypeScript only" rule instead of a convention. Vitest and `tsx` are rejected as *defaults*, with the
+honest reason written down: they reach esbuild's platform binaries, esbuild *does* ship `@esbuild/android-arm64`
+(verified on the registry), so the argument is dev-loop dependency weight, not impossibility — the sentence this
+document would have liked to write, and should not. `P-006`/`P-007`/`P-008` become Superseded with their text kept,
+`P-003`/`P-004`/`P-010` become Needs Validation citing O-001/O-002/O-006/O-051, all six stale documents were
+corrected, `ARCHITECTURE.md` §20's table now cites a decision per row, and rule 14 fails any future `Proposed` row
+without an open `O-` reference (negative-tested).
+
+**Lesson kept:** decisions do not end when a `D-` row is written; they end when the last document that disagreed with
+them is edited. `Proposed` in a register is a *promise that someone is still deciding* — and if nobody is, the row is
+not undecided, it is abandoned.
+
 ## 3. Checks That Passed
 
 | Check | Result |
@@ -267,6 +301,9 @@ does not exist.
 | No planning document claims an implementation exists | ✓ |
 | Terminology: Gateway, Policy Engine, Task Manager, Event System, Cancellation Manager, Checkpoint Manager, workspace root, Quick Tunnel | ✓ single canonical name each; `gateway/` lowercase appears only as a directory name and a command name, which is correct |
 | Accepted `D-` rows do not describe themselves as unselected | ✓ |
+| Review-progress tables equal the parsed rows (`scripts/count-inventory.py` and the checker agree by construction) | ✓ |
+| Palette ratios in `docs/DESIGN_SYSTEM.md` §2.3 recompute from the hexes, against the worst surface, with a floor that cannot be lowered for text | ✓ (rule 13; stale numbers and washed-out values both fail, verified) |
+| No `P-` row sits at `Proposed` without an open `O-` blocker | ✓ (rule 14, added because of F-17) |
 
 ## 4. Requirements Coverage From `PROJECT_BRIEF.md`
 
@@ -310,9 +347,14 @@ Being explicit, because "reviewed" must not quietly mean "verified":
     `better-sqlite3` 13.0.3 on 2026-08-05); registry state moves, so both records carry an "as of" date and must be
     re-checked at M0 rather than trusted. Ink 8 being a week old at review time is precisely why `P-010` stays
     `Proposed`.
-04. **Cost/effort is unestimated.** `docs/ROADMAP.md` gives order and gates, not durations. Turning it into a
+04. **`node` here is not `node` on the device.** D-069 and D-070 rest on measurements taken in this workspace
+    (type stripping unflagged, `node --test`, coverage, the `enum` rejection, registry facts for esbuild's Android
+    binary). Every one of them is reproducible here and *none of them is Termux*: M0 P1 is what turns the baseline
+    from a local observation into a supportable floor. That is the difference between this round's decisions and the
+    ones left open, and the register marks it (`Needs Validation`) rather than smoothing it over.
+05. **Cost/effort is unestimated.** `docs/ROADMAP.md` gives order and gates, not durations. Turning it into a
     schedule would require the owner's availability, which is not a documentation fact.
-05. **Bengali rendering and input ergonomics are untested** on a real phone keyboard (`docs/UI_UX_SPEC.md` §9,
+06. **Bengali rendering and input ergonomics are untested** on a real phone keyboard (`docs/UI_UX_SPEC.md` §9,
     `docs/DESIGN_SYSTEM.md` §11) — this matters more for this project than for most, since the owner's working
     language is Bengali and the primary device is a phone. What *was* measured here is the arithmetic behind the
     layout rule (code units vs grapheme clusters vs cells, in Node 22), which is enough to decide how truncation must

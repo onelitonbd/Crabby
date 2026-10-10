@@ -314,7 +314,8 @@ SSE for events (D-068, closing O-043) — because this interface is a consumer o
 application platform, and every dependency here is install weight and audit surface on the least powerful device in
 the system.
 
-React + Vite per `ARCHITECTURE.md` §6.3; served as built assets by the Gateway in production.
+Framework-free custom elements per `ARCHITECTURE.md` §6.3 (D-068), served as built assets by the Gateway in
+production (D-067).
 
 - Consumes only `/api/v1` and `/events`; no direct core imports, no separate backend.
 - Mobile viewport is the primary layout (a phone browser pointed at a Termux Gateway), desktop is the wider case.
@@ -325,7 +326,8 @@ React + Vite per `ARCHITECTURE.md` §6.3; served as built assets by the Gateway 
 
 ### 7.4 Telegram
 
-Adapter over grammY (P-009); translates Telegram updates into the same internal requests.
+Adapter over grammY (P-009, Accepted in D-069); translates Telegram updates into the same internal requests, and
+keeps `retry_after`/429 handling in Crabby's code rather than the library's.
 
 - Commands, one per capability in §8 rather than a hand-picked subset: `/ask <text>`, `/task <objective>`, `/tasks`,
   `/watch <id>`, `/unwatch <id>`, `/cancel [id]`, `/resume <id>`, `/approve <id>`, `/deny <id>`, `/approvals`,

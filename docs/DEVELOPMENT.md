@@ -15,7 +15,8 @@
 | TypeScript | `strict: true`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`; ESM only |
 | Schema and validation | TypeBox 0.34 (D-060, closing O-005) — chosen over Zod because the API contract, `crabby config schema --json` and the generated `--help` all need JSON Schema as an output, not a conversion |
 | Lint and format | `@biomejs/biome` 2.5 (D-060, closing O-047/O-048), zero runtime dependencies. The bare `biome` name on npm is an unrelated 2016 package; a `package.json` that asks for it installs the wrong thing without complaint |
-| Runtime | `tsx` for development; compiled output for release; no postinstall scripts in Crabby packages |
+| Runtime | `node` directly, in both modes: type stripping runs `.ts` without flags or a loader (D-070), and `tsx` is not a dependency because it pulls `esbuild`'s platform binary into the dev loop for no capability the project needs (D-069). Compiled output for release; no postinstall scripts in Crabby packages |
+| Test runner | `node:test` with `node --test`, discovery of `*.test.ts`, coverage through `--experimental-test-coverage` (D-069). No Vitest, no Jest, no runner config file — the conventions are the runtime's |
 | Native toolchain (Termux) | `pkg install python make clang` for `better-sqlite3` source builds — documented, and checked by `crabby doctor` |
 | Editor | Any; `tsconfig` and lint config are the contract, not a specific IDE |
 
@@ -32,9 +33,10 @@ from, and interface apps never import core internals directly.
 
 | Command | Does |
 | --- | --- |
-| `npm run dev` | Gateway with watch mode plus built Web assets; never requires a Vite dev server for the backend (`ARCHITECTURE.md` §6.3) |
+| `npm run dev` | Gateway with `node --watch` plus built Web assets; there is no framework dev server in this project at all, which is one of the things D-068 bought (`ARCHITECTURE.md` §6.3) |
 | `npm run build` | Typecheck, compile, build the Web UI as static output |
-| `npm test` | Unit + contract tests, fake provider only, no network |
+| `npm test` | `node --test 'packages/**/*.test.ts' 'apps/**/*.test.ts'` — unit + contract tests, fake provider only, no network |
+| `npm run test:coverage` | The same run with `--experimental-test-coverage`, so CI and a laptop print the same table |
 | `npm run test:integration` | Gateway + storage + task lifecycle against a temp data dir |
 | `npm run test:security` | `SECURITY.md` §17 suite |
 | `npm run test:live` | Opt-in; hits real providers; never required for a green build |
@@ -55,6 +57,9 @@ from, and interface apps never import core internals directly.
   tools and provider calls; no floating promises.
 - **Zones that must stay framework-free:** policy evaluation, task state machine, context budgeting. Fastify types
   must not appear inside them (D-014/`DECISIONS.md` §6 rule 01), so the framework stays swappable.
+- **Erasable TypeScript only:** no `enum`, no `namespace`, no parameter properties (D-070). This is not a style rule
+  a reviewer has to remember — the runtime rejects non-erasable syntax, measured here as an error from `node`
+  itself, so the constraint is enforced by the platform that ships the product.
 - **No new dependencies** without a note in `DECISIONS.md` explaining why the existing set cannot do it — the
   resource-conscious principle from `PROJECT_BRIEF.md` §13 has teeth in the dependency list.
 - **Redaction is a constructor concern:** types that can carry a secret name it, so accidental logging is hard.

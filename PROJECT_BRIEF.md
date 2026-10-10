@@ -77,7 +77,10 @@ It should be suitable for terminal-based workflows on Android and desktop system
 
 The Web UI will provide a responsive browser-based interface for conversations, task monitoring, configuration, and supported administrative operations.
 
-It must work on mobile browsers as well as desktop browsers. React and Vite are the proposed frontend technologies.
+It must work on mobile browsers as well as desktop browsers. React and Vite were the proposed frontend technologies
+when this brief was written; **D-068 (2026-10-10) replaced that proposal with framework-free custom elements**
+(`ARCHITECTURE.md` §6.3). The requirement stated here — mobile and desktop browsers, no app store — is unchanged and
+is what the decision serves.
 
 ### 5.4 Telegram
 
@@ -213,11 +216,11 @@ The current proposed stack is:
 | --- | --- |
 | Runtime | Node.js |
 | Language | TypeScript |
-| Web frontend | React |
-| Frontend build tooling | Vite |
-| Gateway/API | Fastify |
-| Live updates | WebSocket or a suitable streaming alternative |
-| Package management | npm workspaces or another validated workspace solution |
+| Web frontend | Custom elements, no SPA framework (D-068; supersedes the React proposal recorded here) |
+| Frontend build tooling | One build step in the repo, no framework bundler (D-068) |
+| Gateway/API | Fastify (D-069) |
+| Live updates | SSE over HTTP (D-048; WebSocket rejected for v1) |
+| Package management | npm workspaces (D-060) |
 | Data validation | A shared schema-validation library |
 | Storage | SQLite behind an abstraction, pending validation |
 | External tool integration | MCP client |

@@ -48,8 +48,8 @@ the phase that prevents an expensive rewrite; `ARCHITECTURE.md` §22 makes it an
 
 | # | Probe | Pass condition |
 | --- | --- | --- |
-| P1 | Node.js LTS install + `npm install` + a plain TS build on Termux | Installs and runs from a clean Termux; no glibc-only assumption |
-| P2 | Fastify Gateway binding `127.0.0.1`, one `GET /health`, one SSE stream | Streams to a local client; survives a forced process kill and restarts cleanly |
+| P1 | Node.js LTS install + `npm install` on Termux, then the runtime assumption of D-070: `node file.ts` and `node --test` with no flags, no loader, no esbuild | Installs and runs from a clean Termux; type stripping works on the Node the Termux package actually ships, and `npm run test` passes there. Record the Node version — this is the number that becomes `engines`, and no document restates it |
+| P2 | Fastify Gateway (D-069) binding `127.0.0.1`, one `GET /health`, one SSE stream via `reply.hijack()` | Streams to a local client; survives a forced process kill and restarts cleanly |
 | P3 | Storage: `better-sqlite3` source build, WAL, crash-during-write | Reproduces the report in `DECISIONS.md` §5 on a clean environment; `integrity_check` ok; compare against `node:sqlite` for the same case |
 | P4 | The Web UI built and served by the Gateway — **not** a React/Vite build: D-068 chose framework-free custom elements, so P4 compiles the small no-dependency bundle the design actually specifies and serves it from the Gateway origin | Built assets load from a phone browser at 360px from the same origin as the API, with no dev server and no second listener; `tokens.css`-equivalent values are the §2.3 palette, and the 360px bar holds exactly four chips plus the `more` sheet (D-067) |
 | P5 | TUI candidate at 40 columns — Ink 8 (P-010), with the `node:readline` fallback as a control | Renders; token-by-token streaming holds ≤4 fps repaint without dropping input; **`Ctrl+J` inserts a newline on Termux**, and whether `Shift+Enter` can be negotiated after a `CSI ? u` query is *recorded*, not assumed (D-061 decided the design so this measurement can only widen the hint text, never rewrite it); `Ctrl-C` maps to cancel not quit; 8-color fallback usable with every state word readable; Bengali pasted into the composer truncates at a cluster boundary and does not shift the frame (D-062); no native build step. Result decides OpenTUI's deferral (O-051) and Ink's adoption (O-006) |
@@ -71,7 +71,8 @@ outcome* — it is why the phase exists.
 - Storage abstraction with migrations, plus the repositories of `docs/DATA_AND_MEMORY.md` §5.
 - Policy engine skeleton with the capability vocabulary and tier model enforced (`SECURITY.md` §6), and the fake
   provider (`PROVIDERS_AND_TOOLS.md` §3.3) so tests need no live API.
-- Test scaffolding for the parity and contract suites — before interfaces exist.
+- Test scaffolding for the parity and contract suites — before interfaces exist: `node:test`, one runner file per
+  package, no runner configuration beyond globs (D-069).
 - CI per `docs/DEVELOPMENT.md` §12 (D-060): the ubuntu matrix plus `termux/termux-docker` for the toolchain half, with
   `scripts/check-docs.py` a **required** job. `scripts/count-inventory.py` is what keeps the review-progress table honest.
 - The parity generator (D-067): `docs/INTERFACES_AND_API.md` §8 emitted from the tool registry plus annotations, with

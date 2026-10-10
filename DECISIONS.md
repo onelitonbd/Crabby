@@ -184,6 +184,10 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-063 | Shell completion and generated reference | **Closed (D-063).** Completion generated from the registry; no man page. |
 | O-064 | Integrity and signing mechanism for `verified-community` distribution | Open, and it gates a tier rather than a feature: an artifact is verified by the hash recorded at install time and by whatever the publisher supplies, so `verified-community` stays unavailable until there is a scheme that works **without a hosted service** (the constraint in `EXTENSIONS.md` §15). Closing step: pick one local-verifiable mechanism — a detached signature over the artifact plus a publisher key pinned in Crabby's own config — and write its revocation story before the tier is offered. Until then `ext install` reports the tier it *cannot* assign, not a guessed one. |
 | O-065 | Sandbox enforcement on Termux | Needs Validation, measured not designed: `SECURITY.md` §15 states the honest position (no application sandbox between Crabby and Termux's data dir), and `EXTENSIONS.md` §15 lists the candidates. Closing step is M0 P7 with P6's process-kill notes — attempt `fs`/`net`/`child_process` access from a restricted candidate and record what the platform actually refuses. The fallback is not a weaker sandbox, it is a **documented platform limitation** plus the O-008 gate staying shut for untrusted executable code on that platform. |
+| O-066 | Error class → HTTP status | Open, and it is a table rather than a debate: `docs/INTERFACES_AND_API.md` §6 says "HTTP status maps from the class" and then prints no mapping, so a Gateway that answers `400` for `policy` and another that answers `403` are both currently defensible. M1b writes the ten rows into §6 and the contract test asserts them; until then no code picks a status silently. |
+| O-067 | File names inside the state directory | Open. D-066 fixes `~/.crabby/vault` and `AGENTS.md` fixes `.crabby/config.json`, but no document names the SQLite file, and `crabby doctor`'s shutdown record needed a name that nothing supplied (`last-exit.json` is `packages/core/shutdown.ts`'s choice, stated in its header). M1b's storage slice closes the database half by writing the path into `docs/DATA_AND_MEMORY.md` §4; a name that appears only in code is a name an interface will eventually hard-code. |
+| O-068 | Event payload cap | Open, and deliberately unresolved in code. §5.2 requires "a payload size cap with a truncation marker" but names no size, so `payloadTooBig(payload, capBytes)` takes the cap from its caller and `packages/api-contracts` stores no number. D-074's `limits.*` table is where it belongs next to the nine timeouts it already carries; M1b proposes one value from a measured event size rather than from a round number. |
+| O-069 | List page size for `?limit=` | Open. §2's pagination rule fixes the shape (`?cursor=&limit=`, ordered by stable id) but not the ceiling, so `ListQuery` carries a 200 ceiling labelled as a proposal and applies no default — a default is a policy, and the route that documents it should own it. Closes with the same D-074 edit as O-068. |
 
 **Open here means genuinely undecided.** A row marked closed must stay consistent with the decision it cites.
 
@@ -359,8 +363,13 @@ For each open item:
 
 ## 8. Current Next Actions
 
-**Done this round:** M-D opened with a mechanical consistency review (`docs/CONSISTENCY_REVIEW.md`); D-030 (pairing tokens), D-031 (secrets), D-032 (remote posture),
-D-033 (`termux-api` tiers) accepted and propagated.
+**Done this round:** M1a — the first product code. `packages/api-contracts`, `packages/platform`, `packages/core` and
+`apps/cli` exist and run: `crabby init`, `doctor`, `version`, and `crabby config path|get|set|schema`, each tested by
+spawning the real process (`tests/unit/cli.test.ts`) and by one runner file per package. The four contract gaps that
+pass found are opened as O-066…O-069 rather than filled in silently, and `docs/CONSISTENCY_REVIEW.md`'s F-27 records
+why a citation in this project has to be a line `grep` can find. The register behind it: M-D opened with a mechanical
+consistency review; D-030 (pairing tokens), D-031 (secrets), D-032 (remote posture), D-033 (`termux-api` tiers)
+accepted and propagated.
 
 1. ~~Write `EXTENSIONS.md`~~ done — D-035…D-039 accepted, O-008 narrowed to a validation gate, first-release scope confirmed (no third-party executable).
 2. Review `EXTENSIONS.md` for scope: confirm the initial release really only needs skills + commands + MCP client + first-party tools.
@@ -373,16 +382,22 @@ D-033 (`termux-api` tiers) accepted and propagated.
 5. **M-D in progress:** cross-document consistency review written up in `docs/CONSISTENCY_REVIEW.md`. Four
    blocking items closed this round (O-004, O-010, O-012, O-019). Remaining blockers need a device: O-002
    (driver reproduction), O-006/O-051 (TUI repaint measurement), which is exactly M0 P3/P5 work.
-7. M-D mechanical findings and their fixes are recorded in `docs/CONSISTENCY_REVIEW.md`; five defects were found and
-   repaired, including two real contradictions (stored approvals, export endpoint) and one policy deadlock
-   (`--restrict` vs T3 approval on a restricted identity).
-6. Then M0 Termux validation prototype. Still no product code before M-D finishes and those gates are addressed.
+6. ~~Then M0 Termux validation prototype. Still no product code before M-D finishes and those gates are addressed.~~
+   M0's container half ran on 2026-10-10 and is generated into `probes/RESULTS.md`; the phone column is still owed,
+   which is why P-003, P-004, P-010 and P-011 stay at Needs Validation rather than being softened.
+7. M-D mechanical findings and their fixes are recorded in `docs/CONSISTENCY_REVIEW.md`: F-01…F-28, each with what it
+   changed, including two real contradictions (stored approvals, export endpoint) and one policy deadlock (`--restrict`
+   vs T3 approval on a restricted identity). The two newest are from writing code rather than reading documents —
+   F-27 is the reason a citation in this project has to survive a `grep`.
+8. **Next: M1b.** The Gateway's `GET /health` and the task create/read routes, `crabby status` against them, and the
+   contract harness `docs/INTERFACES_AND_API.md` §11 describes — which needs both sides to exist, so it could not be
+   written in M1a. O-066 (class → status) and O-067 (the state directory's file names) are M1b's to close.
 
 | Counter | Value |
 | --- | --- |
 | Accepted decisions | 76 (D-001…D-076) |
 | Proposed technical choices | 11 (P-001…P-011) |
-| Open / needs-validation items | 65 tracked (63 from the (R) round plus O-064 and O-065 registered while finalizing), 50 of them closed by D-060…D-068 in the (R) round of 2026-10-10; closed earlier as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033. O-023 is closed by D-032 under the wording "Accepted in D-032" rather than "Closed by" — the phrasing a count-by-hand pass misreads, so `scripts/count-inventory.py --register-counters` prints the ids it could not classify instead of a bare number. Six items carry work and each has its closing protocol in `docs/review/DECISION-QUEUE.md` §2 rather than a vague promise: four open rows (O-006 and O-051 need a phone render, O-008 needs real extensions, O-052 is a post-v1 design question) and two with one measured clause left (O-001, O-002: a clean Termux build and a WAL torture). The row count stays 63 because a closed question keeps its number — otherwise a register that renumbers itself cannot be cited by a document that was written against it |
+| Open / needs-validation items | 69 tracked (63 from the (R) round plus O-064 and O-065 registered while finalizing, plus O-066…O-069 opened by M1a, whose first pass found four contract questions the plan had assumed away), 50 of them closed by D-060…D-068 in the (R) round of 2026-10-10; closed earlier as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033. O-023 is closed by D-032 under the wording "Accepted in D-032" rather than "Closed by" — the phrasing a count-by-hand pass misreads, so `scripts/count-inventory.py --register-counters` prints the ids it could not classify instead of a bare number. Ten items carry work and each has its closing protocol in `docs/review/DECISION-QUEUE.md` §2 or in its own row, never as a vague promise: eight open rows (O-006 and O-051 need a phone render, O-008 needs real extensions, O-052 is a post-v1 design question, and O-066…O-069 are the sizes and names no document supplied — a class → status table, a database filename, a payload cap, a page ceiling) and two with one measured clause left (O-001, O-002: a clean Termux build and a WAL torture). Rows are only ever appended: 63 became 69 without anything renumbering, because a register that renumbers itself cannot be cited by a document written against it |
 | Planning docs written | 16 — includes `docs/CONSISTENCY_REVIEW.md` (M-D record) |
 | Custom endpoint / fallback decisions | D-041…D-047 accepted this round |
 | Finalization round (D-071…D-076) | The four questions still answerable without a phone — skill frontmatter, host API versioning, memory provenance, timeout and concurrency defaults — plus the delegated element review (D-075) and the review protocol that keeps it honest (D-076) |

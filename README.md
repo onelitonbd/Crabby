@@ -30,7 +30,7 @@ tools, memory, skills, plugins, and permission-controlled execution — all behi
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phases M0–M6, entry and exit conditions, and which open items block which phase. |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Environment, scripts, testing, CI, release and Termux development rules. |
 | [`docs/review/`](docs/review/README.md) | **M-D's element gate, now closed:** 675 elements across the four interfaces, every row reviewed (D-055, D-075) — the criteria and the scan are in that index, and review continues one implementation step at a time (D-076). `docs/review/mockups/crabby-web-ui.html` is the Web UI as one file, generated from the inventory. |
-| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-26), what it could not verify, and the owner's checklist. |
+| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-28), what it could not verify, and the owner's checklist. |
 | [`AGENTS.md`](AGENTS.md) | The rules a coding agent works under, including the forbidden shortcuts. |
 
 `python3 scripts/check-docs.py` lints this planning set — decision-ID references, cross-links, section anchors,
@@ -42,11 +42,12 @@ element-review criteria a row at a time whenever an inventory changes.
 `CHANGELOG.md` and `LICENSE` are the two files this set deliberately does not have yet: the first is written at the
 first release, the second at the moment code is distributed.
 
-## Before implementation starts
+## Where the work stands
 
-Nothing in this repository needs another planning document. What is scheduled, in order:
+Nothing in this repository needs another planning document. Implementation has started, in the order the plan set;
+what is scheduled from here:
 
-01. **M0 — in progress.** The seven probes are written and run from one command (`npm run probe`, contract in
+01. **M0 — half done.** The seven probes are written and run from one command (`npm run probe`, contract in
     `probes/README.md`): `P1` the Node baseline that decides `engines`, `P2` the Fastify Gateway and its SSE channel,
     `P3` `better-sqlite3` build and WAL torture, `P4` the framework-free Web bundle, `P5` Ink 8 at 40×24, `P6` Android
     process lifetime, `P7` a hostile extension against the sandbox; `P8` then regenerates `docs/UI_UX_SPEC.md` and
@@ -54,10 +55,20 @@ Nothing in this repository needs another planning document. What is scheduled, i
     generated into `probes/RESULTS.md`, and the phone's column — `npm run test:termux` — is what M0 is waiting for.
     Two of them already contradicted the plan in ways worth reading before the first line of M1 (`docs/CONSISTENCY_REVIEW.md`).
 
-02. **Then M1** (contracts and skeleton), and from there every step that ships carries its own owner review:
-    the running screen or command plus the element IDs it implements, one unit at a time (`D-076`). An answer becomes a
-    code change *and* an inventory-row change in the same commit; no answer is recorded as `unreviewed`, never as
-    accepted.
+02. **M1a — shipped, and it is the first product code.** `packages/api-contracts` is the shared shape four interfaces
+    have to agree on before any of them exists: identifiers, the §5.2 event envelope, the §6 error envelope, task
+    records, the five exit codes, and one `validate()` that rejects an unknown field *by name* the way §2 demands.
+    `packages/platform` resolves the data directory and detects Termux from its own markers; `packages/core` loads and
+    validates `config.json`, redacts before anything is written down, and records how the last process exited;
+    `apps/cli` runs as `crabby init | doctor | version` and `crabby config path | get | set | schema` — after
+    `npm install`, `npx crabby doctor`, since D-050 promises no global install and no self-updater. `crabby status`
+    and the contract harness need a Gateway to read, so they are M1b; what M1a found unanswered is opened as
+    O-066…O-069 rather than filled in with plausible numbers (`docs/ROADMAP.md` §3, and F-27 in
+    `docs/CONSISTENCY_REVIEW.md` for why a citation here means a line `grep` can find).
+
+03. **From there, every step that ships carries its own owner review:** the running screen or command plus the element
+    IDs it implements, one unit at a time (`D-076`). An answer becomes a code change *and* an inventory-row change in
+    the same commit; no answer is recorded as `unreviewed`, never as accepted.
 03. **Eight tracked questions stay open until a device or a real user answers them**: O-001, O-002 (driver build, WAL),
     O-006, O-051 (terminal rendering on a phone), O-008 (extension isolation), O-064 (signing), O-065 (Termux
     sandbox), and O-052 (remembered approvals, post-v1 by choice). Each states the measurement that closes it.

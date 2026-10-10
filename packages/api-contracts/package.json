@@ -1,0 +1,14 @@
+{
+  "name": "@crabby/api-contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TypeBox schemas, the event envelope, error codes and exit codes (docs/INTERFACES_AND_API.md \u00a72 \u00a75 \u00a76)",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.52"
+  }
+}

@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-26 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-28 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -92,6 +92,19 @@ is a *good* outcome — it is why the phase exists. Each step that ships after M
 
 Exit: `crabby init`, `crabby status`, `crabby doctor` work against a real local Gateway; the contract test harness
 runs; a task can be created and read back with an id, and nothing else.
+
+**Delivered so far — M1a, the slice before the Gateway.** `packages/api-contracts` (identifiers, the §5.2 event
+envelope, the §6 error envelope, task records, the five exit codes, and the one `validate()` that rejects an unknown
+field *by name*), `packages/platform` (data-dir resolution, Termux markers, the constraints §10 imposes),
+`packages/core` (config load/validate/write, redaction that is not a log level, the logger, the shutdown record) and
+`apps/cli` (`crabby init`, `doctor`, `version`, and `config path|get|set|schema`) are running code: one runner file per
+package as M1 asks (`packages/api-contracts/contracts.test.ts`, `packages/platform/platform.test.ts`,
+`packages/core/core.test.ts`), plus `tests/unit/cli.test.ts`, which spawns the real entry point because exit codes and
+pipeability are properties of a process and not of a function. `crabby status` and the contract harness are
+**not** in this slice: both read a Gateway, so they land with M1b, and until then `doctor` prints §10's three
+Gateway-backed checks as `deferred` rather than as a tick. Four questions the slice found and deliberately did not
+answer are recorded as **O-066…O-069** instead of being closed with plausible numbers; `crabby doctor` will keep
+naming the largest of them (no `engines.node` pin) until M0's phone column is filled.
 
 ## 4. Phase M2 — Core runtime and Gateway
 

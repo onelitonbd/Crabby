@@ -1,0 +1,19 @@
+{
+  "name": "@crabby/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "crabby <noun> <verb> \u2014 the reference implementation of the command grammar (docs/INTERFACES_AND_API.md \u00a77.1)",
+  "bin": {
+    "crabby": "./crabby.ts"
+  },
+  "exports": {
+    ".": "./crabby.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@crabby/api-contracts": "0.0.0",
+    "@crabby/core": "0.0.0",
+    "@crabby/platform": "0.0.0"
+  }
+}

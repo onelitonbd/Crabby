@@ -5,8 +5,9 @@
 > documents, it needs the two things a plan cannot supply: the element review, and the seven M0 measurements.
 >
 > **Reviewed:** 22 documents (16 planning at `*.md` and `docs/*.md`, 4 element inventories, the review index and
-> this file), most recently on 2026-10-10 — findings F-13…F-26 are from the four 2026-10-10 passes (the (R) round and
-> the finalization round), so every earlier finding has been re-checked against the documents as they now stand.
+> this file), most recently on 2026-10-10 — findings F-13…F-28 are from the five 2026-10-10 passes (the (R) round,
+> the finalization round, and the first implementation pass, which is where F-27 and F-28 came from), so every earlier
+> finding has been re-checked against the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
 > a scratch pad: every finding below is either fixed with a decision ID, or explicitly listed as still open.
@@ -456,6 +457,38 @@ arrive as 2 handler calls, so counting events instead of characters invents lost
 because M-T has to implement them, and neither is in a spec, because a spec is where a *decision* goes, not a library
 fact. **Lesson kept:** when a probe fails, first ask whether the assumption or the measurement is at fault — and if the
 measurement is right, the finding goes into the register as work, not into the roadmap as softer wording.
+
+### F-27 — The implementation pass started from notes about the docs, and four of the notes were not in the docs
+**Severity: high for the process, low for the documents.** M1a began by writing `packages/api-contracts` and
+`packages/core` from what the planning rounds had *concluded*, and the code carried a `gateway.port` of 8765, a
+`logging.level` default, a `policy.approvalMode` with three modes, an `agent.maxIterations` of 24, a `budget.dailyUsd`
+of 25, and a `$tmp/config.json` written next to a `$tmp/.crabby` directory. `grep -c` over the repository returns zero
+for `8765`, for `approvalMode`, for `maxIterations` and for `auto-safe`; DEVELOPMENT §8 is *PR Template*, not test
+isolation; and the "documented" sample config block does not exist anywhere in the plan. Every one of those was a
+citation-shaped sentence in a working note, repeated often enough to stop looking like a guess. Nothing in the
+documents was wrong — the notes were wrong about the documents, which is worse, because a doc bug gets reviewed and a
+stale summary does not.
+
+Three defences, all now in use: the code cites a **file and a line range that `grep` can find** (`packages/platform/paths.ts`
+names §5's isolation table and §10's reflex; `packages/core/config.ts` names D-074 and quotes the `limits.*` sentence);
+a value with no citation is not written, it is opened (O-066…O-069 exist because the first pass refused to keep
+four numbers it could not point at); and the tests assert the *absence* as well — `tests/unit/platform.test.ts` proves
+there is no `CRABBY_DATA_DIR` override to discover, and `tests/unit/cli.test.ts` proves `config set` writes only the
+override, so a re-inflated `config.json` fails CI rather than shipping quietly. **Lesson kept:** when the source of a
+fact is a note about a document, re-read the document before the fact reaches code. A citation is a claim that a grep
+will succeed, and the grep takes four seconds.
+
+### F-28 — `crabby doctor` had to report a required check as impossible rather than approximate it
+**Severity: medium, and it is a good result.** `docs/DEVELOPMENT.md` §1 lists `engines.node` as authoritative for the
+Node range, and D-070 restates the requirement behaviourally ("the installed Node must run `.ts` entry points and
+`node --test` with no flags and no loader"). This container cannot supply the number the pin needs — D-070's rule is
+that the Termux measurement sets it, and the phone column is still open (O-002, `probes/RESULTS.md`) — so
+`crabby doctor` prints a `warn` naming the missing pin and a fix pointing at M0 P1, and `tests/unit/cli.test.ts`
+asserts that a `fail` never comes from that check. The alternative was to write `"node": ">=22"` from a container and
+let a phone discover the mistake later, which is the failure mode D-070 was written to prevent. The same reasoning made
+`doctor`'s three Gateway-backed checks `deferred` instead of `ok`: a diagnostic that reports a component nobody has
+built yet is how a green check mark becomes worth less than a red one.
+
 
 ## 3. Checks That Passed
 

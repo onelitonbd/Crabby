@@ -1,0 +1,11 @@
+{
+  "name": "@crabby/platform",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "detection, data-dir resolution and terminal facts (ARCHITECTURE.md §5)",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  }
+}

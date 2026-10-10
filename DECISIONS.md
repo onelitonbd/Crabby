@@ -72,6 +72,7 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-052 | Approvals are once-only in the first release. "Remember this choice" approvals are out of scope for v1, and therefore unavailable for T3 by definition. | Accepted |
 | D-053 | Paired-identity management (`auth.manage`) is available only to local clients. It is the one accepted asymmetry in the feature-parity matrix, recorded with its alternative path rather than hidden. | Accepted |
 | D-054 | `--restrict` removes capabilities from an identity; it never converts them into an approval the same restricted client must answer. | Accepted |
+| D-055 | Interface review is done element by element: every screen of every interface is written up as an element inventory (`docs/review/`) before `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are regenerated from it. All elements carry equal weight — size, cost, or how often they are seen never moves one to the bottom of the list. | Accepted |
 
 ## 3. Proposed Technical Choices
 
@@ -190,6 +191,7 @@ least once below. Adding a decision without naming its enforcer is a documentati
 | `docs/DATA_AND_MEMORY.md` (persistence, memory, deletion) | D-017, D-018, D-019, D-020, D-021 |
 | `docs/INTERFACES_AND_API.md` (API surface, parity) | D-005, D-030, D-048, D-049, D-051, D-052, D-053 |
 | `docs/UI_UX_SPEC.md` + `docs/DESIGN_SYSTEM.md` (presentation) | D-005, D-045, D-046, D-052 |
+| `docs/review/*.md` (element inventories, per D-055) | D-005, D-045, D-046, D-052, D-055 |
 | `docs/ROADMAP.md` + `docs/DEVELOPMENT.md` (sequencing, workflow) | D-016, D-034, D-050, D-051 |
 | `AGENTS.md` (agent contract) | D-013, D-014, D-016, D-026, D-034, D-038, D-040, D-043, D-044, D-052 |
 
@@ -197,6 +199,21 @@ Rules: a decision may be enforced by several documents but must be enforced by a
 states the behavior and this register records the status; and no document restates a rule it does not own — which is
 exactly how the stored-approval and export-endpoint contradictions described in
 `docs/CONSISTENCY_REVIEW.md` came to exist.
+
+## 4B. Element Review Progress (`docs/review/`)
+
+Per D-055, interface review proceeds as element inventories. An element counts as reviewed only when its row's
+`Status` changes from `PROPOSED`; `scripts/check-docs.py` counts the rows so progress is measured, not estimated.
+
+| File | Surfaces covered | Elements | Approved | Remaining |
+| --- | --- | --- | --- | --- |
+| `docs/review/WEB.md` | 15 regions of the Web UI | 143 | 0 | 143 |
+| `docs/review/TUI.md` | planned | — | — | — |
+| `docs/review/CLI.md` | planned | — | — | — |
+| `docs/review/TELEGRAM.md` | planned | — | — | — |
+
+After all four are reviewed: regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from the accepted
+inventories, then re-run `docs/CONSISTENCY_REVIEW.md` (a spec written from approved elements cannot contradict them).
 
 ## 5. Database Evaluation Record
 

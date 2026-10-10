@@ -16,8 +16,13 @@ Documentation ──────────────────────
         ROADMAP ✓   DEVELOPMENT ✓            AGENTS.md ✓
 ```
 
-All 15 planning documents now exist. What remains in this phase is the **consistency review** (M-D below) and
-closing or consciously deferring the six implementation-blocking decisions in §11.
+All 16 planning documents now exist. What remains in this phase:
+
+01. The **element-by-element interface review** required by D-055 (`docs/review/`), starting with the Web UI —
+    the owner reviews every screen and every element, with equal weight given to small and large ones.
+02. `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are **regenerated from the approved inventories** rather than
+    hand-edited, so the spec cannot drift from what was actually agreed.
+03. Closing or consciously deferring the remaining implementation-blocking decisions in §11.
 
 Implementation has not started. M-D (documentation close-out) is **in progress**: its mechanical half is written up
 in `docs/CONSISTENCY_REVIEW.md`, and four of the six original blockers were closed this round (D-048…D-051). M0 is

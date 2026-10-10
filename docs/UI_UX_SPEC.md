@@ -5,6 +5,10 @@
 >
 > **Design case:** a 360×800 phone browser and a ~40-column Termux terminal. Desktop is the same product with
 > more room, never a different product (D-005).
+>
+> **Review status:** this document is a summary draft. Per D-055 the authoritative review happens element by element
+> in `docs/review/`; once every element is approved, this file and `docs/DESIGN_SYSTEM.md` are regenerated from those
+> inventories. Until then, treat the tables below as an index, not as an approved spec.
 
 ## 1. Principles
 

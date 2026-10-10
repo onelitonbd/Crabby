@@ -25,6 +25,7 @@ FILE_REF_RE = re.compile(r"`((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.md)`|`([A-Za-
 ADVISORY_FILENAMES = {
     "INTERFACES_AND_API.md", "UI_UX_SPEC.md", "DESIGN_SYSTEM.md", "ROADMAP.md",
     "DEVELOPMENT.md", "AGENTS.md", "LICENSE", "SKILL.md", "CHANGELOG.md", "CONSISTENCY_REVIEW.md",
+    "WEB.md", "TUI.md", "CLI.md", "TELEGRAM.md",
 }
 SECTION_RE = re.compile(r"`([A-Z][A-Z_]+\.md)`\s*§(\d+(?:\.\d+)*)")
 H2_RE = re.compile(r"^##\s+(\d+)(?:[^\n]*)$", re.M)
@@ -179,7 +180,7 @@ def main() -> int:
     # 7. traceability: every accepted decision must be enforced by at least one document,
     #    and the map in DECISIONS.md section 4A must not invent IDs that do not exist.
     d_ids = {k for k, v in defined.items() if k.startswith("D-") and "Accepted" in v}
-    trace_match = re.search(r"## 4A\..*?\n## 5\.", bodies[decisions_path], flags=re.S)
+    trace_match = re.search(r"## 4A\. Traceability.*?\n## 4B\.", bodies[decisions_path], flags=re.S)
     if trace_match:
         mapped = set()
         doc_names = set()

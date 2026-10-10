@@ -157,6 +157,10 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-057 | TUI approval queue shape | Open (T-A-A): one card at a time vs a selectable list when several approvals are pending. Proposal is one at a time; 24 rows cannot hold two readable cards. |
 | O-058 | Terminal rendering of Bengali | Open (T-C2-B): a terminal may not shape Indic conjuncts the way a browser does. Choose pass-through with a stated limit, English chrome with pass-through content, or measure on device first. |
 | O-059 | TUI key configurability | Open (T3-A): whether keys are user-configurable in v1 at all, or fixed with the documented set. |
+| O-060 | CLI task run blocking behavior | Open (`docs/review/CLI.md` C6-A): does `crabby task run "…"` block until the task finishes, or queue and return the id? Proposal: block by default, `--detach` for scripts, id and resume command printed on the first line. |
+| O-061 | CLI watch stream contract | Open (C6-B): whether `task watch` emits machine-readable NDJSON (per-task `seq`, gap detection like the Web) or human-only tail. Machine-readable is proposed, because a capability scripts cannot read breaks the parity rule. |
+| O-062 | Waiting for an approval from a script | Open (C-A-A): exit `3` immediately when a human answer is needed, or `--wait-approval <n>`. Proposal: exit by default, opt-in wait, because a silently blocking command in a cron job is an outage. |
+| O-063 | Shell completion and generated reference | Open (C-S-A): generate completion from the command registry in v1, and skip a man page; or neither, since a second surface can drift from the registry. |
 
 **Open here means genuinely undecided.** A row marked closed must stay consistent with the decision it cites.
 
@@ -217,14 +221,17 @@ Per D-055, interface review proceeds as element inventories. An element counts a
 | --- | --- | --- | --- | --- |
 | `docs/review/WEB.md` | 17 regions of the Web UI | 161 | 0 | 161 |
 | `docs/review/TUI.md` | 19 regions of the TUI | 185 | 0 | 185 |
-| `docs/review/CLI.md` | planned | — | — | — |
-| `docs/review/TELEGRAM.md` | planned | — | — | — |
+| `docs/review/CLI.md` | 12 regions of the CLI | 138 | 0 | 138 |
+| `docs/review/TELEGRAM.md` | 11 regions of the Telegram interface | 106 | 0 | 106 |
 
 Review medium (D-056): `python3 docs/review/mockups/build.py` renders `docs/review/WEB.md` into
 `docs/review/mockups/crabby-web-ui.html` — one self-contained file, no network, no CDN. The build fails if the mockup
 references an element the inventory does not define, or if the inventory has a row the mockup cannot place, so
 the picture cannot drift from the document. Decisions made in the mockup leave it as paste-ready rows; nothing
 the mockup stores counts until it is written back into the `.md`.
+
+All four inventories exist now: 161 Web + 185 TUI + 138 CLI + 106 Telegram = 590 elements awaiting a decision, and
+the review is the gate before `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are regenerated from them.
 
 An open question written in an inventory is not left inside the inventory: each one that changes what gets built is
 registered as an `O-` row in section 4 (the Web and TUI questions became O-053…O-059), so review progress and
@@ -335,7 +342,7 @@ D-033 (`termux-api` tiers) accepted and propagated.
 | --- | --- |
 | Accepted decisions | 56 (D-001…D-056) |
 | Proposed technical choices | 10 (P-001…P-010) |
-| Open / needs-validation items | 59 tracked; new in M-D from the element review: O-053…O-059; closed as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033 (O-006 stays open until M0 P5 measures). Remaining blockers are device measurements, not opinions: O-002, O-006, O-051 |
+| Open / needs-validation items | 63 tracked; new in M-D from the element review: O-053…O-063; closed as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033 (O-006 stays open until M0 P5 measures). Remaining blockers are device measurements, not opinions: O-002, O-006, O-051 |
 | Planning docs written | 16 — includes `docs/CONSISTENCY_REVIEW.md` (M-D record) |
 | Custom endpoint / fallback decisions | D-041…D-047 accepted this round |
 | Planning docs remaining | 0 (M-D review is the last step) |

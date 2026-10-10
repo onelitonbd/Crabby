@@ -156,9 +156,24 @@ The remaining half of M-D. Each item is a yes/no, not a discussion:
 - [ ] Sanity-check `docs/ROADMAP.md` §1: is M0 (throwaway Termux probes) genuinely wanted before M1, or is one probe
       (`P3` driver, `P5` TUI) enough to proceed?
 - [ ] Read `AGENTS.md` §7 (forbidden shortcuts) as the rules you actually want enforced on every future coding turn.
-- [ ] Confirm the six still-open implementation-shaping items in `DECISIONS.md` §4 are all device-measured, not
-      deferred opinions.
+- [ ] Confirm that every still-open item in `DECISIONS.md` §4 is either device-measured (O-002, O-006, O-051) or an
+      owner decision (O-053…O-063 from the element review), and that nothing is open out of habit.
 - [ ] Verify `docs/INTERFACES_AND_API.md` §8's two documented limitations are acceptable rather than gaps to fill.
+
+**And the element-review gate added during M-D (D-055/D-056), which comes first:**
+
+- [ ] `docs/review/WEB.md` — 161 elements. Reviewed through `docs/review/mockups/crabby-web-ui.html`, which is
+      generated from that file, so an element that exists in one and not the other is a build error rather than a
+      disagreement.
+- [ ] `docs/review/TUI.md` — 185 elements, every one of them answerable at 40 columns × 24 rows.
+- [ ] `docs/review/CLI.md` — 138 elements, with the pipe and the exit code as the binding case.
+- [ ] `docs/review/TELEGRAM.md` — 106 elements, where the transport's own limits are facts and the responses to them
+      are the decisions.
+- [ ] Only after statuses stop saying `PROPOSED`: regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from
+      the approved rows, then re-run §7.
+
+590 elements, 0 approved as of this round. Nothing in this list is a formality: a row that reads "the small chip"
+has as much standing as "the chat pane", and cutting it is a decision with an ID.
 
 When these are ticked, `docs/ROADMAP.md` §0 moves to "M-D complete" and M0 starts.
 

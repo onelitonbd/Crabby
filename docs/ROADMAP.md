@@ -179,7 +179,7 @@ Blocking means the shape of code depends on it, so guessing would be expensive:
 | --- | --- |
 | O-002 (`better-sqlite3` reproduction) | Storage abstraction and migrations depend on the driver; needs a real device |
 | O-006 / O-051 (TUI: Ink 8 pending measurement) | P-010 stays Proposed until M0 P5 measures repaint cost; the TUI workstream waits on the result, not on a preference |
-| O-053…O-059 (element review, `docs/review/`) | These are the open questions raised while reviewing Web and TUI elements one by one (D-055). They block regenerating `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from approved elements — M-D work — and they do not block running the M0 probes |
+| O-053…O-063 (element review, `docs/review/`) | These are the open questions raised while reviewing the four interfaces element by element (D-055). All four inventories are drafted (590 elements, 0 approved) and waiting on the owner, not on research. They block regenerating `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from approved elements — M-D work — and they do not block running the M0 probes |
 
 **Closed during M-D (2026-10-09):** O-004 transport → D-048 (SSE + HTTP, no WebSocket in v1); O-010 replay →
 D-049 (per-task `seq`, count-bounded window, gap + reconcile-by-GET); O-012 install path → D-050; O-019

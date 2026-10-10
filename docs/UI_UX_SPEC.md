@@ -8,7 +8,8 @@
 >
 > **Review status:** this document is a summary draft. Per D-055 the authoritative review happens element by element
 > in `docs/review/`; once every element is approved, this file and `docs/DESIGN_SYSTEM.md` are regenerated from those
-> inventories. Until then, treat the tables below as an index, not as an approved spec.
+> inventories. Until then, treat the tables below as an index, not as an approved spec. As of this round all four
+> inventories are drafted — Web 161, TUI 185, CLI 138, Telegram 106 elements — and none is approved yet.
 
 ## 1. Principles
 

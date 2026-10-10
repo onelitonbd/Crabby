@@ -2,6 +2,9 @@
 
 > **Document status:** Planning draft. Tokens are proposed values, chosen for legibility on phone screens and in
 > terminals — not a brand exercise. Screen structure belongs to `docs/UI_UX_SPEC.md`.
+>
+> **Review status:** per D-055 this file is regenerated from the element inventories in `docs/review/` once those are
+> approved; the palette and type values below are candidates, and O-044/O-045/O-046 stay open until that pass.
 
 ## 1. Principles
 

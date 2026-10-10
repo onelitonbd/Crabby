@@ -153,6 +153,30 @@ The runtime MUST:
 
 AI-based risk assessment MAY assist this process, but security enforcement MUST NOT depend exclusively on an AI model's judgment.
 
+### 5.1 The arbiter
+
+The object that decides whether a pending approval may be answered, and whether an answered approval still covers the
+action in front of it, belongs to the runtime — `packages/agent-runtime/approvals.ts` — and not to the Gateway or to any
+interface. Three reasons, all of them this document's own rules:
+
+- **Answer from anywhere** (§5's rule that any surface may answer) is only true if the surfaces share one arbiter. Four
+  queues with four first-wins rules is four answers, and the user learns which one counted from the outcome.
+- **`scope: once`** (D-052) needs a single place that can say "that row has been used". The mark is `consumed`, and the
+  rule that a second consume is refused rather than forgiven is the whole of "once".
+- **A state change without its event is a lie in progress.** So an operation that moves a row returns the event it
+  owes — including when it *refuses*: answering past the deadline flips the row to `expired` and hands back
+  `approval.expired` beside the refusal. A caller that writes the row and not the log is then a bug a reviewer can see
+  in the type, not one a user discovers in a stale queue.
+
+Two refusals the arbiter makes that no table can: a **request whose deadline the caller stretched** (D-064's TTL is per
+tier and computed by the policy engine; a longer window is refused, not truncated), and **the exact same action re-asked
+after a denial**. The second is worth its limit stated plainly: a hash proves identity, not intent, so what this
+enforces is the literal repeat, and "must not rephrase a denied action" is enforced by `refusalCount` feeding D-043's
+ladder — the loop pauses the task, which is the behaviour §6.3 actually asks for. A re-ask with materially different
+arguments is legal, and it records `supersedes` so the chain is readable. An approval that expired *after* being
+approved is the runtime's lateness and is deliberately **not** counted as a refusal, because a pause caused by our own
+queueing would punish the user for it.
+
 The risk tiers and their per-tool assignment are decided (`SECURITY.md` §6, `PROVIDERS_AND_TOOLS.md` §4.2, D-046), and so is the classifier that nudges `shell.run` upward (D-066, closing O-032 — an escalation hint, never the boundary). Approval **persistence** is decided as *absent* in v1 (D-052), and policy configuration is one file in one format, `config.json`, whose schema is the artifact `crabby config schema --json` prints (D-060). What remains open in this area is a number, not a design: the timeout thresholds and escalation tuning that M2 sets against real usage. `SECURITY.md` owns the policy and threat-model definition.
 
 ## 6. Cancellation Behavior

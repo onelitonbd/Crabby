@@ -3,12 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The task state machine and the rules about moving through it (AGENT_RUNTIME.md §4.1, §5, §6, §7, §10.1)",
+  "description": "The task state machine and the approval service: \u00a74.1's transitions, \u00a76.3's answers (AGENT_RUNTIME.md, SECURITY.md)",
   "exports": {
     ".": "./index.ts",
     "./*": "./*.ts"
   },
   "dependencies": {
-    "@crabby/api-contracts": "0.0.0"
+    "@crabby/api-contracts": "0.0.0",
+    "@crabby/policy": "0.0.0"
   }
 }

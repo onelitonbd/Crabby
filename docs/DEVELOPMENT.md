@@ -78,7 +78,7 @@ are the commands their milestones add, and stay unlisted in `package.json` until
   memory. Interfaces → contracts → services; core imports nothing from `apps/`.
 - **Async:** one top-level `try/catch` per request handler; cancellation via `AbortSignal` everywhere, including
   tools and provider calls; no floating promises.
-- **Zones that must stay framework-free:** policy evaluation, task state machine, context budgeting. Fastify types
+- **Zones that must stay framework-free:** policy evaluation, task state machine, approval arbitration, context budgeting. Fastify types
   must not appear inside them (D-014/`DECISIONS.md` §6 rule 01), so the framework stays swappable.
 - **Erasable TypeScript only:** no `enum`, no `namespace`, no parameter properties (D-070). This is not a style rule
   a reviewer has to remember — the runtime rejects non-erasable syntax, measured here as an error from `node`
@@ -93,7 +93,7 @@ are the commands their milestones add, and stay unlisted in `package.json` until
 
 | Layer | Scope | Notes |
 | --- | --- | --- |
-| Unit | Policy, tier computation, task state machine, context budgeting, capability resolution | Must be deterministic and network-free. `packages/agent-runtime/agent-runtime.test.ts` is the state machine's share, and it asserts that every refusal cites the section that produced it |
+| Unit | Policy, tier computation, task state machine, context budgeting, capability resolution | Must be deterministic and network-free. `packages/agent-runtime/agent-runtime.test.ts` and `approvals.test.ts` are the state machine's and the approval arbiter's share, and both assert that every refusal cites the section that produced it |
 | Contract | Every endpoint against the shared schema | `tests/integration/gateway.test.ts` drives the routes over a real socket with `@sinclair/typebox` validating both directions, which is §11's harness; the §6 class → status table is asserted as one object so a re-ordering is a failure (D-077) |
 | Integration | Gateway + storage + task lifecycle + restart recovery | Temp data dirs only; never a developer's real `~/.crabby`. The same file spawns a second CLI process and a Gateway process, pairs them, and asserts that SIGTERM drains and removes `gateway.json` — the half of `probes/P-003` the plan asked a phone for, made a test instead of a report |
 | Security | Deny cases, escalation, injection fixtures, redaction, auth rejection | `SECURITY.md` §17. `tests/security/policy-surface.test.ts` walks every route the Gateway prints and asserts an unauthenticated request is refused, checks that no T3 answer is reachable from a chat surface, and reads the documents for the off-by-default sentences the registry claims; `packages/policy/*.test.ts` and `packages/providers/*.test.ts` hold the rest |

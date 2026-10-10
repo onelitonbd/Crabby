@@ -179,9 +179,12 @@ transition table in the document that owns the lifecycle and in `packages/agent-
 `scripts/parity.ts` diffing the two in both directions (the same discipline §4.2's tier table gets), and the three rules
 a table cannot carry are in the function's signature instead of a comment: an entry into `cancelled` names §6.2's
 outcome, an entry into `running` out of an approval names the answer, and recovery may not authorize itself (§7.2).
-Cancellations, checkpoints and the approval service are the next modules in this phase, and they land in
-`packages/agent-runtime` rather than in the Gateway for the reason in D-003: a rule the Gateway owns is a rule only the
-Gateway can follow.
+`packages/agent-runtime/approvals.ts` is the second module, and D-084 is the reason it is a runtime object rather than
+a Gateway handler: one arbiter for four answerers, `once` that means once because a single row says so, and an expiry
+that arrives as an event whether or not an answer arrived with it. Its persistence and its two §4.3 routes come next,
+together with the migration — a route over a table nobody has written is a demo. Cancellations and checkpoints are the
+remaining M2 managers, and they land in `packages/agent-runtime` rather than in the Gateway for the reason in D-003: a
+rule the Gateway owns is a rule only the Gateway can follow.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

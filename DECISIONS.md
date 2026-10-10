@@ -74,6 +74,8 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-054 | `--restrict` removes capabilities from an identity; it never converts them into an approval the same restricted client must answer. | Accepted |
 | D-055 | Interface review is done element by element: every screen of every interface is written up as an element inventory (`docs/review/`) before `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are regenerated from it. All elements carry equal weight — size, cost, or how often they are seen never moves one to the bottom of the list. | Accepted |
 | D-056 | The review medium for an interface is a mockup generated from its inventory file (`docs/review/mockups/`), not a hand-drawn picture: every element shown must come from a row, must click back to that row, and must be able to carry a decision out of the mockup. The inventory stays the source of truth; a generated view cannot contradict it. A mockup is a review instrument, not implementation, and is never shipped. | Accepted |
+| D-057 | Scheduled jobs get a first-class surface in v1: a `Scheduled` screen in the Web UI (fifth nav item), a sixth TUI pane, `crabby job …` commands, and `/jobs` on Telegram. They are **not** folded into the task list, because a job is a standing authority to run work later and needs its own pause/edit/review affordances. | Accepted |
+| D-058 | Gateway lifecycle (`start` / `stop` / `restart`) and the sanitized diagnostics report are capabilities of all four interfaces, not CLI-only conveniences. Restart/shutdown is T3 (`config.write`) and confirms in every interface that shows it. | Accepted |
 
 ## 3. Proposed Technical Choices
 
@@ -199,11 +201,11 @@ least once below. Adding a decision without naming its enforcer is a documentati
 | `AGENT_RUNTIME.md` (execution lifecycle) | D-018, D-022, D-023, D-024, D-025, D-026, D-027, D-028, D-029, D-044 |
 | `SECURITY.md` (policy, authn, secrets, exposure) | D-005, D-013, D-014, D-020, D-030, D-031, D-033, D-040, D-043, D-046, D-047, D-051, D-052, D-053, D-054 |
 | `EXTENSIONS.md` (packaging, compatibility, trust) | D-035, D-036, D-037, D-038, D-039, D-040 |
-| `PROVIDERS_AND_TOOLS.md` (adapters, tools, tiers) | D-041, D-042, D-043, D-044, D-045, D-046, D-047 |
+| `PROVIDERS_AND_TOOLS.md` (adapters, tools, tiers) | D-041, D-042, D-043, D-044, D-045, D-046, D-047, D-057 |
 | `docs/DATA_AND_MEMORY.md` (persistence, memory, deletion) | D-017, D-018, D-019, D-020, D-021 |
-| `docs/INTERFACES_AND_API.md` (API surface, parity) | D-005, D-030, D-048, D-049, D-051, D-052, D-053 |
-| `docs/UI_UX_SPEC.md` + `docs/DESIGN_SYSTEM.md` (presentation) | D-005, D-045, D-046, D-052 |
-| `docs/review/*.md` (element inventories, per D-055/D-056) | D-005, D-045, D-046, D-052, D-055, D-056 |
+| `docs/INTERFACES_AND_API.md` (API surface, parity) | D-005, D-030, D-048, D-049, D-051, D-052, D-053, D-057, D-058 |
+| `docs/UI_UX_SPEC.md` + `docs/DESIGN_SYSTEM.md` (presentation) | D-005, D-045, D-046, D-052, D-057, D-058 |
+| `docs/review/*.md` (element inventories, per D-055/D-056) | D-005, D-045, D-046, D-052, D-055, D-056, D-057, D-058 |
 | `docs/ROADMAP.md` + `docs/DEVELOPMENT.md` (sequencing, workflow) | D-016, D-034, D-050, D-051 |
 | `AGENTS.md` (agent contract) | D-013, D-014, D-016, D-026, D-034, D-038, D-040, D-043, D-044, D-052 |
 
@@ -219,10 +221,10 @@ Per D-055, interface review proceeds as element inventories. An element counts a
 
 | File | Surfaces covered | Elements | Approved | Remaining |
 | --- | --- | --- | --- | --- |
-| `docs/review/WEB.md` | 18 regions of the Web UI | 172 | 0 | 172 |
-| `docs/review/TUI.md` | 20 regions of the TUI | 193 | 0 | 193 |
-| `docs/review/CLI.md` | 14 regions of the CLI | 149 | 0 | 149 |
-| `docs/review/TELEGRAM.md` | 11 regions of the Telegram interface | 124 | 0 | 124 |
+| `docs/review/WEB.md` | 19 regions of the Web UI | 185 | 0 | 185 |
+| `docs/review/TUI.md` | 21 regions of the TUI | 202 | 0 | 202 |
+| `docs/review/CLI.md` | 15 regions of the CLI | 158 | 0 | 158 |
+| `docs/review/TELEGRAM.md` | 11 regions of the Telegram interface | 129 | 0 | 129 |
 
 Review medium (D-056): `python3 docs/review/mockups/build.py` renders `docs/review/WEB.md` into
 `docs/review/mockups/crabby-web-ui.html` — one self-contained file, no network, no CDN. The build fails if the mockup
@@ -230,7 +232,7 @@ references an element the inventory does not define, or if the inventory has a r
 the picture cannot drift from the document. Decisions made in the mockup leave it as paste-ready rows; nothing
 the mockup stores counts until it is written back into the `.md`.
 
-All four inventories exist now: 172 Web + 193 TUI + 149 CLI + 124 Telegram = 638 elements awaiting a decision, and
+All four inventories exist now: 185 Web + 202 TUI + 158 CLI + 129 Telegram = 674 elements awaiting a decision, and
 the review is the gate before `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` are regenerated from them.
 
 An open question written in an inventory is not left inside the inventory: each one that changes what gets built is
@@ -340,7 +342,7 @@ D-033 (`termux-api` tiers) accepted and propagated.
 
 | Counter | Value |
 | --- | --- |
-| Accepted decisions | 56 (D-001…D-056) |
+| Accepted decisions | 58 (D-001…D-058) |
 | Proposed technical choices | 10 (P-001…P-010) |
 | Open / needs-validation items | 63 tracked; new in M-D from the element review: O-053…O-063; closed as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033 (O-006 stays open until M0 P5 measures). Remaining blockers are device measurements, not opinions: O-002, O-006, O-051 |
 | Planning docs written | 16 — includes `docs/CONSISTENCY_REVIEW.md` (M-D record) |

@@ -110,9 +110,10 @@
   <button class="btn btn--primary" data-el="W2-02" data-goto="states">+ new task</button>
   <button class="btn" data-el="W2-01" data-goto="chat">chat</button>
   <button class="btn" data-el="W2-01" data-goto="tasks">tasks <span class="chip" data-el="W2-03">2</span></button>
+  <button class="btn" data-el="W2-01" data-goto="jobs">scheduled</button>
   <button class="btn" data-el="W2-01" data-goto="extensions">extensions</button>
   <button class="btn" data-el="W2-01" data-goto="settings">settings</button>
-  <span class="chip" data-el="W2-04" title="desktop only">g c / g t / g e / g s / n</span>
+  <span class="chip" data-el="W2-04" title="desktop only">g c / g t / g j / g e / g s / n</span>
   <span class="note" data-el="W2-05">safe-area inset 12px</span>
 </nav>
 </script>
@@ -271,6 +272,55 @@ migrations/0002_tasks.sql       tasks, checkpoints
       <button class="btn btn--danger">type the title back</button></div></div>
   <div class="row" data-el="W15-10"><p class="note">ar kono session nei —
     <code>crabby chat "…"</code> theke start korun (not: ekhan theke)</p></div>
+</div>
+</script>
+
+<script type="text/plain" id="tpl-jobs">
+<header class="bar"><span class="brand">Scheduled</span><span class="note">/jobs · D-057: job = running authority, task er filter na</span>
+  <span class="chip" data-el="W16-02">1 waiting on approval</span></header>
+<div class="list">
+  <div class="row" data-el="W16-01">
+    <div class="msg__meta"><strong>nightly-migrations</strong> <span class="chip" data-tone="ok" data-el="W16-02">active</span></div>
+    <p style="margin:var(--s1) 0">every weekday 07:30 <span class="note">(<code>30 7 * * 1-5</code>)</span> · next in 9h 12m</p>
+    <p class="note" data-el="W16-03">holds: <code>fs: workspace</code> · <code>net: off</code> · <code>shell: off</code> · runs as <em>oneliton (tui)</em></p>
+    <div class="actions"><button class="btn btn--ghost" data-el="W16-04">pause</button>
+      <button class="btn btn--ghost" data-el="W16-05">run now</button>
+      <button class="btn btn--ghost" data-el="W16-06">edit</button>
+      <button class="btn btn--ghost" data-el="W16-09">last runs</button></div>
+  </div>
+
+  <div class="row" data-el="W16-02">
+    <div class="msg__meta"><strong>chai-reminder</strong> <span class="chip" data-tone="warn" data-el="W16-02">waiting on approval</span></div>
+    <p class="note" data-el="W16-07">caaj = T2 (<code>notify.send</code>) · approval asbeni, tai run ti atke ache — unattended cholbe na</p>
+    <div class="actions"><button class="btn btn--primary" data-el="W16-09">open the approval</button>
+      <span class="note">eta pause na; task list e-o dekhache</span></div>
+  </div>
+
+  <div class="row" data-el="W16-06"><p class="note note--warn">schedule change: 07:30 → 06:00 · objective okhono “reconcile
+    migrations”, kintu ekhon <code>git push</code> ache → <strong>2 ta step abar approval chaibe</strong> (T3) ·
+    purano authorization-e ride korbe na</p></div>
+
+  <div class="row" data-el="W16-08"><p class="note note--err">Termux raat bhar kill howa chilo — <strong>3 ta run miss</strong> hoyeche:</p>
+    <div class="actions"><button class="btn btn--primary">run the latest only</button>
+      <button class="btn">run each</button><button class="btn btn--ghost">skip all</button></div>
+    <span class="note">burst chhorbe na, ar chupchap drop-o korbe na — ekta-i uttor nite hobe</span></div>
+
+  <div class="row" data-el="W16-09"><table class="matrix"><tr><th>run</th><th>outcome</th><th>approved by</th></tr>
+    <tr><td>07:30 Tue</td><td>ok · 41s</td><td>owner · web</td></tr>
+    <tr><td>07:30 Mon</td><td>failed · limit</td><td>owner · tui</td></tr>
+    <tr><td>07:30 Sun</td><td>deferred · vault locked</td><td>—</td></tr></table></div>
+
+  <div class="row" data-el="W16-10"><p class="note">task detail theke: <strong>“Schedule this”</strong> → creation card
+    (ki cholbe, koto khonik, ki chhue dite parbe) — schedule korar por tar tier floor protibar run-e notun kache
+    evaluate hoy</p></div>
+
+  <div class="row" data-el="W16-11"><p class="note note--err">delete = T3 · job muche dileo tar 12 ta run er history
+    thakbe (audit trail), na muchte chaile alada bolte hobe</p>
+    <div class="actions"><input class="btn" value="nightly-migrations" style="flex:1 1 150px;min-width:0">
+      <button class="btn btn--danger">type the job name back</button></div></div>
+
+  <div class="row" data-el="W16-12"><p class="note">ar kono job nei — <code>crabby task run "…" --schedule "0 7 * * 1-5"</code>,
+    othoba kono theke “Schedule this”</p></div>
 </div>
 </script>
 
@@ -690,6 +740,10 @@ originals: session log e ache, khotro hoyni — file.read diye search kora jabe<
   <div class="row" data-el="W13-07"><div class="kv"><dt>Allow-list</dt><dd class="mono">+88017… · chat -1001234…</dd>
     <dt>Groups</dt><dd>mention only</dd>
     <dt>Unauthorized</dt><dd>kichu-i pabe na — “hi” ke-o reply nei</dd></div></div>
+
+  <div class="row" data-el="W13-09"><div class="actions"><button class="btn" data-el="W13-09">restart Gateway</button>
+    <button class="btn btn--danger" data-el="W13-09">shutdown</button>
+    <span class="note">T3 · restart korle 2 ta live stream kete jabe, ar ei tab “reconnecting” dekhabe — crash er moto dekhale hole na (D-058)</span></div></div>
 
   <div class="row" data-el="W13-04"><p class="note"><code>--restrict</code> capability kete dey; approval queue e convert kore na (D-054).
     Tai restricted identity T3 kaaje atkabe, approval charte o charte parbe na.</p></div>

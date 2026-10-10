@@ -214,7 +214,7 @@ matches the mental model of "I am running this now". Proposal: exit `3` by defau
 | ID | Element | Content | Sizes | Behavior | Status |
 | --- | --- | --- | --- | --- | --- |
 | C8-01 | gateway start | foreground, with a detach note | 3 lines | on Termux it prints how to keep it alive after the app is backgrounded, because Android kills it otherwise | PROPOSED |
-| C8-02 | gateway stop / status | pid, port, reachable URL | 3 lines | status answers "is anything running" without a second command | PROPOSED |
+| C8-02 | gateway stop / restart / status | pid, port, reachable URL | 3 lines | status answers "is anything running" without a second command; `restart` is T3, prints who it is disconnecting, and does not require a TTY to confirm because `--yes` is the confirmation (D-058) | PROPOSED |
 | C8-03 | web open | builds nothing, prints the URL | 1–2 lines | the URL is on its own line to be selectable (the same reason as TUI T2-09) | PROPOSED |
 | C8-04 | telegram start | reads the bot token from the vault, not from argv | one line | prints the chat the user must send `/start` to, and the identity it will get | PROPOSED |
 | C8-05 | tui | launches the terminal interface | n/a | same Gateway, same capabilities; starting it does not start a second core | PROPOSED |
@@ -283,6 +283,24 @@ end up with forty sessions they cannot tell apart.
 
 ---
 
+## 9C. Jobs, lifecycle, diagnostics
+
+### Region C12 — job commands, gateway restart, diagnostics
+
+| ID | Element | Content | Sizes | Behavior | Status |
+| --- | --- | --- | --- | --- | --- |
+| C12-01 | job ls | name, schedule, next run, last outcome, state word | 1 line each | `--quiet` prints ids; state is a word (`active`, `paused`, `waiting-approval`, `deferred:vault-locked`, `failing`) so it greps (`GET /jobs`) | PROPOSED |
+| C12-02 | job show | the capability set it holds, its identity, last runs with outcomes | ≤15 lines | the text version of "what did I authorize on that day" — `PROVIDERS_AND_TOOLS.md` §4.5 says a job carries only what is recorded here, so this command is where that is checkable | PROPOSED |
+| C12-03 | job pause / resume | one id each | one line | pausing takes effect before the next tick and says so; resuming re-evaluates the grants rather than trusting the last evaluation | PROPOSED |
+| C12-04 | job run-now | runs once, outside the schedule | 2 lines | still a fresh policy evaluation: a T2/T3 step asks at run time and the command exits `3` if nobody answers (C3-04), it does not proceed unattended | PROPOSED |
+| C12-05 | job edit | schedule, objective, model, recipients | ≤6 lines | prints which steps now need re-approval before it writes; a material change cannot ride on the old authorization (`PATCH /jobs/{id}`) | PROPOSED |
+| C12-06 | job backlog | what happens to runs missed while the host was down | 3 lines | lists them and asks once (latest / each / skip); the answer is recorded, and `--json` shows the same structure so a monitoring script can see a stalled job | PROPOSED |
+| C12-07 | gateway restart | T3 lifecycle | 2 lines | names the streams it kills and returns only when the port answers; no restart of a remote Gateway over a link the restart itself will drop (`POST /admin/restart`) | PROPOSED |
+| C12-08 | diagnostics | sanitized report to a file, path printed | 1 line | the same artifact the Web's Export button produces (`GET /diagnostics`), safe to paste into a bug report; it refuses to include env vars or key material rather than redacting after the fact | PROPOSED |
+| C12-09 | no `job create` | scheduling is created from a task, not here | one line | the job verb set has no create command because scheduling is an agent tool (`cron.schedule`, T2) or a task-detail action — two creation paths with different approval semantics is how a schedule escapes review; the absence is the decision | PROPOSED |
+
+---
+
 ## 10. The scripting contract
 
 ### Region C-S — What another program may rely on
@@ -324,7 +342,7 @@ v1 (cheap, impossible to drift once generated), skip the man page.
 | Data | C9 | 9 | T2 export, propagation count, no unredacted view |
 | Context, compaction, tools | C10 | 5 | pin/unpin, compaction disclosure, deferred tools listed |
 | Scripting contract | C-S | 14 | idempotency, signals, timeouts, dry run |
-| **Total** | **14 regions** | **149 elements** | — |
+| **Total** | **15 regions** | **158 elements** | — |
 
 Every `C` element above has to exist for the parity test to pass: if a capability is in `docs/INTERFACES_AND_API.md`
 §8 and there is no row here, this file is wrong, not the matrix.

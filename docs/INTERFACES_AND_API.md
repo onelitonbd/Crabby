@@ -260,10 +260,12 @@ pipeable and free of color when not a TTY.
 | Auth | `auth pair`, `auth list`, `auth revoke <id>` |
 | Config | `config get/set/path/schema` |
 | Extensions | `ext init`, `ext validate`, `ext check-compat`, `ext install`, `ext list`, `ext info`, `ext update`, `ext uninstall` |
-| Interfaces | `gateway start/stop/status`, `web open`, `telegram start`, `tui`, `tunnel on/off/status` |
+| Interfaces | `gateway start/stop/restart/status`, `web open`, `telegram start`, `tui`, `tunnel on/off/status` |
 | Data | `history export`, `history delete-session`, `memory list/search/forget`, `logs`, `audit` |
 | Context | `context show <id>`, `context pin <id> [ref]`, `session compact <id>`, `tools ls` |
 | Sessions | `session ls`, `session new [--title "…"]`, `session show <id>`, `session rename <id> "…"`; deletion stays `history delete-session`, so there is one destructive verb |
+| Jobs | `job ls`, `job show <id>`, `job pause <id>`, `job resume <id>`, `job run-now <id>`, `job edit <id>` |
+| Diagnostics | `diagnostics` — writes the sanitized report and prints where it went |
 
 Rule: `crabby --help` and `crabby <noun> --help` are generated from the same contract that the Web UI and Telegram
 use, so a command cannot exist in one interface only (the D-005 test).
@@ -275,7 +277,8 @@ Interactive terminal client over `/events` + HTTP.
 - Layout on a narrow screen (Termux ~40–60 columns) is the design case: one primary pane, with side panes toggled
   rather than assumed.
 - Required views: conversation with streaming, task list, task detail (plan/steps/state), approval prompt, tool
-  activity, session switcher, provider/model picker with the override screen (`PROVIDERS_AND_TOOLS.md` §3.8).
+  activity, session switcher, scheduled jobs (D-057), provider/model picker with the override screen
+  (`PROVIDERS_AND_TOOLS.md` §3.8).
 - Keys: `Ctrl-C` cancels the current task (mapped to `POST /tasks/{id}/cancel`, not to killing the process),
   `Esc` closes a pane, `?` help. The terminal's own interrupt must never be the only way to stop work.
 - Must degrade honestly: no colors/Unicode on dumb terminals, and `TERM=dumb` is a supported mode with reduced
@@ -301,7 +304,8 @@ Adapter over grammY (P-009); translates Telegram updates into the same internal 
 - Commands, one per capability in §8 rather than a hand-picked subset: `/ask <text>`, `/task <objective>`, `/tasks`,
   `/watch <id>`, `/unwatch <id>`, `/cancel [id]`, `/resume <id>`, `/approve <id>`, `/deny <id>`, `/approvals`,
   `/sessions`, `/new`, `/rename <n> <title>`, `/context`, `/compact`, `/model <provider/model>`, `/providers`, `/probe <model>`, `/tools`,
-  `/memory`, `/ext`, `/config`, `/logs`, `/export`, `/delete <id>`, `/tunnel on|off`, `/status`, `/health`, `/help`.
+  `/memory`, `/ext`, `/config`, `/logs`, `/export`, `/delete <n>`, `/tunnel on|off`, `/jobs`, `/job <id>`, `/report`,
+  `/status`, `/health`, `/help`.
   A command may not be dropped from this list to save typing: dropping one removes a capability from the interface,
   which is the D-005 test failing. What *is* Telegram's to choose is how little of it needs typing — inline keyboards
   and reply targets carry the common paths, and the two documented limitations in §8 (provider add, identity
@@ -345,6 +349,9 @@ limitation **and** an accepted alternative interaction, which is what `ARCHITECT
 | Pair / revoke client | `/auth…` | `auth pair/revoke` | settings | settings | revoke from a trusted local client only — a remote client must not be able to mint identities; **documented limitation with local-only alternative** |
 | History export | `POST /sessions/{id}/export` (`history.export`) | `history export` | export action | Download | `/export` as a file |
 | Delete conversation | `DELETE /sessions/{id}` | `history delete-session` | `d` | Delete | `/delete <n>` with the title typed back |
+| Review scheduled jobs | `GET /jobs`, `PATCH /jobs/{id}`, `POST /jobs/{id}/pause` | `job …` | jobs pane | Scheduled screen | `/jobs`, `/job <id>` |
+| Gateway lifecycle | `POST /admin/restart`, `POST /admin/shutdown` | `gateway restart` | status action | Access screen | refused here, local-only (like pairing, D-053) |
+| Diagnostics report | `GET /diagnostics` | `diagnostics` | status action | Export sanitized | `/report` as a file |
 
 Two entries deliberately carry a limitation instead of pretending to parity: minting identities from Telegram is a
 security hole, and pasting a URL on a phone is genuinely awkward. Both are recorded here so nobody "discovers"

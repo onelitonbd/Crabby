@@ -1,6 +1,6 @@
 # Element Review — Index
 
-> Four files, 638 elements, one status per element. This is the gate in front of M0 (D-055, and `docs/ROADMAP.md`
+> Four files, 674 elements, one status per element. This is the gate in front of M0 (D-055, and `docs/ROADMAP.md`
 > §11 lists the open questions it raised). Nothing here is product code and nothing here is a summary: **these tables
 > are the spec review itself**, and `docs/UI_UX_SPEC.md` plus `docs/DESIGN_SYSTEM.md` get regenerated from them once
 > the statuses stop saying `PROPOSED`.
@@ -9,10 +9,10 @@
 
 | File | Surface | Regions | Elements | How to review it |
 | --- | --- | --- | --- | --- |
-| `WEB.md` | browser, 360px binding | 18 | 172 | `mockups/crabby-web-ui.html`, generated from the file — click any element, its row opens |
-| `TUI.md` | Termux, 40×24 binding | 20 | 193 | the rows themselves; a terminal cannot be judged honestly in a browser, and no HTML pretends to be one |
-| `CLI.md` | the pipe, not the terminal | 14 | 149 | rows; `--help` text is the mockup, and it does not exist until implementation |
-| `TELEGRAM.md` | a chat on a phone with a flaky connection | 11 | 124 | rows; the transport's limits are quoted as facts, the responses to them are the decisions |
+| `WEB.md` | browser, 360px binding | 19 | 185 | `mockups/crabby-web-ui.html`, generated from the file — click any element, its row opens |
+| `TUI.md` | Termux, 40×24 binding | 21 | 202 | the rows themselves; a terminal cannot be judged honestly in a browser, and no HTML pretends to be one |
+| `CLI.md` | the pipe, not the terminal | 15 | 158 | rows; `--help` text is the mockup, and it does not exist until implementation |
+| `TELEGRAM.md` | a chat on a phone with a flaky connection | 11 | 129 | rows; the transport's limits are quoted as facts, the responses to them are the decisions |
 
 `W`, `T`, `C`, `G` are the ID prefixes. A region is `W1`, `T-A`, `C10`, `G-S`; an element is `W4-08`, `T-A13`,
 `C-S09`, `G3-17`. Quote the ID when you want one thing changed — that is the whole reason the IDs exist.
@@ -28,6 +28,10 @@
   `docs/INTERFACES_AND_API.md` §7.1 and the §8 parity matrix must be named by a row in `CLI.md`, and every command in
   §7.4 and the matrix's Telegram column must have its own row in `TELEGRAM.md`. It runs the other way too, so a
   command invented in an inventory is a finding as well.
+- **Nothing may be a capability in one interface only.** Rules 10–12 of `scripts/check-docs.py`
+  cross-check the three hand-maintained lists — API routes, the `docs/INTERFACES_AND_API.md` §8 capability matrix,
+  and the `docs/UI_UX_SPEC.md` §2.2 screen list — against the four inventories. All three have already disagreed once
+  (F-08, F-10, F-11).
 - **Counts are not remembered.** The coverage table at the end of each file, and the progress row for each file in
   `DECISIONS.md` §4B, are checked against the parsed rows on every run. Two of those tables have already disagreed
   with what a human wrote, which is why they are not trusted.
@@ -46,7 +50,7 @@
 
 ## Current state
 
-638 elements, 0 approved. The count moved during this pass because the
+674 elements, 0 approved. The count moved twice during the audit passes because the
 Sessions screen (`docs/UI_UX_SPEC.md` §2.2) and the session switcher (§7.2) turned out to have **zero** elements
 anywhere (F-10) — a screen with no rows is a screen that silently disappears when these files regenerate the spec. Four open questions are registered against the Web bar and the TUI/CLI surfaces
 (O-053…O-063); the platform numbers in `TELEGRAM.md` are quoted from the Bot API and are to be re-verified at

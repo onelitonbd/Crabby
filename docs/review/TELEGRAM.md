@@ -107,6 +107,9 @@ tools → data and settings → self-description.
 | G3-29 | unknown command | typo, or a command from another version | one line | names the closest real command — the one case where silence is not allowed here, because a real answer and "you are not on the allow-list" must not look identical | PROPOSED |
 | G3-30 | bare text, no command | a paragraph sent without a slash | n/a | treated as `/ask`, and the reply says it was treated as a question so the guess is visible instead of silent | PROPOSED |
 | G3-32 | /rename | `/rename <n> <title>`; bare `/rename` asks for the new title | one line | renames the session this chat points at (`PATCH /sessions/{id}`) — without it, rename exists on three interfaces and not here, which is a capability gap rather than a smaller screen | PROPOSED |
+| G3-33 | /jobs | the schedule list | ≤10 lines | name, words-schedule, next run, state word; a chat is where a user first notices a job is stalled, so this is a list-and-open command, not a report | PROPOSED |
+| G3-34 | /job | `/job <n>` opens one job with a keyboard | ≤1 message + keyboard | pause · resume · run now · edit · delete · show last runs as buttons; edit asks one field at a time, because a phone can edit a schedule and the re-approval notice must appear in the same message where the change is confirmed (D-057) | PROPOSED |
+| G3-35 | /report | the sanitized diagnostics bundle as a file | one document | `GET /diagnostics` is already redacted and safe to paste into a bug report, so a phone can produce it from the chat it is already in; the caption names the Gateway version and the time range it covers | PROPOSED |
 | G3-31 | refused command | `/pair`, `/auth`, `/provider add` | one line | refused with the reason and the local alternative — the two documented limitations, surfaced in the interface that has them rather than left to be discovered | PROPOSED |
 
 ---
@@ -189,6 +192,8 @@ tools → data and settings → self-description.
 | G7-05 | Audit attribution | which chat, which user id, which message | n/a | every action records all three, so "who approved this" has an answer years later | PROPOSED |
 | G7-06 | Multiple users in one group | one group, several humans | n/a | the allow-list decides who may act; a non-allow-listed member's approval tap gets nothing (G-A4), and the identity of the actor is the tapping user | PROPOSED |
 | G7-07 | Session isolation for groups | what a group can see | n/a | a group's session is its own; `/status` in a group shows the group's tasks, not the owner's private ones | PROPOSED |
+| G7-08 | Gateway restart from chat | `/restart`, `/shutdown` | one line | refused, and the reason is given: restarting the process that carries this interface over this link can lock the user out with no local client open — the same local-only logic as pairing (D-053, D-058) | PROPOSED |
+| G7-09 | A job needing approval in a quiet chat | the run that is waiting | one message per wait | a scheduled run's approval request arrives as a normal approval message with the keyboard (G-A1), and the run stays waiting rather than proceeding; the job is not "late", and the wording must not imply it is | PROPOSED |
 
 ### Region G-S — Security specifics of this transport
 
@@ -236,15 +241,15 @@ tools → data and settings → self-description.
 | --- | --- | --- | --- |
 | Access and pairing | G1 | 12 | blocked bot, deleted message, lost edit, two chats |
 | Message shape | G2 | 13 | split, truncation, escape fallback, long-target |
-| Commands | G3 | 32 | unknown command, bare text, refused command, one row per capability |
+| Commands | G3 | 35 | unknown command, bare text, refused command, one row per capability |
 | Approvals | G-A | 13 | conflict, expiry, double tap, no-keyboard fallback |
 | Progress | G4 | 9 | 429, stall, unwatch, silence-not-success |
 | Files and media | G5 | 8 | size limits, expiry, cleanup, caption limit |
 | Models and boundaries | G6 | 7 | delta warning, ladder ask, refused editing |
-| Identity and transport | G7, G-S | 17 | spoofing, injection, retention, enumeration, inbound flood |
+| Identity and transport | G7, G-S | 19 | spoofing, injection, retention, enumeration, inbound flood |
 | Forced states | G-T | 8 | both sides down, partial delivery, offline user |
 | First run and help | G-O | 5 | unconfigured, read-only, limits discoverable |
-| **Total** | **11 regions** | **124 elements** | — |
+| **Total** | **11 regions** | **129 elements** | — |
 
 Nothing in this file may become a capability the other three interfaces lack, and nothing may be cut here to mean
 "less capable" — that is the parity rule, and `docs/INTERFACES_AND_API.md` §8 is where the two accepted limitations

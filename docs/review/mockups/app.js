@@ -20,6 +20,7 @@
     { tpl: "sessions", label: "Sessions" },
     { tpl: "tasks", label: "Tasks" },
     { tpl: "detail", label: "Task detail" },
+    { tpl: "jobs", label: "Scheduled" },
     { tpl: "approvals", label: "Approvals" },
     { tpl: "context", label: "Context" },
     { tpl: "memory", label: "Memory" },

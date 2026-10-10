@@ -28,7 +28,7 @@
 | ID | Element | Content | Sizes | Behavior | Status |
 | --- | --- | --- | --- | --- | --- |
 | T1-01 | Root container | one primary pane plus the pinned status line (T2) | 40×24 minimum; grows | never two always-visible side panes at 40 columns | PROPOSED |
-| T1-02 | Pane switch row | `chat · tasks · approvals · logs · models` | one line; abbreviates to 3 chars at 40 columns | `Tab` cycles, `1`–`5` jumps; hidden while the help overlay is open, never while an approval waits | PROPOSED |
+| T1-02 | Pane switch row | `chat · tasks · jobs · approvals · logs · models` | one line; abbreviates to 3 chars at 40 columns | `Tab` cycles, `1`–`6` jumps; hidden while the help overlay is open, never while an approval waits | PROPOSED |
 | T1-03 | Active pane marker | the current pane name carries the marker | 1 char before the name | underline or `>` prefix depending on charset tier (T10-04) | PROPOSED |
 | T1-04 | Buffer choice | which screen buffer the app draws in and what the user keeps afterwards | whole screen | see open question **T1-A**; whichever is chosen, the help sheet states it | PROPOSED |
 | T1-05 | Resize handling | reflow on terminal size change | any width ≥40 | no crash, no lost scroll position; reflow debounced so dragging a desktop terminal does not redraw every frame | PROPOSED |
@@ -173,6 +173,27 @@ from Termux, so this belongs with the M0 device measurements (O-002), not with t
 | T16-06 | Delete confirm | counts turns and tasks, then asks for the title typed back | 3 lines | T3, and the typed word is the title, not `y` — at 40 columns a mistyped selection is plausible | PROPOSED |
 | T16-07 | Switch while a task runs | what the frame says afterwards | one line | the task keeps running and its events stop rendering; returning re-reads state from the Gateway rather than replaying a buffer (the same reconciliation as T4-13) | PROPOSED |
 | T16-08 | Session id line | the id of the highlighted session, on its own line | one line | long-press selectable (T2-09); a session that cannot be named has to be addressable in the CLI | PROPOSED |
+
+---
+
+## 3B. Scheduled jobs
+
+> Region T17 is the pane D-057 requires. Everything here is measured against `PROVIDERS_AND_TOOLS.md` §4.5: the
+> point of the pane is that a user can see, from a phone, what a standing schedule is allowed to do and why it did not
+> run.
+
+### Region T17 — Jobs pane
+
+| ID | Element | Content | Sizes | Behavior | Status |
+| --- | --- | --- | --- | --- | --- |
+| T17-01 | Pane entry | `jobs` in the pane row, `3` jumps to it | one line | one of the six panes in T1-02; it is not a filter on the task list | PROPOSED |
+| T17-02 | Job row | name, schedule in words, next run, state word | 40 columns: `name` + `state`, schedule on the line below | the cron string is on the detail line, never the only representation | PROPOSED |
+| T17-03 | State words | `active` / `paused` / `waiting on approval` / `deferred: vault locked` / `failing` | one word | words only, no color dependence (T-C1), and `waiting on approval` is never truncated away | PROPOSED |
+| T17-04 | Detail view | capability set the job holds, its identity, last runs with outcomes | ≤12 rows | what it may touch, as granted — the TUI answer to "what did I authorize weeks ago" | PROPOSED |
+| T17-05 | Row keys | `p` pause/resume · `n` run now · `e` edit · `d` delete | one hint line | per-pane rebinding is legal here (T3-04) and the hint line is the authority; delete asks for the job name typed back | PROPOSED |
+| T17-06 | Edit flow | schedule and objective, then the re-approval notice | 4–6 lines | saving names which steps now need approval again, because editing a job changes what the standing authorization covers | PROPOSED |
+| T17-07 | Missed-run backlog | `N runs missed while Termux was killed` | 3 lines | one prompt with three answers (latest / each / skip all); it never fires a burst and never drops them silently — this is the Android failure mode §4.5 was written for | PROPOSED |
+| T17-08 | Run waiting for a human | the run that cannot proceed | 1 line in the row, plus T2-03's count | a deferred run raises the pending-approval count on the status line, so the pane is not the only place the stall is visible | PROPOSED |
 
 ---
 
@@ -325,6 +346,7 @@ readable cards anyway.
 | T14-05 | Listener mode | bind address, loopback state, non-loopback warning | 2 lines | the warning names what becomes reachable | PROPOSED |
 | T14-06 | Tunnel control | enable (T3), current URL, stop, status | 2 lines | the URL is on its own line so it can be selected whole (T-C8) | PROPOSED |
 | T14-07 | Telegram allow-list | user/chat ids, group policy, "unauthorized get nothing" | up to 4 lines | same content as Web W13-07 | PROPOSED |
+| T14-09 | Gateway lifecycle | restart / shutdown, both T3 | 2 lines | restart warns which streams it kills and then the status line shows `reconnecting` — the terminal must not look dead while the Gateway comes back (D-058) | PROPOSED |
 | T14-08 | Audit jump | goes to the log view filtered to this client | one line | the filter stays visible after the jump, so the user knows they are looking at a subset | PROPOSED |
 
 ### Region T15 — Logs and audit
@@ -393,6 +415,7 @@ promise a terminal cannot keep has to be narrowed in words, not silently.
 | Screen | Regions | Elements | Every state defined? |
 | --- | --- | --- | --- |
 | Sessions | T16 | 8 | switch mid-task, typed-delete count, id selectable |
+| Scheduled jobs | T17 | 8 | deferred/waiting states, backlog after a kill, per-run re-approval |
 | App frame | T1, T2, T3 | 24 | resize, below-minimum, startup, reconnect, dumb terminal |
 | Chat | T4, T5 | 25 | loading, streaming, stall, approval in list, error, reconnect, narrow |
 | Tasks | T6, T7 | 22 | empty, no-bulk, cancel phases, checkpoint, ladder, 40-column drop order |
@@ -400,10 +423,10 @@ promise a terminal cannot keep has to be narrowed in words, not silently.
 | Context & memory | T8, T9 | 16 | overflow warning, pending queue, propagation preview |
 | Providers/models/tools | T10, T11, T12 | 26 | insecure transport, forced-on, deferred tools |
 | Extensions | T-E | 12 | suspended, locked, verdict-failed, pre-approval size report |
-| Settings/access/logs | T13, T14, T15 | 25 | diff-before-apply, redaction, paging, color-tier escape hatch |
+| Settings/access/logs | T13, T14, T15 | 26 | diff-before-apply, redaction, paging, color-tier escape hatch |
 | Capability rules | T-C | 12 | this region is the degraded-state contract |
 | Onboarding | T-O | 10 | skip, gateway down, unknown input, help |
-| **Total** | **20 regions** | **193 elements** | — |
+| **Total** | **21 regions** | **202 elements** | — |
 
 Two things this file must satisfy before `docs/UI_UX_SPEC.md` is regenerated from it (per D-055): every `Sizes`
 cell states the 40-column outcome, and every open question here has an owner decision.

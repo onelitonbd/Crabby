@@ -86,6 +86,10 @@ runs; a task can be created and read back with an id, and nothing else.
 - Approval service: request, bind, expire, answer-from-anywhere, conflict on double-answer.
 - Auto-recovery on restart that cannot bypass approvals (`AGENT_RUNTIME.md` §7.2).
 - Event delivery with gap handling and reconciliation-by-`GET`.
+- Scheduler for `cron.schedule` (T2, D-046): every run is a fresh policy evaluation, a run that cannot get approval
+  stops and records why, and a device killed overnight must not fire a backlog burst (§4.5 of
+  `PROVIDERS_AND_TOOLS.md`). `GET /jobs` and the pause verb ship *with* this, not after it — a job the user cannot
+  pause from an interface is a standing authority with no off switch (D-057).
 - Initial tools with tiers: `file.*`, `session.*`, `task.*`, `net.fetch`, `memory.*`, `config.*`
   (`PROVIDERS_AND_TOOLS.md` §4.2). `shell.run` ships in this phase but is **not enabled by default**: it is off until the user opts in during
 `crabby init`, and M2's exit demo is run once with it off and once with it on (`SECURITY.md` §9).
@@ -102,7 +106,7 @@ Workstreams share contracts and fixtures, so they proceed independently; none of
 | --- | --- | --- |
 | CLI | Command grammar of `docs/INTERFACES_AND_API.md` §7.1 | `--json` everywhere, documented exit codes, scriptable, no TTY assumptions |
 | TUI | §4 panes, modal approvals, cancel-on-`Ctrl-C` | Fully usable at 40 columns; no full-screen repaint per token; 8-color fallback |
-| Web UI | §2 screens, §8 states | Every screen has empty/loading/error/degraded states; 360px layout complete; served as built assets |
+| Web UI | §2 screens, §8 states | Every screen has empty/loading/error/degraded states, **including** `Sessions` (W15) and `Scheduled` (W16) — neither is an add-on; 360px layout complete; served as built assets |
 | Telegram | Commands, inline approvals, coalesced progress | No capability of its own; unauthorized senders get nothing; approvals expire visibly |
 
 Phase exit: the parity test walks `docs/INTERFACES_AND_API.md` §8 and passes with every blank cell carrying an

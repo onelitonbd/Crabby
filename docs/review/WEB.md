@@ -47,10 +47,10 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 
 | ID | Element | Items | Behavior | Status |
 | --- | --- | --- | --- | --- |
-| W2-01 | Primary nav | Chat · Tasks · Extensions · Settings | 4 tabs; approvals reachable from W1-05 and always from tab 2 badge | PROPOSED |
+| W2-01 | Primary nav | Chat · Tasks · Scheduled · Extensions · Settings | 5 tabs at 360px = 72px each, still ≥44px (D-057); approvals reachable from W1-05 and always from tab 2 badge | PROPOSED |
 | W2-02 | New task action | `+` first position, thumb-reachable | opens the new-task sheet (§4) | PROPOSED |
 | W2-03 | Nav badge | approvals count on Tasks, extension suspension count on Extensions | zero = hidden | PROPOSED |
-| W2-04 | Keyboard shortcuts | `g c` chat, `g t` tasks, `g e` extensions, `g s` settings, `n` new | documented in `?` help; desktop affordance, never required on mobile | PROPOSED |
+| W2-04 | Keyboard shortcuts | `g c` chat, `g t` tasks, `g j` scheduled, `g e` extensions, `g s` settings, `n` new | documented in `?` help; desktop affordance, never required on mobile | PROPOSED |
 | W2-05 | Safe-area handling | respects notched-device insets | bottom bar and modal actions only | PROPOSED |
 | W2-06 | Nav container | bottom bar on mobile, left rail at ≥960px | safe-area bottom inset; never overlaps the composer (W4-11); focus order tab → page content; badge clipping is defined, not accidental | PROPOSED |
 
@@ -78,6 +78,32 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | W15-09 | Filter and search | text search over titles, plus a "has running task" filter | one line | search is local to the list; it is not a memory search, and the UI must not imply it is | above the list | PROPOSED |
 | W15-10 | Empty state | no other sessions yet | 2 lines | teaches the one command (`crabby chat "…"` starts a fresh session), per §2.3's rule about empty states | list | PROPOSED |
 | W15-11 | Origin of a session | which interface created it | one short word | `cli` / `tui` / `web` / `telegram`, same attribution the audit record carries — the list is where a user notices "this appeared on its own" | row, second line | PROPOSED |
+
+---
+
+## 1B. Scheduled jobs (`/jobs`)
+
+> D-057 made this a screen of its own instead of a filter on Tasks, because a job is a *standing authority to run work
+> later*: pausing it, seeing what it is allowed to touch, and reading why a run was deferred are not task-shaped
+> questions. `PROVIDERS_AND_TOOLS.md` §4.5 is the policy; these rows are the surface that has to make that policy
+> visible.
+
+### Region W16 — Jobs list and detail
+
+| ID | Element | Content | Sizes | Behavior | Placement | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| W16-01 | Job row | name, schedule in words, next run, last outcome | 2 lines at 360px | the schedule is written both ways (`every weekday 07:30` and `30 7 * * 1-5`), because a cron string is not reviewable on a phone | list | PROPOSED |
+| W16-02 | State word | `active` / `paused` / `waiting on approval` / `deferred: vault locked` / `failing` | one chip | words, not colors alone; `waiting on approval` is the state that must never be hidden, because it means work is stalled on a human | right of title | PROPOSED |
+| W16-03 | Capability set the job holds | fs roots, net, shell, tiers, the identity it runs as | ≤6 lines | shown on the list row's second line and in full on the detail — a job inherits nothing beyond what is written here (`PROVIDERS_AND_TOOLS.md` §4.5) | detail | PROPOSED |
+| W16-04 | Pause / resume | one tap each | 44px | pausing is immediate and says so; resuming re-checks the grants, it does not trust the last check | row action | PROPOSED |
+| W16-05 | Run now | executes the job once, outside its schedule | 1 line + confirm | still a fresh policy evaluation: T2/T3 steps ask at run time, exactly as a scheduled run would | detail | PROPOSED |
+| W16-06 | Edit | objective, schedule, model, recipients | form | saving shows what changed and names the steps that now need re-approval; a material change never rides on the old authorization | detail | PROPOSED |
+| W16-07 | Deferred-run reason | why nothing happened | ≤2 lines | vault locked, no approval inside the window, host offline — each with the fix, and never an empty log | under the state word | PROPOSED |
+| W16-08 | Missed-run backlog | `N runs missed while the device was off` | 3 lines | lists them and asks once what to do (run the latest only / run each / skip all); it must not fire a burst, and it must not silently drop them either | sheet | PROPOSED |
+| W16-09 | Run history | each execution as a task link with outcome, duration, who approved what | 1 line per run | paging; the approval trail per run is what makes this auditable a month later | detail | PROPOSED |
+| W16-10 | Schedule this | from a task's detail, creates a job from that objective | 2 lines | shows the creation card (what will run, how often, what it may touch) and that its tier floor is evaluated per run | W6-12 actions | PROPOSED |
+| W16-11 | Delete | removes the job and says what happens to its sessions | 2 lines | T3; the history of past runs is not deleted with the job unless asked, because that erases the audit trail of work that already happened | row menu | PROPOSED |
+| W16-12 | Empty state | no jobs yet | 2 lines | teaches the path (`crabby task run --schedule "…"`, or W16-10 from any task) rather than a marketing sentence | list | PROPOSED |
 
 ---
 
@@ -297,6 +323,7 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | W13-05 | Listener mode | loopback state, bind address, warning if non-loopback | PROPOSED |
 | W13-06 | Tunnel control | enable (T3) with the reachable-identity list, current URL, stop, status | PROPOSED |
 | W13-07 | Telegram allow-list | user/chat ids, group policy, "unauthorized get nothing" note | PROPOSED |
+| W13-09 | Gateway lifecycle | restart and shutdown, both T3 | 2 buttons | restart names who gets disconnected (open task streams, this browser), and the Web UI shows `reconnecting` until the port answers — a restart with no visible reconnect state reads as a crash (D-058) | PROPOSED |
 | W13-08 | Audit link | jumps to the audit tab with this client filtered | PROPOSED |
 
 ### Region W14 — Logs & audit (`/logs`)
@@ -338,14 +365,15 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 | --- | --- | --- | --- |
 | App shell | W1, W2 | 17 | W1 rows state degraded behavior; W2 trivial; containers listed as elements too |
 | Sessions | W15 | 11 | switch mid-task, typed-delete count, origin attribution |
+| Scheduled | W16 | 12 | paused/deferred/waiting states, backlog on resume, per-run approval trail |
 | Chat | W3, W4 | 26 | yes (§2.3 empty, streaming, reconnect, error) |
 | Tasks | W5, W6 | 19 | yes |
 | Approvals | W-A | 12 | yes, incl. `conflict` and expired |
 | Context & memory | W7, W8 | 16 | yes |
 | Providers/models/tools | W9, W10, W11 | 25 | yes; deferred states included  |
 | Extensions | W-E | 12 | yes, incl. quarantined and lock notice |
-| Settings/access/logs | W12, W13, W14 | 24 | yes  |
+| Settings/access/logs | W12, W13, W14 | 25 | yes  |
 | Onboarding/global | W-O | 10 | yes |
-| **Total** | **18 regions** | **172 elements** | — |
+| **Total** | **19 regions** | **185 elements** | — |
 
 Owner review surface: 161 rows to read, edit, cut, or approve. Nothing in this file is optional by size.

@@ -22,6 +22,8 @@ python3 docs/review/mockups/build.py
 ## Rules this directory obeys
 
 - The inventory is the source of truth. A row is never renamed, merged, or dropped inside the mockup.
+- Two screens exist because the review found them missing (F-10 Sessions, F-11 Scheduled) — the build refuses to
+  render a screen whose rows are not in `WEB.md`, and rule 12 refuses to let a resource have routes without rows.
 - One self-contained HTML file: inline CSS, inline data, no network, no CDN, no build step — so it opens from a
   file path or from a Termux-served port on a phone.
 - Reviews happen in the browser, but the result leaves as markdown rows that are pasted back into `WEB.md`. The

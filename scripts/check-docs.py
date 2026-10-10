@@ -422,6 +422,7 @@ def main() -> int:
         "Logs / Audit": r"logs|audit",
         "Access": r"access",
         "Onboarding": r"onboarding|first.run|first run",
+        "Scheduled": r"jobs|scheduled",
     }
     spec_doc = bodies.get(ROOT / "docs" / "UI_UX_SPEC.md", "")
     web = bodies.get(ROOT / "docs" / "review" / "WEB.md", "")
@@ -452,6 +453,53 @@ def main() -> int:
         for key, pat in wanted.items():
             if key in views.group(1).lower() and not re.search(pat, tui_titles):
                 problems.append(f"docs/review/TUI.md: §7.2 requires {key!r} and no region covers it")
+
+
+    # 12. every resource the API exposes has to be visible in every interface, or be explicitly absent there.
+    #     F-08 found commands missing, F-10 found a screen missing, F-11 found a whole resource (`/jobs`) with routes
+    #     and a security policy and no UI anywhere. The three were the same cause: routes, capability matrix, and screen
+    #     list were hand-maintained lists that nobody cross-checked. This closes the loop from the API side.
+    RESOURCE_PATTERNS = {
+        "admin": r"lifecycle|restart|shutdown",
+        "approvals": r"approval",
+        "audit": r"audit",
+        "auth": r"pair|revoke|client",
+        "config": r"config|settings",
+        "diagnostics": r"diagnostic|sanitized",
+        "events": r"stream|tail|watch|reconnect",
+        "export": r"export|download",
+        "extensions": r"extension|\bext\b",
+        "health": r"health|reachable|readiness",
+        "jobs": r"job|schedul",
+        "logs": r"\blog",
+        "memory": r"memory",
+        "models": r"\bmodel",
+        "providers": r"provider",
+        "sessions": r"session",
+        "status": r"\bstatus",
+        "tasks": r"\btask",
+        "tools": r"\btool",
+        "tunnel": r"tunnel",
+    }
+    res_names = set()
+    for route in set(re.findall(r"`(?:GET|POST|PATCH|PUT|DELETE) (/[a-zA-Z0-9{}/_.-]*)`", iface)):
+        seg = [p for p in route.split("/") if p and not p.startswith("{")]
+        if seg:
+            res_names.add(seg[0])
+    unmapped = sorted(res_names - set(RESOURCE_PATTERNS))
+    if unmapped:
+        problems.append(
+            "docs/INTERFACES_AND_API.md exposes routes for " + ", ".join(unmapped) + " and check-docs.py has no "
+            "pattern for them: give the resource elements in all four inventories, then add it to RESOURCE_PATTERNS"
+        )
+    for name in sorted(res_names & set(RESOURCE_PATTERNS)):
+        pat = RESOURCE_PATTERNS[name]
+        for key, body in (("WEB.md", web), ("TUI.md", tui), ("CLI.md", cli_md), ("TELEGRAM.md", tg_md)):
+            if not re.search(pat, body, flags=re.I):
+                problems.append(
+                    f"docs/review/{key}: the `{name}` resource has routes in the API and nothing here — an "
+                    f"interface either carries the capability or records why it does not"
+                )
 
     if problems:
         print(f"✗ {len(problems)} documentation problem(s):")

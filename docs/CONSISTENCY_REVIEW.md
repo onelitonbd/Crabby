@@ -147,8 +147,45 @@ Region T-A's heading now says "Approvals", because a heading that does not name 
 missing twice.
 
 **Made structural:** rule 11 of `scripts/check-docs.py` reads the §2.2 screen table and the §7.2 required-view list and
-fails when no region title in `WEB.md` / `TUI.md` matches one. Negative-tested against the pre-fix `WEB.md`: it
+fails when no region title in `docs/review/WEB.md` / `docs/review/TUI.md` matches one. Negative-tested
+against the pre-fix `docs/review/WEB.md`: it
 reports exactly `Sessions` and nothing else, so it is not a check that passes on everything.
+
+### F-11 — A resource with routes, a policy, and no interface at all
+**Severity: high.** `GET /jobs`, `PATCH /jobs/{id}`, `POST /jobs/{id}/pause` exist in `docs/INTERFACES_AND_API.md`,
+and `PROVIDERS_AND_TOOLS.md` §4.5 carries the strictest scheduling policy in the project (each run is a fresh policy
+evaluation, a run that cannot get approval stops and records it, a killed Termux must not fire a backlog burst). No
+element row in any of the four inventories implemented any of it, and `docs/UI_UX_SPEC.md` §2.2 had no such screen.
+The same sweep found `POST /admin/restart` · `/admin/shutdown` (T3 lifecycle) and `GET /diagnostics` unreachable
+outside the CLI, and `GET /health` absent from the TUI.
+
+**Root cause, stated plainly:** three hand-maintained lists — the route table, the §8 capability matrix, and the §2.2
+screen list — were never cross-checked, so F-08 (commands), F-10 (screens) and F-11 (resources) are the same defect
+seen from three sides. Prose promises about parity had not caught any of them.
+
+**Resolution:** D-057 makes scheduled jobs a first-class surface (Web `Scheduled` screen as the fifth nav item, a
+sixth TUI pane, `crabby job …`, `/jobs` + `/job <id>` on Telegram) with regions W16 (12), T17 (8), C12 (9) and three
+Telegram rows; D-058 puts Gateway lifecycle and the diagnostics report in every interface, refusing restart over the
+transport that restart would drop (`/report` carries the diagnostics bundle on Telegram). `/jobs` and `/job` join
+§7.4, `job …` and `diagnostics` join §7.1, and two capability rows join §8.
+
+**Made structural:** rule 12 derives the resource list from the API route table and fails when a resource has no
+presence in an interface inventory, or when a new route appears that the rule knows nothing about. It is deliberately
+dumb — presence, not correctness — because the point is that a resource cannot be *unmentioned* again.
+
+### F-12 — The capability existed in every spec and in no milestone
+**Severity: medium.** After F-11 was closed, `grep -n "cron\|schedule" docs/ROADMAP.md` returned **nothing**: the
+scheduler was specified in `PROVIDERS_AND_TOOLS.md` §4.5, tiered in D-046, routed in `docs/INTERFACES_AND_API.md`,
+and now had elements in all four inventories — but no phase was going to build it. A feature that is designed
+everywhere and scheduled nowhere is not planned; it is folklore.
+
+**Resolution:** M2 gained the scheduler as a deliverable with the pause verb shipped alongside it, and M3's Web row
+names `Sessions` and `Scheduled` as screens the phase owes, so the two regions added for F-10/F-11 cannot be dropped
+as "extra".
+
+**Lesson kept:** the review pass checks documents against *other documents*. It does not check documents against the
+plan that executes them, so `docs/ROADMAP.md` is now inside the loop — every capability with an inventory region has
+to be named by a phase. That is the same rule, one level up.
 
 ## 3. Checks That Passed
 
@@ -222,17 +259,17 @@ The remaining half of M-D. Each item is a yes/no, not a discussion:
 
 - [ ] `docs/review/README.md` — the index: what each file covers, how to answer, and which invariants the checker
       enforces.
-- [ ] `docs/review/WEB.md` — 172 elements over 18 regions. Reviewed through `docs/review/mockups/crabby-web-ui.html`, which is
+- [ ] `docs/review/WEB.md` — 185 elements over 19 regions. Reviewed through `docs/review/mockups/crabby-web-ui.html`, which is
       generated from that file, so an element that exists in one and not the other is a build error rather than a
       disagreement.
-- [ ] `docs/review/TUI.md` — 193 elements over 20 regions, every one answerable at 40 columns × 24 rows.
-- [ ] `docs/review/CLI.md` — 149 elements over 14 regions, with the pipe and the exit code as the binding case.
-- [ ] `docs/review/TELEGRAM.md` — 124 elements, where the transport's own limits are facts and the responses to them
+- [ ] `docs/review/TUI.md` — 202 elements over 21 regions, every one answerable at 40 columns × 24 rows.
+- [ ] `docs/review/CLI.md` — 158 elements over 15 regions, with the pipe and the exit code as the binding case.
+- [ ] `docs/review/TELEGRAM.md` — 129 elements, where the transport's own limits are facts and the responses to them
       are the decisions, and where every parity-matrix capability has a command of its own (F-08).
 - [ ] Only after statuses stop saying `PROPOSED`: regenerate `docs/UI_UX_SPEC.md` and `docs/DESIGN_SYSTEM.md` from
       the approved rows, then re-run §7.
 
-638 elements, 0 approved as of this round. (The count grew from 590 while F-08…F-10 were being fixed: a screen with no rows is the most expensive kind of gap, because it costs nothing to notice.) Nothing in this list is a formality: a row that reads "the small chip"
+674 elements, 0 approved as of this round. (The count grew from 590 while F-08…F-10 were being fixed: a screen with no rows is the most expensive kind of gap, because it costs nothing to notice.) Nothing in this list is a formality: a row that reads "the small chip"
 has as much standing as "the chat pane", and cutting it is a decision with an ID.
 
 When these are ticked, `docs/ROADMAP.md` §0 moves to "M-D complete" and M0 starts.

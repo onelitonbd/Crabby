@@ -43,7 +43,7 @@ must be usable at 360px without horizontal scroll.
 |              MAIN AREA (per section)             |
 |                                                  |
 +--------------------------------------------------+
-| [▶ new]  [chats]  [tasks]  [ext]        ⚠ 2  ⓘ   |  bottom bar (mobile)
+| [▶ new] [chats] [tasks] [sched] [ext]    ⚠ 2  ⓘ   |  bottom bar (mobile)
 +--------------------------------------------------+
 ```
 
@@ -62,6 +62,7 @@ labeled when on), vault state (locked/unlocked), pending-approval count, connect
 | **Task detail** | plan with steps and dependencies, step log, tool calls with tier chips, checkpoint state, error/retry history, "what changed the plan" | cancel, resume, approve from here, retry failed step |
 | **Approvals** | queue + history; each card shows tool, tier, exact args/command/path/host, reversibility, and expiry countdown | approve once, deny, view related task |
 | **Sessions** | session list, rename, delete with typed confirm, export | export, delete, switch |
+| **Scheduled** | jobs with schedule, next run, last result, why a run was deferred, the capability set the job holds (D-057) | pause, resume, run now, edit, delete |
 | **Context** | current budget usage bar, what was compacted, pinned items, provenance of injected memory | pin/unpin, remove from context, force compact |
 | **Memory** | entries with provenance and trust label, search, edit, delete; auto-memory toggle | forget, review pending auto-memories |
 | **Providers** | provider list incl. user-defined endpoints, add/edit/remove, base URL masked but visible, key shown as `vault://name` | add endpoint, test connection, probe |
@@ -99,7 +100,7 @@ is assumed available and the layout must be expressed in weights rather than fix
 columns, never require them.
 
 - **Single primary pane** with mode switching (`Tab` or `1-5`) instead of always-visible side panes.
-- Panes: chat, tasks, task detail, approvals, logs, providers/models. Approvals steal focus with a modal and beep
+- Panes: chat, tasks, task detail, approvals, jobs, logs, providers/models (D-057). Approvals steal focus with a modal and beep
   (bell) only if enabled.
 - Streaming renders line-buffered, no re-layout of the whole screen per token (flicker on slow terminals is a real
   usability bug, not a cosmetic one).

@@ -9,8 +9,10 @@ that work the same way on Linux and macOS.
 It is not a mobile app and not a chatbot wrapper. It is a harness: model providers, multi-step agents,
 tools, memory, skills, plugins, and permission-controlled execution — all behind a single local-first Gateway.
 
-> **Current phase: planning.** Implementation has not started. The documents below are the specification that
-> later code must follow, and `DECISIONS.md` records what is still deliberately undecided.
+> **Current phase: M1c.** The planning set is what governs, and it is still the specification code must follow rather
+> than a description of it: M1a shipped the contracts, platform, core and CLI skeleton, and M1b shipped the Gateway and
+> the state directory, so `crabby gateway start` answers HTTP today. `DECISIONS.md` records what is still
+> deliberately undecided — including two shapes this build found the documents had not defined (O-070, O-071).
 
 ## Planning documents
 
@@ -30,7 +32,7 @@ tools, memory, skills, plugins, and permission-controlled execution — all behi
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phases M0–M6, entry and exit conditions, and which open items block which phase. |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Environment, scripts, testing, CI, release and Termux development rules. |
 | [`docs/review/`](docs/review/README.md) | **M-D's element gate, now closed:** 675 elements across the four interfaces, every row reviewed (D-055, D-075) — the criteria and the scan are in that index, and review continues one implementation step at a time (D-076). `docs/review/mockups/crabby-web-ui.html` is the Web UI as one file, generated from the inventory. |
-| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-28), what it could not verify, and the owner's checklist. |
+| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-31), what it could not verify, and the owner's checklist. |
 | [`AGENTS.md`](AGENTS.md) | The rules a coding agent works under, including the forbidden shortcuts. |
 
 `python3 scripts/check-docs.py` lints this planning set — decision-ID references, cross-links, section anchors,
@@ -66,12 +68,27 @@ what is scheduled from here:
     O-066…O-069 rather than filled in with plausible numbers (`docs/ROADMAP.md` §3, and F-27 in
     `docs/CONSISTENCY_REVIEW.md` for why a citation here means a line `grep` can find).
 
-03. **From there, every step that ships carries its own owner review:** the running screen or command plus the element
+03. **M1b — shipped: the Gateway and the state directory.** `packages/storage` owns the one SQLite file, the migration
+    ledger, per-task `seq` numbering, redaction on write, and the 64 KiB overflow rule that moves a payload into
+    `scratch/<taskId>/` with a marker in its place. `packages/gateway` is Fastify 5 validating with the contract's own
+    `validate()`, pairing over a single-use 8-character code, tokens stored as digests, `Idempotency-Key` replay that
+    returns the recorded answer, and SSE with a 15 s heartbeat plus §5.4's explicit gap frame; every route needs a
+    token, health included. On the CLI side: `crabby gateway start` (loopback, Ctrl-C drains it, and it publishes and
+    removes `gateway.json` so other processes discover the port instead of assuming one), `gateway status`, `status`,
+    `auth pair|list|revoke`, `task ls`, `task show`. `tests/integration/gateway.test.ts` asserts the routes over a real
+    socket and drives one spawned CLI against one spawned Gateway — P-003's lifecycle half, as a test. What is
+    *absent* on purpose: `task run` (an executor is M2's), `POST /admin/*` (M2's policy engine — an interface may
+    request and relay, never grant), and any bind beyond loopback.
+04. **From there, every step that ships carries its own owner review:** the running screen or command plus the element
     IDs it implements, one unit at a time (`D-076`). An answer becomes a code change *and* an inventory-row change in
     the same commit; no answer is recorded as `unreviewed`, never as accepted.
-03. **Eight tracked questions stay open until a device or a real user answers them**: O-001, O-002 (driver build, WAL),
-    O-006, O-051 (terminal rendering on a phone), O-008 (extension isolation), O-064 (signing), O-065 (Termux
-    sandbox), and O-052 (remembered approvals, post-v1 by choice). Each states the measurement that closes it.
+05. **Nine rows are open** until a device, a real user, or a policy nobody has written yet answers them: O-006 and
+    O-051 (terminal rendering on a phone), O-008 (extension isolation), O-064 (signing a distribution tier), O-065
+    (what a Termux sandbox can enforce), O-052 (remembered approvals, post-v1 by choice), O-070 and O-071 — two shapes
+    the contracts require and the documents never defined, a client id with no prefix and `system.*` events that must
+    carry a `taskId` — and O-072, two §11 auth tests that each need a rule the spec has not written. Two more (O-001,
+    O-002) are closed on everything but one measurement each: a clean Termux build and a WAL torture. Each row states
+    what closes it, and none of them is closed by writing code that assumes an answer.
 
 The element review (675 rows in `docs/review/`) is complete: 25 rows moved by D-059's narrow exception and 650 by the
 delegated pass in D-075, whose criteria and re-runnable scan live in `docs/review/README.md`. To reopen any of it —

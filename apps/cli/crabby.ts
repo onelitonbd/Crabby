@@ -30,34 +30,71 @@ function isPipeError(error: unknown): boolean {
   );
 }
 
+import { type AuthVerb, runAuth } from "./commands/auth.ts";
 import { type ConfigVerb, runConfig } from "./commands/config.ts";
 import { runDoctor } from "./commands/doctor.ts";
+import { type GatewayVerb, runGateway } from "./commands/gateway.ts";
 import { runInit } from "./commands/init.ts";
+import { runStatus } from "./commands/status.ts";
+import { runTask, type TaskVerb } from "./commands/task.ts";
 import { readVersion, runVersion } from "./commands/version.ts";
 import { commandName, findCommand, helpText, suggest } from "./registry.ts";
 
 interface Parsed {
   readonly dataDir?: string;
+  /** The global `--log-level`, forwarded to the one command that starts a long-lived process. */
+  readonly logLevel?: "debug" | "info" | "warn" | "error";
   readonly json: boolean;
   readonly help: boolean;
   /** `--version`/`-v` is a flag rather than an alias the grammar must know, because someone typing it wants the one
    *  line that identifies the build. §7.1's `crabby version` stays the noun-verb form the other interfaces share. */
   readonly version: boolean;
   readonly positionals: string[];
+  /** Everything after the noun and verb, untouched — what the command's own flag parser reads. */
+  readonly rest: string[];
   readonly unknown: string[];
 }
 
 const VALUE_FLAGS = new Set(["--data-dir", "--log-level", "--log-file"]);
+const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 
 export function parseArgs(argv: readonly string[]): Parsed {
   const positionals: string[] = [];
   const unknown: string[] = [];
+  const rest: string[] = [];
   let dataDir: string | undefined;
+  let logLevel: "debug" | "info" | "warn" | "error" | undefined;
   let json = false;
   let help = false;
   let version = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string;
+    // Once the noun and the verb are both seen, the rest of the line belongs to that command and is forwarded
+    // verbatim. Global flags and per-command flags cannot share one flat namespace: `crabby auth pair --code X` has
+    // to reach `auth.ts` intact, and a parser that collected `--code` as an unknown global flag would reject a flag
+    // the command itself declares in `registry.ts`.
+    if (positionals.length >= 2) {
+      if (arg === "--json") {
+        json = true;
+        continue;
+      }
+      if (arg === "--help" || arg === "-h") {
+        help = true;
+        continue;
+      }
+      if (VALUE_FLAGS.has(arg)) {
+        const value = argv[i + 1];
+        if (typeof value === "string") {
+          i += 1;
+          if (arg === "--data-dir") dataDir = value;
+          if (arg === "--log-level" && LOG_LEVELS.includes(value as (typeof LOG_LEVELS)[number]))
+            logLevel = value as "debug" | "info" | "warn" | "error";
+          continue;
+        }
+      }
+      rest.push(arg);
+      continue;
+    }
     if (arg === "--json") {
       json = true;
       continue;
@@ -75,6 +112,8 @@ export function parseArgs(argv: readonly string[]): Parsed {
       if (VALUE_FLAGS.has(arg) && typeof next === "string" && !next.startsWith("--")) {
         i += 1;
         if (arg === "--data-dir") dataDir = next;
+        if (arg === "--log-level" && LOG_LEVELS.includes(next as (typeof LOG_LEVELS)[number]))
+          logLevel = next as "debug" | "info" | "warn" | "error";
         continue;
       }
       unknown.push(arg);
@@ -88,8 +127,10 @@ export function parseArgs(argv: readonly string[]): Parsed {
     help,
     version,
     positionals,
+    rest,
     unknown,
     ...(dataDir === undefined ? {} : { dataDir }),
+    ...(logLevel === undefined ? {} : { logLevel }),
   };
 }
 
@@ -116,7 +157,10 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     return EXIT.usage;
   }
 
-  const [noun, verb, ...rest] = parsed.positionals;
+  const [noun, verb, ...extra] = parsed.positionals;
+  // `crabby gateway start --port 8130` puts `--port` after the verb, so the tail the command sees is anything left
+  // over in the positionals plus the forwarded rest — one array, in the order the person typed them.
+  const rest = [...extra, ...parsed.rest];
 
   if (parsed.version) {
     return runVersion(facts, readVersion(rootPackageJson), renderer);
@@ -135,6 +179,16 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   if (parsed.help) {
     process.stdout.write(`${helpText()}\n`);
     return EXIT.success;
+  }
+
+  // The registry answers "does this verb exist yet?" before any command is consulted, which is what lets `crabby task
+  // run` say *planned for M2* instead of being parsed by a command that has no such verb. A command therefore never
+  // has to know that it is a placeholder, and no verb can be advertised as planned while quietly half-implemented.
+  const declared = findCommand(noun ?? "", verb);
+  if (declared && declared.status === "planned") {
+    renderer.line(commandName(declared), `not implemented yet — planned for ${declared.milestone}`);
+    renderer.fix("crabby --help lists what this build can actually run");
+    return EXIT.usage;
   }
 
   switch (noun) {
@@ -160,14 +214,20 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     case "config": {
       return runConfig(verb as ConfigVerb | undefined, rest, layout, renderer);
     }
+    case "status": {
+      return runStatus(layout, renderer);
+    }
+    case "gateway": {
+      return runGateway(verb as GatewayVerb | undefined, rest, layout, renderer, parsed.logLevel);
+    }
+    case "auth": {
+      return runAuth(verb as AuthVerb | undefined, rest, layout, renderer);
+    }
+    case "task": {
+      return runTask(verb as TaskVerb | undefined, rest, layout, renderer);
+    }
   }
 
-  const spec = findCommand(noun ?? "", verb);
-  if (spec && spec.status === "planned") {
-    renderer.line(commandName(spec), `not implemented yet — planned for ${spec.milestone}`);
-    renderer.fix("crabby --help lists what this build can actually run");
-    return EXIT.usage;
-  }
   const name = verb ? `${noun} ${verb}` : (noun ?? "");
   const guess = suggest(noun ?? "", verb);
   renderer.line(
@@ -178,8 +238,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   return EXIT.usage;
 }
 
-// No signal handlers are installed here, because no long-lived process starts in M1a; the Gateway registers its
-// own through `createShutdown` in `packages/core` when it exists (D-066's 5 s drain).
+// The only long-lived process this binary starts is `crabby gateway start`, and it installs its own handlers through
+// `createShutdown` in `packages/core` (D-066's 5 s drain) — see `commands/gateway.ts`. This file stays a dispatcher,
+// so a signal path cannot be half-registered here and half-there.
 
 process.stdout.on("error", (error: NodeJS.ErrnoException) => {
   if (error.code === "EPIPE") process.exit(EXIT.success);

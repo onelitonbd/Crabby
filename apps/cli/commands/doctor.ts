@@ -1,7 +1,12 @@
 // `crabby doctor` — `docs/DEVELOPMENT.md` §10's list, run locally: "environment, Node version, native module status,
-// Termux constraints, vault state, listener mode, paired clients, tunnel state". The last three belong to the
-// Gateway, so until M1 delivers one they are reported as `deferred` with the command that will fill them in — never
-// as a green tick, which is how a diagnostic becomes a lie.
+// Termux constraints, vault state, listener mode, paired clients, tunnel state".
+//
+// The last three belong to the Gateway, and the division of labour with `crabby status` is deliberate: doctor answers
+// from the filesystem — what a process published, what mode a file has, whether a pid is alive — and never opens a
+// socket, so a diagnostic stays a diagnostic instead of becoming a health check that depends on the thing it is
+// diagnosing. Anything needing an answer *from* the running Gateway is `crabby status`'s job, and the fix lines say
+// so. A state this build cannot have is reported as `deferred` with the reason, never as a green tick, which is how a
+// diagnostic becomes a lie (F-28).
 //
 // `docs/UI_UX_SPEC.md` §5 is the tone rule: prints fixes, not findings. A line here that says only "no vault" is a
 // bug in this file.
@@ -11,6 +16,7 @@ import { accessSync, constants, existsSync, readFileSync, statSync } from "node:
 import path from "node:path";
 import { EXIT, type ExitCode, isSecretShaped } from "@crabby/api-contracts";
 import { loadConfig, readLastExit, redactText } from "@crabby/core";
+import { readCredentials, readGatewayInfo } from "@crabby/gateway";
 import {
   constraintsFor,
   type DataLayout,
@@ -88,7 +94,7 @@ export function collectChecks(input: DoctorInput): Check[] {
   checks.push(configCheck(input));
   checks.push(vaultCheck(input));
   checks.push(lastExitCheck(input));
-  checks.push(...gatewayChecks());
+  checks.push(...gatewayChecks(input.layout));
   return checks;
 }
 
@@ -344,6 +350,17 @@ function lastExitCheck(input: DoctorInput): Check {
       detail: "the Gateway writes it (D-066's 5 s drain)",
     };
   }
+  if (record !== "unclean" && record.kind !== "clean" && record.drained) {
+    // The drain finished, so nothing was lost: this is what Ctrl-C looks like, and §10's purpose is telling a crash
+    // from a kill, which means a kill that said goodbye must not be reported as one.
+    return {
+      id: "exit.last",
+      status: "ok",
+      summary: `stopped by ${record.signal ?? "a signal"} at ${record.at}, after the drain finished`,
+      detail:
+        "D-066: a drained exit is a clean one — this line is here to say so once, not to warn",
+    };
+  }
   if (record === "unclean" || record.kind !== "clean") {
     return {
       id: "exit.last",
@@ -361,18 +378,69 @@ function lastExitCheck(input: DoctorInput): Check {
   };
 }
 
-function gatewayChecks(): Check[] {
-  const why = { detail: "no Gateway to ask yet", fix: "crabby gateway start arrives with M1" };
-  return [
-    {
-      id: "gateway.listener",
-      status: "deferred",
-      summary: "listener mode (loopback by default, §2)",
-      ...why,
-    },
-    { id: "gateway.paired-clients", status: "deferred", summary: "paired clients", ...why },
-    { id: "gateway.tunnel", status: "deferred", summary: "tunnel state", ...why },
-  ];
+function gatewayChecks(layout: DataLayout): Check[] {
+  const info = readGatewayInfo(layout);
+  const paired = readCredentials(layout) !== undefined;
+
+  const listener: Check =
+    info.state === "live"
+      ? {
+          id: "gateway.listener",
+          status: "ok",
+          summary: `http://${info.info.host}:${info.info.port} (pid ${info.info.pid}, v${info.info.version})`,
+          detail: `up since ${info.info.startedAt}; loopback bind, which is the only kind this build offers`,
+        }
+      : info.state === "stale"
+        ? {
+            id: "gateway.listener",
+            status: "warn",
+            summary: `gateway.json names pid ${info.info.pid}, and that process is gone`,
+            detail: `the file says http://${info.info.host}:${info.info.port} — a stale one is a note, not a listener`,
+            fix: "crabby gateway start (a clean shutdown removes the file, so its survival means the last stop was not clean)",
+          }
+        : {
+            id: "gateway.listener",
+            status: "deferred",
+            summary: "listener mode (loopback by default, §2)",
+            detail: "nothing has published a listener in this data directory",
+            fix: "crabby gateway start",
+          };
+
+  const clients: Check =
+    info.state === "live" && paired
+      ? {
+          id: "gateway.paired-clients",
+          status: "note",
+          summary: "this device holds a paired identity",
+          detail: `client.json in ${layout.stateDir}, mode 0600; the list of every identity and their last use is \`crabby auth list\``,
+        }
+      : {
+          id: "gateway.paired-clients",
+          status: "deferred",
+          summary: "paired clients",
+          detail:
+            info.state === "absent"
+              ? "no listener to ask, and no identity to ask it with"
+              : "a Gateway is listening and this device has no token",
+          ...(info.state === "absent"
+            ? { fix: "crabby gateway start, then crabby auth pair --code <code>" }
+            : {
+                fix: "crabby auth pair --code <code> — the code is printed on the Gateway's own terminal at first run",
+              }),
+        };
+
+  // There is no tunnel in this build to report on, and the reason is a decision rather than an omission: `SECURITY.md`
+  // §13 keeps remote exposure out of the initial release, and `gateway start` refuses a non-loopback bind. Naming the
+  // workaround is the useful half of a `deferred` line.
+  const tunnel: Check = {
+    id: "gateway.tunnel",
+    status: "deferred",
+    summary: "tunnel state",
+    detail:
+      "no tunnel exists in this build; the Gateway binds loopback only and refuses a wider host",
+    fix: "from another device, use an SSH tunnel to 127.0.0.1 on this one",
+  };
+  return [listener, clients, tunnel];
 }
 
 export function redactCheck(check: Check): Check {

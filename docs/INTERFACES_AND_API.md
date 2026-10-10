@@ -31,7 +31,7 @@ Three properties every design choice below must keep:
 | Idempotency | Any request that can cause a side effect accepts `Idempotency-Key`; a replayed key returns the recorded result, never a second execution. |
 | Correlation | Every request carries or receives `X-Crabby-Request-Id`, echoed in errors and audit records. |
 | Errors | One envelope (§6); no stack traces, no provider bodies containing credentials (`SECURITY.md` §14). |
-| Pagination | Cursor-based (`?cursor=&limit=`), ordered by stable id, so a list does not shift while a task appends records. |
+| Pagination | Cursor-based (`?cursor=&limit=`), ordered by stable id, so a list does not shift while a task appends records. A page defaults to 50 and may not exceed 200 (D-079); asking for more is a `validation` error naming the ceiling rather than a silent clamp, because a client that wanted 5 000 rows has a bug the server must not hide. |
 | Concurrency | `If-Match`-style version tokens on config and session mutations, so two interfaces editing the same thing do not silently overwrite. |
 | Loopback default | The listener binds `127.0.0.1`/`::1` only; `--host` requires an explicit remote-mode acknowledgment (`SECURITY.md` §13). |
 | No ambient auth | No cookie jar, no automatic credential sending from a browser. Bearer token from the paired identity, explicitly delivered. |
@@ -163,7 +163,9 @@ Requirements on whichever transport ships:
   dropped.
 - A stream must never block a task. If delivery is slow, events are buffered or dropped with a recorded gap — the
   task keeps running.
-- SSE responses must disable proxy buffering (`X-Accel-Buffering: no`) and stay correct behind a Cloudflare tunnel.
+- SSE responses must disable proxy buffering (`X-Accel-Buffering: no`) and stay correct behind a Cloudflare tunnel. Interval: 15 s (D-079) — under D-074's 45 s idle-stream timeout on purpose, so a connection that
+  has gone quiet is demonstrably alive rather than merely slow, and a phone that sleeps for a minute still sees two
+  beats before anything declares the stream dead.
 
 ### 5.2 Event envelope
 
@@ -226,6 +228,9 @@ stream drops
 - **Accepted (D-049):** replay is per-task and count-bounded, not time-bounded — what a client needs after a
   three-second phone-network blip is *this task's* tail, not every event from the last hour. Outside the window the
   response carries the explicit gap marker and the client reconciles from `GET /tasks/{id}`.
+- The window is **200 events per task** (D-079), which is exactly one maximum-size page: a client reconnecting after
+  any list fetch it could have made can be caught up in a single round trip, and a gap is therefore a statement about
+  the tail rather than about how long the client was away.
 - The client-visible contract is: **events for display, GET for truth.**
 
 ## 6. Error Envelope
@@ -247,6 +252,25 @@ stream drops
 Classes: `validation`, `auth`, `policy`, `not-found`, `conflict`, `rate-limit`, `provider`, `resource-limit`,
 `platform-unsupported`, `internal`. HTTP status maps from the class; the `code` is the stable machine-facing value,
 because a status alone cannot express "denied by policy" versus "needs approval".
+
+The mapping is a table, not a convention, because two Gateways choosing two different statuses for `policy` is a
+difference a client can only discover by breaking (O-066, closed as D-077):
+
+| Class | Status | Why this one |
+| --- | --- | --- |
+| `validation` | `400` | The request was malformed; nothing about the server's state is implied. |
+| `auth` | `401` | Pairing or the token is the problem, and `WWW-Authenticate`-style advice belongs in the body. |
+| `policy` | `403` | A refusal, not a mystery: `402` is unused in practice, and what to do about it (answer the approval) is in `details`. |
+| `not-found` | `404` | One answer for an unknown path and an unknown id, so probing reveals nothing. |
+| `conflict` | `409` | The request was fine and the state was not — an `Idempotency-Key` reused with a different body is the case. |
+| `rate-limit` | `429` | Retryable by definition; `retryable: true` and the body's wait time are the client's whole instruction. |
+| `provider` | `502` | Upstream failed on our behalf; the caller's request was correct, which `500` would misattribute. |
+| `resource-limit` | `507` | The one class where repeating the identical request after freeing space is the documented fix (D-064's caps). |
+| `platform-unsupported` | `501` | "This device cannot", distinct from "you sent it wrong" — the same line D-074 draws between `timeout` and `failure`. |
+| `internal` | `500` | Everything else, with a message that never carries a stack trace. |
+
+`packages/gateway/errors.ts` holds the map and `tests/integration/gateway.test.ts` asserts all ten rows as one object,
+so a re-ordering is a test failure rather than a client surprise.
 
 ## 7. Interface Mapping
 
@@ -415,7 +439,9 @@ them later as an implementation shortcut.
 - Through a Quick Tunnel the public URL changes on restart — decided in D-066 (closing O-009): the Gateway prints the
   new URL on every start, never redirects or resurrects the old one, and shutdown drains in-flight requests for 5 s so
   a paired client sees a clean end rather than a hang. Clients must discover the current URL from the Gateway rather
-  than storing one permanently, and stale URLs must fail with an actionable error.
+  than storing one permanently, and stale URLs must fail with an actionable error. On the machine the Gateway runs
+  on, that discovery is a read of `gateway.json` in the state directory (D-078), which a local CLI, the TUI and a
+  browser page all use the same way; a tunnel URL is discovered from the Gateway itself, never from a remembered value.
 - Latency: typing on a phone is expensive. Command names stay short, ids are copyable, and defaults are meaningful
   so `crabby task run "…"` needs no flags for the common path.
 
@@ -430,6 +456,10 @@ them later as an implementation shortcut.
   runs exactly once.
 - **Idempotency tests:** replayed `Idempotency-Key` returns the recorded result without re-executing.
 - **Auth tests:** expired/revoked token, wrong origin, unauthorized Telegram sender — all rejected before routing.
+  Two of those rows name a policy this document has not written: a token *expiry* needs a lifetime, which §3.1 does not
+give one (revocation is the mechanism it specifies), and a *wrong origin* needs an `Origin` rule for the loopback
+listener, which §2's `No ambient auth` makes unclear. Both are **O-072** rather than a test to invent, and the
+unauthorized-sender row belongs to the Telegram slice that owns §3.3.
 - Fixtures and fakes come from the `mock/fake` provider so no test depends on a live API (`SECURITY.md` §17).
 
 ## 12. Decisions that used to be open here

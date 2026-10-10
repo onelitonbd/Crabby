@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-28 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-31 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -105,6 +105,25 @@ pipeability are properties of a process and not of a function. `crabby status` a
 Gateway-backed checks as `deferred` rather than as a tick. Four questions the slice found and deliberately did not
 answer are recorded as **O-066…O-069** instead of being closed with plausible numbers; `crabby doctor` will keep
 naming the largest of them (no `engines.node` pin) until M0's phone column is filled.
+
+**Delivered since — M1b, the Gateway and the state directory.** `packages/storage` opens one SQLite file, runs the
+migration ledger, and owns every statement: tasks with id-cursor paging, events with `seq` numbered per task from 1,
+redaction applied *on write* so a secret never reaches the file, and a payload past D-064's 64 KiB moved to
+`scratch/<taskId>/<eventId>.json` with a marker left behind instead of truncated bytes. `packages/gateway` is Fastify
+5 with the contract's own `validate()` installed as its validator (D-069's reason for TypeBox: one schema, one
+validator, no second dialect), pairing codes and bearer tokens as SHA-256 digests, an `Idempotency-Key` that replays
+the recorded answer or says `409`, `GET /tasks/:id/events` as the polling fallback §5.4 makes mandatory, and
+`GET /events` as SSE on a hijacked reply with a 15 s heartbeat and §5.4's explicit gap frame. Every route requires a
+token except the pairing redeem, per `SECURITY.md` §13's "reject every route, including health and SSE". `crabby
+gateway start`, `gateway status`, `status`, `auth pair|list|revoke`, `task ls` and `task show` are the CLI's side of
+it, and `tests/integration/gateway.test.ts` runs the whole surface against a real socket plus one spawned pair of
+processes. Three things this slice deliberately does **not** contain: `crabby task run`, because an executor is M2's
+and a command that created a task nothing would move is a mock with an exit code; `POST /admin/*`, because approval
+and policy are M2's engine and "an interface may request, display, and relay; it may never grant" has to be true from
+the first route; and any binding beyond `127.0.0.1`, per §13's "never offer them implicitly". The four unpriced
+numbers and the shapes the contracts required but the documents had not defined are recorded as D-077, D-078, D-079
+and **O-070/O-071/O-072** — named rather than smoothed over, which is also how §11's two untestable auth rows stayed
+untested instead of being satisfied by a check that asserted nothing.
 
 ## 4. Phase M2 — Core runtime and Gateway
 

@@ -5,6 +5,7 @@ import "./formats.ts";
 
 export { type Static, Type } from "@sinclair/typebox";
 export { Value } from "@sinclair/typebox/value";
+export * from "./clients.ts";
 export * from "./error.ts";
 export * from "./events.ts";
 export * from "./exit-codes.ts";

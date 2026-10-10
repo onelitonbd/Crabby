@@ -128,6 +128,23 @@ SQLite is a candidate, not a confirmed implementation choice. The comparison rec
 
 Concurrency note: SQLite allows one writer at a time. Crabby's write path should therefore funnel persistence through a bounded, serialized write queue rather than assume free parallel writes (relevant to D-023 controlled parallelism).
 
+### 4.1 Files in the state directory (D-078)
+
+The names are here because a name that lives only in code is a name an interface eventually hard-codes. `<stateDir>` is
+`~/.crabby` on Termux and Linux, and everything below is the whole footprint — a sixth file is a decision to record in
+`DECISIONS.md`, not a constant to add quietly:
+
+| File | Mode | What it is |
+| --- | --- | --- |
+| `config.json` | `0644` | Overrides only; the defaults stay in code (D-074). `AGENTS.md` names this file, so it is listed for completeness. |
+| `crabby.sqlite3` | `0600` dir-inherited | One database: tasks, events, client identities, pairing codes, idempotency records. `journal_mode = WAL`, `busy_timeout` from `limits.sqliteBusyTimeoutMs` (D-074). |
+| `crabby.sqlite3-wal`, `crabby.sqlite3-shm` | — | SQLite's own siblings, present while a writer is open. Online backup takes a checkpoint first. |
+| `scratch/<taskId>/` | `0700` | Overflow for a payload past D-064's 64 KiB inline cap, named `<eventId>.json`, pruned at startup past 24 h with the removal logged. One directory per task so a completed task's bytes leave as a unit. |
+| `vault/` | `0700` | D-066's secret store; the only directory whose contents may be referenced by name and never by value in a log line. |
+| `gateway.json` | `0600` | What the running Gateway publishes about its own listener: host, port, pid, `startedAt`, version. Written at `listen`, **removed by a clean shutdown**, so "stale file" and "no Gateway" are different observable states. |
+| `client.json` | `0600` | A paired client's own bearer token and the client id it belongs to. It is the client's config location in the same directory only because on a phone the client and the Gateway are one machine's two processes; the Gateway never reads it. |
+| `last-exit.json` | — | D-066's shutdown record: how the process left and whether the drain finished, which is what lets `doctor` tell a crash from a Ctrl-C. |
+
 ## 5. Storage Architecture
 
 The architecture should separate data access from the database engine.

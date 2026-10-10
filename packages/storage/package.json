@@ -1,0 +1,17 @@
+{
+  "name": "@crabby/storage",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SQLite persistence behind repositories, with migrations and the serialized write queue (docs/DATA_AND_MEMORY.md \u00a74/\u00a75)",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@crabby/api-contracts": "0.0.0",
+    "@crabby/platform": "0.0.0",
+    "better-sqlite3": "^13.0.3",
+    "@crabby/core": "0.0.0"
+  }
+}

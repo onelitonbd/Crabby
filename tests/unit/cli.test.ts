@@ -61,7 +61,10 @@ test("an unknown command is refused with exit 2 and a suggestion", () => {
   assert.match(typo.out, /did you mean `crabby task run`\?/, typo.out);
   const planned = crabby(["task", "run", "do a thing"]);
   assert.equal(planned.code, 2);
-  assert.match(planned.out, /not implemented yet — planned for M1/);
+  // M1b moved the *reason* : creating a task nothing will execute is not a command, so `task run` is planned for the
+  // runtime milestone and says so. The assertion keeps the shape of the sentence rather than a milestone that will
+  // age, because "which milestone" is a planning fact and "does help name it" is the contract.
+  assert.match(planned.out, /not implemented yet — planned for M\d/);
 });
 
 test("`init` creates the state dir, the vault at 700, and a config that holds no defaults", () => {
@@ -264,6 +267,46 @@ test("a secret-shaped value in the config never reaches `crabby doctor`, in eith
     "while still naming the key, which is the point of redacting instead of omitting",
   );
 });
+
+test("`doctor` reads the listener a Gateway published, and reports one whose pid is gone", () => {
+  const state = path.join(tempDir(), ".crabby");
+  assert.equal(crabby(["init"], state).code, 0);
+  const info = (pid: number) =>
+    JSON.stringify({
+      host: "127.0.0.1",
+      port: 4188,
+      pid,
+      startedAt: "2026-10-10T00:00:00.000Z",
+      version: "0.0.0",
+    });
+  // Pid 1 answers `EPERM` rather than `ESRCH` to a liveness probe, and that is the branch `isPidAlive` has to get
+  // right: a process that exists but belongs to someone else *is* alive, and a `doctor` that called it dead would
+  // send the user to start a second Gateway beside a running one.
+  writeFileSync(path.join(state, "gateway.json"), info(1));
+  const live = crabby(["doctor", "--json"], state);
+  const listener = checkOf(live.out, "gateway.listener");
+  assert.equal(listener.status, "ok", live.out);
+  assert.match(String(listener.summary), /127\.0\.0\.1:4188/);
+  const clients = checkOf(live.out, "gateway.paired-clients");
+  assert.equal(clients.status, "deferred");
+  assert.match(
+    String(clients.fix),
+    /crabby auth pair --code/,
+    "a live listener with no token needs pairing, not `gateway start`",
+  );
+
+  writeFileSync(path.join(state, "gateway.json"), info(4_000_000));
+  const stale = checkOf(crabby(["doctor", "--json"], state).out, "gateway.listener");
+  assert.equal(stale.status, "warn", "a file naming a dead process is a finding, not a listener");
+  assert.match(String(stale.fix), /crabby gateway start/);
+});
+
+function checkOf(json: string, id: string): Record<string, unknown> {
+  const payload = JSON.parse(json) as { checks: Record<string, unknown>[] };
+  const found = payload.checks.find((c) => c.id === id);
+  assert.ok(found, `doctor dropped the ${id} check: ${payload.checks.map((c) => c.id).join(", ")}`);
+  return found;
+}
 
 function readMode(stateDir: string, child: string): number {
   return statSync(path.join(stateDir, child)).mode & 0o777;

@@ -86,11 +86,16 @@ export const Event = Type.Object(
 
 export type Event = Static<typeof Event>;
 
-/** §5.2's payload rule: a cap with a truncation marker, large tool output referenced by id rather than inlined. The
- *  cap is deliberately *not* a number in this file — no document names one, and D-074's limits table is where a
- *  byte-size ceiling belongs (it already carries the nine timeouts). Callers pass a cap in; `TruncationMarker` is
- *  what a client reads when bytes were dropped. */
-export function payloadTooBig(payload: Record<string, unknown>, capBytes: number): boolean {
+/** §5.2 requires "a payload size cap with a truncation marker; large tool output is referenced by id, not inlined",
+ *  and the number is already decided: O-035 closed as D-064's "64 KiB inline; the rest to the session scratch
+ *  directory with the path printed", and D-065 says the event payload limit is that same cap. `TruncationMarker` is
+ *  what a client reads when bytes were moved out, and `reference` names where they went. */
+export const MAX_EVENT_PAYLOAD_BYTES = 64 * 1024;
+
+export function payloadTooBig(
+  payload: Record<string, unknown>,
+  capBytes = MAX_EVENT_PAYLOAD_BYTES,
+): boolean {
   if (!Number.isInteger(capBytes) || capBytes <= 0)
     throw new TypeError("payload cap must be a positive byte count");
   return JSON.stringify(payload).length > capBytes;

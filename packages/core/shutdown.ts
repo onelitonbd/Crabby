@@ -16,6 +16,11 @@ export interface LastExitRecord {
   readonly kind: ExitKind;
   readonly at: string;
   readonly signal?: string;
+  /** Whether every registered step finished inside D-066's drain. `kind` answers *how* the process was stopped —
+   *  Ctrl-C and a phone's background kill are both `signal`, and the docs are right to keep them identical — while
+   *  this answers whether the process got to say goodbye. `doctor` needs both to avoid reporting a tidy Ctrl-C as a
+   *  crash, which is the difference §10 asks it to explain. */
+  readonly drained?: boolean;
 }
 
 /** The filename is this module's choice: §10 requires that the runtime *record* an unclean exit and that `doctor` be
@@ -78,7 +83,12 @@ export function createShutdown(
       }
     }
     // Written last: the record is only trustworthy once every step has had its chance.
-    writeLastExit(layout, { kind, at: new Date().toISOString(), ...(signal ? { signal } : {}) });
+    writeLastExit(layout, {
+      kind,
+      at: new Date().toISOString(),
+      ...(signal ? { signal } : {}),
+      ...(kind === "clean" ? {} : { drained: errors.length === 0 }),
+    });
     return { errors };
   }
 

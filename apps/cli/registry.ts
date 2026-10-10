@@ -3,9 +3,11 @@
 // source for the CLI: help text, the unknown-command message, and the dispatch table all read this array, so adding
 // a command without declaring it here is not possible.
 //
-// Only the Setup row of §7.1's table is implemented in M1a, plus the `config` verbs D-074 and D-060 need. Everything
-// else is `planned` so that `--help` can be honest about the difference instead of silently omitting it: a user who
-// reads a list of four commands should not have to guess whether the other forty exist somewhere else.
+// The Setup and Gateway rows of §7.1's table plus the `config` verbs D-074 and D-060 need. Everything else is
+// `planned`, so that `--help` can be honest about the difference instead of silently omitting it: a user who reads a
+// list of eleven commands should not have to guess whether the other forty exist somewhere else. A verb is promoted
+// here only when it has a route behind it — `task run` stays `planned` in M1b because an executor is M2's job, and a
+// command that created a task nothing would move would be a mock with an exit code.
 export interface CommandSpec {
   readonly noun: string;
   readonly verb?: string;
@@ -65,18 +67,58 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     noun: "status",
-    summary: "gateway, task and approval state at a glance",
+    summary: "gateway, storage, task and stream state at a glance",
     flags: ["--json"],
-    status: "planned",
-    milestone: "M1",
+    status: "ready",
   },
   {
     noun: "gateway",
     verb: "start",
-    summary: "run the Gateway on 127.0.0.1",
-    flags: ["--host", "--log-level"],
-    status: "planned",
-    milestone: "M1",
+    summary: "run the Gateway on loopback until Ctrl-C (D-066 drain)",
+    flags: ["--host H", "--port N"],
+    status: "ready",
+  },
+  {
+    noun: "gateway",
+    verb: "status",
+    summary: "is a Gateway running here, and is the pid alive",
+    flags: ["--json"],
+    status: "ready",
+  },
+  {
+    noun: "auth",
+    verb: "pair",
+    summary: "redeem a code with --code, or mint one for another interface",
+    flags: ["--code CODE", "--name NAME", "--interface I"],
+    status: "ready",
+  },
+  {
+    noun: "auth",
+    verb: "list",
+    summary: "the identities this Gateway will accept",
+    flags: ["--json"],
+    status: "ready",
+  },
+  {
+    noun: "auth",
+    verb: "revoke",
+    summary: "end an identity; the next request with its token fails",
+    flags: ["--json"],
+    status: "ready",
+  },
+  {
+    noun: "task",
+    verb: "ls",
+    summary: "list tasks, newest state first by id order",
+    flags: ["--state S", "--limit N", "--cursor C", "--json"],
+    status: "ready",
+  },
+  {
+    noun: "task",
+    verb: "show",
+    summary: "one task plus the tail of its events",
+    flags: ["--json"],
+    status: "ready",
   },
   {
     noun: "task",
@@ -84,7 +126,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: "create a task and follow it (blocks; `--detach` for scripts)",
     flags: ["--json", "--detach"],
     status: "planned",
-    milestone: "M1",
+    milestone: "M2 (the runtime that executes a task)",
   },
 ];
 
@@ -112,9 +154,12 @@ export function suggest(noun: string, verb?: string): string | undefined {
 export function helpText(): string {
   const ready = COMMANDS.filter((s) => s.status === "ready");
   const planned = COMMANDS.filter((s) => s.status === "planned");
-  const rows = ready.map((s) => `  ${commandName(s).padEnd(20)}${s.summary}`);
+  // Width is computed, not a literal 20, because a literal is a promise that the longest command name stays short —
+  // and the moment one row is two characters too long the whole list runs together (`crabby config schemaprint…`).
+  const width = Math.max(20, ...COMMANDS.map((s) => commandName(s).length + 2));
+  const rows = ready.map((s) => `  ${commandName(s).padEnd(width)}${s.summary}`);
   const plannedRows = planned.map(
-    (s) => `  ${commandName(s).padEnd(20)}${s.summary} — planned for ${s.milestone}`,
+    (s) => `  ${commandName(s).padEnd(width)}${s.summary} — planned for ${s.milestone}`,
   );
   return [
     "crabby <noun> <verb> [args] [--flags]",

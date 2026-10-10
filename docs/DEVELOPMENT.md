@@ -18,6 +18,7 @@
 | Runtime | `node` directly, in both modes: type stripping runs `.ts` without flags or a loader (D-070), and `tsx` is not a dependency because it pulls `esbuild`'s platform binary into the dev loop for no capability the project needs (D-069). Compiled output for release; no postinstall scripts in Crabby packages |
 | Test runner | `node:test` with `node --test`, discovery of `*.test.ts`, coverage through `--experimental-test-coverage` (D-069). No Vitest, no Jest, no runner config file — the conventions are the runtime's |
 | Native toolchain (Termux) | `pkg install python make clang` for `better-sqlite3` source builds — documented, and checked by `crabby doctor`. Not automatic: the package ships bundled prebuilds and its loader prefers them, and it picks between them by asking whether glibc is absent, which is also true on bionic (`probes/p3.mjs` measured the loader's rule; the phone still owes the compile time) |
+| Types for the native driver | `@types/better-sqlite3` is a devDependency and the project's only `@types/*` package: `better-sqlite3` ships no bundled types, so `packages/storage` failed strict `tsc` with TS7016 until it was added (observed here, not inferred) — every other dependency D-060 names carries its own types |
 | Editor | Any; `tsconfig` and lint config are the contract, not a specific IDE |
 
 `engines.node` in the root `package.json` is authoritative. Anything that only works on the developer's machine is
@@ -28,6 +29,15 @@ a bug, and on this project "the developer's machine" may be a phone.
 Per `ARCHITECTURE.md` §18. Practical rule: create a package only when it holds code and has a real owner; the
 proposed tree is a map, not a checklist. `packages/api-contracts` is the only package every interface may import
 from, and interface apps never import core internals directly.
+
+As of M1b the tree holds six real directories and no empty ones: `packages/api-contracts`, `packages/platform`,
+`packages/core`, `packages/storage`, `packages/gateway` and `apps/cli`. `packages/storage` owns the database handle, the
+migration ledger, and every statement — a route never writes SQL — and `packages/gateway` owns both halves of the HTTP
+boundary: the Fastify app and `client.ts`, the fetch client with the origin-discovery rule, which lives here rather
+than in `apps/cli` so the TUI, the Web bundle and the bot cannot each invent a URL (D-005). The rule that made the
+split meaningful is that `apps/cli` imports `@crabby/storage` **only** for `openDatabase` and `migrate` inside
+`crabby gateway start`, the one command that *is* the Gateway process; a chat command that read SQLite directly would
+be the boundary violation §19 of `ARCHITECTURE.md` exists to name.
 
 ## 3. Scripts
 
@@ -47,10 +57,12 @@ from, and interface apps never import core internals directly.
 | `npm run probe:results` | Rewrites the generated block in `probes/RESULTS.md` from `probes/out/*.json`. `--check` fails when the prose and the JSON disagree — the F-24 lesson, applied to the file that carries M0's numbers |
 | `npm run test:termux` | `node probes/run.mjs --device`: the whole probe set plus the copy-paste checklist for the phone. Run manually before release, and in CI only if a runner exists (O-050) |
 
-**What exists before M0 closes:** the manifest carries `test`, `test:coverage`, `lint`, `format`, `typecheck`, the
-`docs:*` trio and the `probe:*` set. The other rows above are the commands each milestone adds — `dev`, `build`,
-`test:integration`, `test:security`, `test:live` and `test:parity` need code to point at, and a script that exists but
-does not work is the failure mode D-060's "commands match the manifest" rule is there to prevent.
+**What exists before M0 closes:** the manifest carries `test`, `test:coverage`, `test:integration`, `lint`, `format`,
+`typecheck`, the `docs:*` trio and the `probe:*` set. `test:integration` was added the moment `tests/integration/` had a
+file in it, because §3's table listed it while the directory was empty and D-060's "commands match the manifest" rule
+is bidirectional: a document may not promise a script the manifest lacks any more than the manifest may ship one that
+does nothing. The remaining rows above — `dev`, `build`, `test:security`, `test:live`, `test:parity` — are the commands
+their milestones add, and stay unlisted in `package.json` until then.
 
 ## 4. Coding Conventions
 
@@ -78,8 +90,8 @@ does not work is the failure mode D-060's "commands match the manifest" rule is 
 | Layer | Scope | Notes |
 | --- | --- | --- |
 | Unit | Policy, tier computation, task state machine, context budgeting, capability resolution | Must be deterministic and network-free |
-| Contract | Every endpoint against the shared schema | Generated from `api-contracts`, per `docs/INTERFACES_AND_API.md` §11 |
-| Integration | Gateway + storage + task lifecycle + restart recovery | Temp data dirs only; never a developer's real `~/.crabby` |
+| Contract | Every endpoint against the shared schema | `tests/integration/gateway.test.ts` drives the routes over a real socket with `@sinclair/typebox` validating both directions, which is §11's harness; the §6 class → status table is asserted as one object so a re-ordering is a failure (D-077) |
+| Integration | Gateway + storage + task lifecycle + restart recovery | Temp data dirs only; never a developer's real `~/.crabby`. The same file spawns a second CLI process and a Gateway process, pairs them, and asserts that SIGTERM drains and removes `gateway.json` — the half of `probes/P-003` the plan asked a phone for, made a test instead of a report |
 | Security | Deny cases, escalation, injection fixtures, redaction, auth rejection | `SECURITY.md` §17 |
 | Parity | All four interfaces reach every matrix row | Blocks release |
 | Platform smoke | Termux, Linux, macOS | Termux results recorded in `DECISIONS.md`, not assumed |

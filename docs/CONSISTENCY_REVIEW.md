@@ -5,9 +5,9 @@
 > documents, it needs the two things a plan cannot supply: the element review, and the seven M0 measurements.
 >
 > **Reviewed:** 22 documents (16 planning at `*.md` and `docs/*.md`, 4 element inventories, the review index and
-> this file), most recently on 2026-10-10 — findings F-13…F-28 are from the five 2026-10-10 passes (the (R) round,
-> the finalization round, and the first implementation pass, which is where F-27 and F-28 came from), so every earlier
-> finding has been re-checked against the documents as they now stand.
+> this file), most recently on 2026-10-10 — findings F-13…F-31 are from the six 2026-10-10 passes (the (R) round,
+> the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from), so
+> every earlier finding has been re-checked against the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
 > a scratch pad: every finding below is either fixed with a decision ID, or explicitly listed as still open.
@@ -488,6 +488,49 @@ asserts that a `fail` never comes from that check. The alternative was to write 
 let a phone discover the mistake later, which is the failure mode D-070 was written to prevent. The same reasoning made
 `doctor`'s three Gateway-backed checks `deferred` instead of `ok`: a diagnostic that reports a component nobody has
 built yet is how a green check mark becomes worth less than a red one.
+
+### F-29 — A finding I filed against the documents, where the documents had already answered
+**Severity: high for the process, zero for the code.** While sizing the event payload cap, I searched `DECISIONS.md`
+and `docs/DATA_AND_MEMORY.md` for the phrases "payload cap", "max bytes" and "truncation", found nothing, and opened
+**O-068** for an undocumented number — three days after D-064 had written "64 KiB inline, larger goes to a file in the
+session scratch" and D-065 had restated it as the event payload limit (`DECISIONS.md` D-064/D-065,
+`docs/DATA_AND_MEMORY.md` §5). The number was never missing; my query was. Two rules come out of this and both are
+now in how this project searches: **grep the unit as well as the concept** (a document that decided something wrote
+the digit, and "64" is findable while "payload cap" may not be), and **write a gap as an observation rather than a
+conclusion** — a comment in `packages/api-contracts/events.ts` claimed "no document names a size", which is a claim
+about a corpus, not about my grep, and it stayed wrong for a whole round until it was replaced with "no row found for".
+The four rows that were genuinely undocumented (the class → status map, the page ceiling, the database filename, the
+heartbeat interval) survived exactly this treatment: each was confirmed by an exhaustive pass over the section that
+owned it before it was opened, and they are O-066, O-067 and O-069 — closed as D-077, D-078, D-079. O-068 closed by
+citation, with the misfiling recorded here rather than edited out.
+
+### F-30 — A script the documents promised and the manifest did not have
+**Severity: low, and the rule turns out to be bidirectional.** `docs/DEVELOPMENT.md` §3's table listed
+`npm run test:integration` while `package.json` had no such script and `tests/integration/` was an empty directory —
+the state §3's own footnote describes as intentional ("these scripts need code to point at, and a script that exists
+but does not work is the failure mode D-060's rule prevents"). Writing the harness made the asymmetry visible from the
+other side: a *document* advertising a command nobody can run is the same defect as the command that exits 0 while
+doing nothing, and `scripts/check-docs.py` catches neither, because it checks references, not reachability. Both
+halves are now closed together — `tests/integration/gateway.test.ts` exists, the manifest carries
+`test:integration` as a subset runner over that directory, and §3's footnote names which scripts still do not exist
+(`dev`, `build`, `test:security`, `test:live`, `test:parity`) instead of leaving a reader to discover it by typing one.
+The general rule, for the next milestone that "already has it in the docs": a table of commands is a promise about the
+manifest, so it is verified by running the command, not by reading the row.
+
+### F-31 — §5.1 required disabling proxy buffering and left out the one line that makes SSE work at all
+**Severity: medium, and M1c inherits it.** The first `GET /events` implementation opened the stream, framed its
+frames, and delivered none of them: `reply.hijack()` hands back a raw response whose `transfer-encoding` is already
+negotiated as `chunked`, so writing frames to `reply.raw.socket` — which is what "hijacked, therefore mine" suggests —
+puts a frame's text where a chunk size belongs. `curl` tolerated it and printed nothing; Node's `fetch` answered
+`HPE_INVALID_CHUNK_SIZE` and killed the stream, and a second bug hid behind it, because `writeHead` only queues the
+status line so a client waiting for headers saw a hung server until the first heartbeat 15 s later. The fixes are two
+lines (`write` to the `ServerResponse`, and `flushHeaders()` on open) and `tests/integration/gateway.test.ts` now
+asserts a real frame over a real socket, but the reason this is a *review* finding is that `docs/INTERFACES_AND_API.md`
+§5.1 specifies the parts a client can see (`X-Accel-Buffering: no`, heartbeats, `Last-Event-ID`) and says nothing about
+the one rule the server has to keep for any of it to arrive, which every implementer of a second stream — the TUI's
+task tail, the browser's `EventSource`, Telegram's forwarder — is left to rediscover. Recorded here, and the client
+side of the same rule ("a stream you are not draining must still be read or cancelled, because a paused reader is
+backpressure on the task") belongs in M1c's element rows rather than in a comment in `sse.ts`.
 
 
 ## 3. Checks That Passed

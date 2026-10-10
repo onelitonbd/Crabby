@@ -42,8 +42,12 @@ test("`crabby --help` prints the grammar and the exit-code contract, and exits 0
     run.out,
     /exit codes: 0 success, 1 failure, 2 usage\/validation, 3 needs-approval, 4 platform-unsupported/,
   );
+  // A planned command may not say "planned" alone: it names either a phase in `docs/ROADMAP.md` or, for something the
+  // plan defers *by decision* rather than by sequence, the section that defers it. The tunnel is that case — F-36
+  // records that no phase in the roadmap owns it, which is exactly why the help text cites `SECURITY.md` §13 instead of
+  // inventing an M-number nobody scheduled.
   for (const line of run.out.split("\n")) {
-    if (line.includes("planned for")) assert.match(line, /M\d/);
+    if (line.includes("planned for")) assert.match(line, /M\d|§/);
   }
   const ESCAPE = String.fromCharCode(27);
   assert.ok(!run.out.includes(ESCAPE), "help must stay free of color when piped (§7.1)");

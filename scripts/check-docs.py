@@ -85,15 +85,6 @@ def inventory(body: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def review_elements(body: str) -> list[tuple[str, str]]:
-    """(id, element-column text) for every row in a review inventory."""
-    out: list[tuple[str, str]] = []
-    for line in body.splitlines():
-        m = REVIEW_ROW_RE.match(line.strip())
-        if m:
-            out.append((m.group(1), [c.strip() for c in m.group(2).split("|")][0]))
-    return out
-
 
 def defined_ids(decisions: str) -> dict[str, str]:
     """Rows like `| D-001 | ... |` in the decision register define those IDs."""
@@ -346,61 +337,16 @@ def main() -> int:
             problems.append(f"DECISIONS.md: counter {label!r} should start with {want!r}")
 
 
-    # 10. the command surface must be the same set in every direction. "A command cannot exist in one interface
-    #     only" is prose in `docs/INTERFACES_AND_API.md`; here it is a set comparison. Two things it caught on the
-    #     first run: §7.1 listed fewer commands than §8 required, and `docs/review/TELEGRAM.md` named a command in a
-    #     sentence instead of as an element.
+    # 10. retired here, on purpose: the command-surface and tool-registry comparison moved to `scripts/parity.ts` in
+    #     M1c, because a Python check can read the documents but cannot import `packages/policy`'s registry or
+    #     `apps/cli`'s grammar. Reading those files as text is how the parity matrix stayed able to drift: the check
+    #     compared prose with prose, and both could be wrong together. `npm run test:parity` (CI's `test:parity` job)
+    #     now compares the documents against the code that runs, and also regenerates §8's table from its annotations.
+    #     Rules 11 and 12 stay below, because they check whether `docs/review/*` inventories are *complete*, which is a
+    #     property of the documents alone and needs no import of anything.
     iface = bodies.get(ROOT / "docs" / "INTERFACES_AND_API.md", "")
     cli_md = bodies.get(ROOT / "docs" / "review" / "CLI.md", "")
     tg_md = bodies.get(ROOT / "docs" / "review" / "TELEGRAM.md", "")
-
-    def first_table(body: str, heading: str) -> list[list[str]]:
-        """The first pipe table after `heading`, skipping whatever prose sits between them."""
-        at = body.find(heading)
-        if at < 0:
-            return []
-        rows = []
-        for line in body[at:].splitlines():
-            if line.startswith("|"):
-                if not set(line) <= set("|- "):
-                    rows.append([c.strip() for c in line.strip().strip("|").split("|")])
-            elif rows:
-                break
-        return rows
-
-    cmd_cell = re.compile(r"`([a-z][a-z0-9-]*)(?:[ /<][^`]*)?`")
-    cli_nouns: set[str] = set()
-    tg_spec: set[str] = set()
-    for row in first_table(iface, "### 7.1 CLI"):
-        for cell in row[1:] if len(row) > 1 else []:
-            cli_nouns |= set(cmd_cell.findall(cell))
-    for row in first_table(iface, "## 8. Feature Parity Matrix"):
-        if len(row) < 6:
-            continue
-        cli_nouns |= set(cmd_cell.findall(row[2]))
-        tg_spec |= {c for c in re.findall(r"`/([a-z]+)", row[5])}
-    sec74 = re.search(r"^### 7\.4 Telegram\n(.*?)\n## 8", iface, flags=re.S | re.M)
-    if sec74:
-        tg_spec |= {c for c in re.findall(r"`/([a-z]+)", sec74.group(1))}
-    if not cli_nouns or not tg_spec:
-        problems.append(
-            "scripts/check-docs.py: the parity check read no commands out of `docs/INTERFACES_AND_API.md` — the "
-            "§7.1/§8 tables changed shape, so the check itself needs updating"
-        )
-    # an inventory names a command in the element column, so that is where it has to be found: matching anywhere
-    # in the file let "context window" stand in for `crabby context show`, and a build-tool mention for `tools ls`.
-    cli_words = {w for _, el in review_elements(cli_md) for w in re.findall(r"[a-z][a-z0-9-]*", el.lower())}
-    for noun in sorted(cli_nouns - cli_words):
-        problems.append(
-            f"docs/review/CLI.md: no row names the command `{noun}` — the grammar and the parity matrix both "
-            f"require it, so the CLI inventory has to carry it as an element"
-        )
-    tg_inv = {m.group(1) for _, el in review_elements(tg_md) if (m := re.match(r"^/([a-z]+)$", el))}
-    for cmd in sorted(tg_spec - tg_inv):
-        problems.append(f"docs/review/TELEGRAM.md: command /{cmd} is required by §7.4/§8 but no row names it")
-    for cmd in sorted(tg_inv - tg_spec):
-        problems.append(f"docs/review/TELEGRAM.md: command /{cmd} is proposed here but absent from §7.4's list")
-
 
     # 11. a screen that has no region has no elements, and an element-less screen is deleted by the next
     #     regeneration pass (`docs/UI_UX_SPEC.md` §2.2 and the TUI required views in `docs/INTERFACES_AND_API.md`

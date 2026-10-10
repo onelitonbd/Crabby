@@ -27,6 +27,7 @@ import {
   STATUS_BY_CLASS,
 } from "@crabby/gateway";
 import { dataLayout } from "@crabby/platform";
+import { CAPABILITY_NAMES, PENDING_RECORD_FIELDS, TIERS, TOOL_REGISTRY } from "@crabby/policy";
 import {
   appendEvent,
   DB_FILE_NAME,
@@ -51,7 +52,11 @@ interface Harness {
   close(): Promise<void>;
 }
 
-async function boot(): Promise<Harness> {
+function boot(options: { platformFacts?: { isTermux: boolean } } = {}): Promise<Harness> {
+  return bootWith(options);
+}
+
+async function bootWith(options: { platformFacts?: { isTermux: boolean } }): Promise<Harness> {
   const dir = mkdtempSync(path.join(tmpdir(), "crabby-gateway-"));
   const layout = dataLayout(dir);
   const handle = openDatabase(path.join(dir, DB_FILE_NAME));
@@ -64,6 +69,7 @@ async function boot(): Promise<Harness> {
     version: "test",
     startedAt: new Date(),
     listenerMode: "local",
+    ...(options.platformFacts ? { platformFacts: options.platformFacts } : {}),
   });
   await built.app.listen({ host: "127.0.0.1", port: 0 });
   const address = built.app.server.address();
@@ -107,6 +113,9 @@ describe("gateway over http", () => {
       "/api/v1/status",
       "/api/v1/diagnostics",
       "/api/v1/tasks",
+      // §4.4 documents `GET /tools` as "registry with tier, capability, and platform availability", and a route that
+      // answered without a token would leak which tools a device has to an unauthenticated probe.
+      "/api/v1/tools",
     ]) {
       await assert.rejects(
         async () => await bare.request(route),
@@ -167,6 +176,11 @@ describe("gateway over http", () => {
       if (row.state === "absent")
         assert.ok(row.reason, `${name} must name the milestone that brings it`);
     }
+    assert.equal(
+      body.subsystems.providers?.state,
+      "contract-only",
+      "M1c landed the §3.1 contract, the fake adapter, and the §7 suite; the adapters are still M2's",
+    );
   });
 
   it("creates a task and answers with the record the contract describes", async () => {
@@ -545,6 +559,157 @@ describe("gateway over http", () => {
   });
 });
 
+describe("the tool registry over http (§4.4's GET /tools row)", () => {
+  interface ToolsBody {
+    items: {
+      id: string;
+      qualifier?: string;
+      source: string;
+      capabilities: string[];
+      riskTier: string;
+      tierText: string;
+      enabled: boolean;
+      enabledReason?: string;
+      availability: { available: boolean; requires: string; reason?: string };
+      deferred?: boolean;
+      deferralReason?: string;
+      pendingRecordFields: string[];
+    }[];
+    count: number;
+    tiers: string[];
+    capabilities: { name: string; grants: string }[];
+    registry: { source: string; rows: number; digest: string };
+  }
+
+  // A harness per platform, because `platformFacts` is a build-time input to the route and mutating `process.env`
+  // between two requests would test the test rather than the route.
+  async function fetchTools(platformFacts: { isTermux: boolean }): Promise<ToolsBody> {
+    const harness = await boot({ platformFacts });
+    try {
+      return (await harness.client.tools()).body as ToolsBody;
+    } finally {
+      await harness.close();
+    }
+  }
+
+  it("answers with exactly the rows §4.2 defines, at the tiers §4.2 assigns", async () => {
+    const body = await fetchTools({ isTermux: false });
+    assert.equal(
+      body.count,
+      body.items.length,
+      "a count that disagrees with the page is a paging bug waiting to hide",
+    );
+    assert.equal(body.registry.rows, TOOL_REGISTRY.length);
+    assert.deepEqual(body.tiers, [...TIERS]);
+    // The registry *is* the answer: an HTTP copy that disagreed with the in-process table would mean the four
+    // interfaces in M3 each render their own idea of a tool's tier.
+    const expected = new Map(
+      TOOL_REGISTRY.map((spec) => [`${spec.tool}#${spec.qualifier ?? ""}`, spec]),
+    );
+    assert.equal(body.items.length, expected.size, "the route added or dropped a row");
+    for (const item of body.items) {
+      const spec = expected.get(`${item.id}#${item.qualifier ?? ""}`);
+      assert.ok(spec, `${item.id} came from nowhere`);
+      assert.equal(
+        item.riskTier,
+        spec?.tier,
+        `${item.id}'s tier moved between the table and the wire`,
+      );
+      assert.deepEqual(
+        item.capabilities,
+        [...(spec?.capabilities ?? [])],
+        `${item.id}'s capabilities moved`,
+      );
+      assert.equal(
+        item.tierText,
+        spec?.tierText ?? spec?.tier,
+        `${item.id} lost the wording its tier cell had`,
+      );
+    }
+    assert.deepEqual(
+      body.capabilities.map((row) => row.name),
+      [...CAPABILITY_NAMES],
+      "the vocabulary the route publishes must be the vocabulary policy enforces",
+    );
+  });
+
+  it("reports platform availability as a reason rather than a broken row (C10-04)", async () => {
+    const desktop = await fetchTools({ isTermux: false });
+    const phone = await fetchTools({ isTermux: true });
+    const desktopTermux = desktop.items.filter((item) => item.availability.requires === "termux");
+    assert.ok(
+      desktopTermux.length >= 4,
+      "the termux-api rows have to exist before their absence means anything",
+    );
+    for (const item of desktopTermux) {
+      assert.equal(item.availability.available, false, `${item.id} cannot run off Termux`);
+      assert.ok(
+        (item.availability.reason ?? "").length > 20,
+        `${item.id} was reported unavailable with no reason, and §4.1 requires one`,
+      );
+    }
+    for (const item of phone.items.filter((row) => row.availability.requires === "termux")) {
+      assert.equal(item.availability.available, true, `${item.id} is available under Termux`);
+      assert.equal(
+        item.availability.reason,
+        undefined,
+        "an available tool must not carry an excuse",
+      );
+    }
+    // Availability is the only difference the platform may make: the tiers stay identical, or a device could talk its
+    // way into a cheaper approval by claiming to be a desktop.
+    assert.deepEqual(
+      desktop.items.map((item) => `${item.id}:${item.riskTier}`),
+      phone.items.map((item) => `${item.id}:${item.riskTier}`),
+      "a platform may change availability, never a tier",
+    );
+  });
+
+  it("says which §4.1 fields the runtime has to fill in, and which tools are deferred", async () => {
+    const body = await fetchTools({ isTermux: false });
+    for (const item of body.items) {
+      assert.deepEqual(
+        [...item.pendingRecordFields],
+        [...PENDING_RECORD_FIELDS],
+        "every row is missing the same runtime fields, and saying so is the point",
+      );
+      if (item.enabled) continue;
+      assert.ok(
+        (item.enabledReason ?? "").length > 20,
+        `${item.id} is disabled with no explanation`,
+      );
+    }
+    const shell = body.items.find(
+      (item) => item.id === "shell.run" && item.qualifier === undefined,
+    );
+    assert.equal(shell?.enabled, false, "§4.2: the shell.run capability is off by default");
+    assert.match(shell?.enabledReason ?? "", /off by default/);
+    const blocked = body.items.filter((item) => item.deferred);
+    assert.ok(
+      blocked.length >= 1,
+      "a first-release block has to show up as deferred, not as silence",
+    );
+    for (const item of blocked) assert.match(item.deferralReason ?? "", /first release|blocked/i);
+  });
+
+  it("carries a digest two devices can compare without diffing 45 lines", async () => {
+    const first = await fetchTools({ isTermux: false });
+    const second = await fetchTools({ isTermux: false });
+    assert.equal(
+      first.registry.digest,
+      second.registry.digest,
+      "the same build must print the same digest twice",
+    );
+    assert.match(first.registry.digest, /^[0-9a-f]{12}$/);
+    const phone = await fetchTools({ isTermux: true });
+    assert.notEqual(
+      first.registry.digest,
+      phone.registry.digest,
+      "the digest covers availability, so a desktop and a phone must not look identical",
+    );
+  });
+});
+
 describe("a spawned gateway and a spawned cli (P-003)", () => {
   let dir: string;
   let child: ChildProcess | undefined;
@@ -622,6 +787,38 @@ describe("a spawned gateway and a spawned cli (P-003)", () => {
     assert.equal(status.code, 0, status.stdout);
     assert.match(status.stdout, new RegExp(`http://127\\.0\\.0\\.1:${info.port}`));
     assert.match(status.stdout, /tasks +queued 1/);
+
+    // C10-04's row, end to end: a spawned CLI asking a spawned Gateway for the registry. `tools ls --json` is the
+    // machine form of the same answer the Web's tools pane will render in M3, and this is the test that says the two
+    // cannot drift — there is one route behind both.
+    const tools = runCli(dir, ["tools", "ls", "--json"]);
+    assert.equal(tools.code, 0, tools.stdout);
+    const page = JSON.parse(tools.stdout) as {
+      ok: boolean;
+      items: { id: string; riskTier: string; availability: { available: boolean } }[];
+      registry: { digest: string; rows: number };
+      fixes?: string[];
+    };
+    assert.equal(page.ok, true);
+    assert.ok(page.items.length >= 40, `the CLI printed ${page.items.length} tools`);
+    assert.ok(page.items.some((row) => row.id === "shell.run" && row.riskTier === "T2"));
+    assert.ok(
+      page.items.every((row) => row.availability.available || row.id.startsWith("termux-")),
+      "only the Termux:API rows may be unavailable on this host",
+    );
+    assert.match(page.registry.digest, /^[0-9a-f]{12}$/);
+    assert.ok(
+      (page.fixes ?? []).some((line) => /sideEffects/.test(line)),
+      "the pending §4.1 fields have to be named in the document, not only in the terminal",
+    );
+    const humanTools = runCli(dir, ["tools", "ls"]);
+    assert.equal(humanTools.code, 0, humanTools.stdout);
+    assert.match(humanTools.stdout, /^shell\.run\s+T2/m, "one line per tool, tier first");
+    assert.equal(
+      runCli(dir, ["tools"]).code,
+      2,
+      "a noun with one documented verb answers 'which verb?' with the usage exit",
+    );
 
     child.kill("SIGTERM");
     await waitGone(child, 12_000);

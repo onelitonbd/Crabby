@@ -2,9 +2,12 @@
 // the same TypeBox schemas the clients use (D-069's `validatorCompiler` rule — one schema, one validator, no ajv
 // dialect beside ours), and errors leaving through §6's envelope with the status mapped by the table in `errors.ts`.
 //
-// Two things are absent on purpose. There is no approval or policy engine here: that is `packages/policy` in M2, and a
-// route that granted T3 work without it would break "an interface may request, display, and relay; it may never
-// grant" (`SECURITY.md` §6.1) at the first attempt. And there is no second listener: §2's loopback default is what
+// Two things are absent on purpose. There is no policy *enforcement* here: `@crabby/policy` answers "what tier is this
+// and who may do it" and `GET /api/v1/tools` publishes that registry, but no route grants anything, because "an
+// interface may request, display, and relay; it may never grant" (`SECURITY.md` §6.1) would break at the first attempt
+// if a Gateway endpoint could wave a T3 through. Approvals arrive with M2's approval service, which calls
+// `policy.evaluate` and holds the outcome; until then a task that needs approval has no way to get one, and this build
+// says so in `crabby status` rather than pretending otherwise. And there is no second listener: §2's loopback default is what
 // `listen` is given, and `crabby gateway start` refuses a non-loopback host until pairing has something to protect.
 
 import type { ClientInterface } from "@crabby/api-contracts";
@@ -23,6 +26,8 @@ import {
 } from "@crabby/api-contracts";
 import type { Logger } from "@crabby/core";
 import type { DataLayout } from "@crabby/platform";
+import { detectProcess } from "@crabby/platform";
+import { allToolRecords, CAPABILITIES, registryDigest, TIERS, TOOL_REGISTRY } from "@crabby/policy";
 import {
   appendEvent,
   authenticate,
@@ -57,6 +62,10 @@ export interface GatewayDeps {
   readonly startedAt: Date;
   /** What the listener is reachable as: `local` for loopback, `tunnel` once a tunnel exists. */
   readonly listenerMode: "local" | "tunnel";
+  /** Injected only by tests. `GET /api/v1/tools` reports platform availability, and a route whose availability answer
+   *  comes from `process.env` cannot be tested on both sides of the predicate — which is the half that matters, since
+   *  the desktop CI run is exactly where a Termux-only row has to show up as unavailable rather than broken. */
+  readonly platformFacts?: { isTermux: boolean };
 }
 
 export interface BuiltApp {
@@ -140,6 +149,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   });
 
   registerSystemRoutes(app, deps, bus);
+  registerPolicyRoutes(app, deps);
   registerAuthRoutes(app, deps);
   registerTaskRoutes(app, deps, bus);
   registerEventStream(app, deps, bus);
@@ -176,7 +186,13 @@ function registerSystemRoutes(
     const subsystems = {
       storage: { state: "ready", schemaVersion: schemaVersion(deps.db) },
       scheduler: { state: "absent", reason: "arrives with M2's runtime" },
-      providers: { state: "absent", reason: "arrives with M2's provider registry" },
+      // Three states, because "absent" would be false: the contract, the fake adapter, and the conformance suite are
+      // in the build now, and what M2 adds is the registry that selects among real adapters.
+      providers: {
+        state: "contract-only",
+        reason:
+          "the §3.1 contract, §3.2 descriptors, and §7 conformance suite are in place; adapters arrive with M2",
+      },
       extensions: { state: "absent", reason: "arrives with M-Extensions" },
       tunnel: { state: "absent", reason: "arrives with the tunnel slice" },
     } as const;
@@ -196,6 +212,31 @@ function registerSystemRoutes(
       storage: { schemaVersion: schemaVersion(deps.db), stateDir: deps.layout.stateDir },
       tasks: stateCounts(deps.db),
       streams: { subscribers: bus.subscriberCount },
+    });
+  });
+}
+
+// ------------------------------------------------------------------ policy registry (§8's "List tools + tiers" row)
+
+function registerPolicyRoutes(app: FastifyInstance, deps: GatewayDeps): void {
+  app.get("/api/v1/tools", async (_request, reply) => {
+    const facts = deps.platformFacts ?? detectProcess();
+    const records = allToolRecords(facts);
+    return reply.send({
+      items: records,
+      count: records.length,
+      tiers: [...TIERS],
+      capabilities: CAPABILITIES.map((capability) => ({
+        name: capability.name,
+        grants: capability.grants,
+      })),
+      registry: {
+        source: "PROVIDERS_AND_TOOLS.md §4.2",
+        rows: TOOL_REGISTRY.length,
+        // The digest `crabby tools ls` prints beside the list, so two devices can confirm they agree without a human
+        // comparing 45 lines.
+        digest: registryDigest(records),
+      },
     });
   });
 }

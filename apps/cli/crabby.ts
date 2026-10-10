@@ -32,11 +32,13 @@ function isPipeError(error: unknown): boolean {
 
 import { type AuthVerb, runAuth } from "./commands/auth.ts";
 import { type ConfigVerb, runConfig } from "./commands/config.ts";
+import { runDiagnostics } from "./commands/diagnostics.ts";
 import { runDoctor } from "./commands/doctor.ts";
 import { type GatewayVerb, runGateway } from "./commands/gateway.ts";
 import { runInit } from "./commands/init.ts";
 import { runStatus } from "./commands/status.ts";
 import { runTask, type TaskVerb } from "./commands/task.ts";
+import { runTools } from "./commands/tools.ts";
 import { readVersion, runVersion } from "./commands/version.ts";
 import { commandName, findCommand, helpText, suggest } from "./registry.ts";
 
@@ -225,6 +227,12 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     case "task": {
       return runTask(verb as TaskVerb | undefined, rest, layout, renderer);
+    }
+    case "diagnostics": {
+      return runDiagnostics(rest, layout, renderer);
+    }
+    case "tools": {
+      return runTools(verb, rest, layout, renderer);
     }
   }
 

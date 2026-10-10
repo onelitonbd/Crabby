@@ -139,6 +139,8 @@ export interface GatewayClient {
   request<T = unknown>(route: string, options?: RequestOptions): Promise<Response<T>>;
   health(): Promise<Response<unknown>>;
   status(): Promise<Response<unknown>>;
+  /** §8's "List tools + tiers" row, over the registry in `@crabby/policy`. */
+  tools(): Promise<Response<unknown>>;
   diagnostics(): Promise<Response<unknown>>;
   createTask(body: CreateTaskBody, idempotencyKey: string): Promise<Response<unknown>>;
   listTasks(options?: {
@@ -222,6 +224,7 @@ export function createClient(input: {
     request,
     health: () => request("/api/v1/health"),
     status: () => request("/api/v1/status"),
+    tools: () => request("/api/v1/tools"),
     diagnostics: () => request("/api/v1/diagnostics"),
     createTask: (body, idempotencyKey) =>
       request("/api/v1/tasks", { method: "POST", body, idempotencyKey }),

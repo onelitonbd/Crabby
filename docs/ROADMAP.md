@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-37 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-38 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -173,6 +173,15 @@ command behind it).
 
 Exit: a multi-step task started from a stub CLI completes, streams, persists, survives a kill + restart, and its
 state matches `GET /tasks/{id}` from a second client. Policy denies what policy must deny, in tests.
+
+**In progress — the state machine first, because everything else in M2 is written in terms of it.** D-083 fixed §4.1's
+transition table in the document that owns the lifecycle and in `packages/agent-runtime/transitions.ts`, with
+`scripts/parity.ts` diffing the two in both directions (the same discipline §4.2's tier table gets), and the three rules
+a table cannot carry are in the function's signature instead of a comment: an entry into `cancelled` names §6.2's
+outcome, an entry into `running` out of an approval names the answer, and recovery may not authorize itself (§7.2).
+Cancellations, checkpoints and the approval service are the next modules in this phase, and they land in
+`packages/agent-runtime` rather than in the Gateway for the reason in D-003: a rule the Gateway owns is a rule only the
+Gateway can follow.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

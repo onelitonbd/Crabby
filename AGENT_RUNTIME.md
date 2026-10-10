@@ -74,7 +74,28 @@ The initial logical lifecycle SHOULD support states equivalent to:
 
 Exact state names and transition rules remain implementation decisions.
 
+**Decided in M2 (D-083).** The names above are the names, and the table below is the whole set of moves. It is written
+here rather than only in `packages/agent-runtime/transitions.ts` because this document owns the lifecycle, and
+`scripts/parity.ts` diffs the two — a rule that exists in code and not here is a rule no interface author reads, which is
+the F-08/F-10/F-11 pattern this set has been built to refuse.
+
+| From | May move to | Why that set and not a larger one |
+| --- | --- | --- |
+| `queued` | `planning`, `awaiting_approval`, `cancelling`, `failed`, `interrupted` | §3.1's Plan → Execute is the reason `running` is not reachable from here: nothing executes without a plan, even a one-step plan. A task may need approval before its first step, so `awaiting_approval` is |
+| `planning` | `awaiting_approval`, `running`, `cancelling`, `failed`, `interrupted` | The plan is what the executor consumes; `completed` is unreachable because a plan that finished describing work has not done it |
+| `awaiting_approval` | `running`, `planning`, `cancelling`, `failed`, `interrupted` | `running` only on an answer naming the action it approves (§5.3, D-052's `once` scope); `planning` because a denial that leaves other work possible re-plans rather than dies (§5.5, D-043's ladder) |
+| `running` | `completed`, `failed`, `cancelling`, `interrupted` | The only edge into `completed` in the whole table, and §6.1's step 6 is why `cancelled` is reached through `cancelling` and never from here |
+| `cancelling` | `cancelled`, `failed`, `interrupted` | No `completed`: §6.1 allows the current step to finish, capture its output, and then **marks the task cancelled**, which is how a cancellation stays a cancellation. No return to `running`: "the runtime MUST NOT start another ordinary execution step merely because the current step completed after cancellation was requested" |
+| `completed`, `failed`, `cancelled` | — | Terminal and absorbing. §4.1's "distinguish successful completion from cancellation, failure, and incomplete execution" is only true at the end of a task's life if nothing moves it afterwards; a retry is a new task with its own history, not a resurrection |
+| `interrupted` | `queued`, `planning`, `awaiting_approval`, `running`, `cancelling`, `failed` | §7.1 restores "the latest valid task state" and §7.2 decides which of these is reachable for a given task: `running` is legal **only** when the recovery record carries a still-valid approval covering the step, which is why the edge exists in the table and is refused by the runtime otherwise. `completed` is not an option — a task that was interrupted did not complete |
+
 The runtime MUST distinguish successful completion from cancellation, failure, and incomplete execution.
+
+Three rules the table cannot carry, so they are stated with it (all three are enforced in `transition()` and tested in
+`packages/agent-runtime/agent-runtime.test.ts`): a move into `cancelled` must carry §6.2's explicit outcome (confirmed
+stopped or effects uncertain) rather than a default; a move out of `awaiting_approval` into `running` must carry the
+answer and the action it covers, because §5.4 forbids one approval becoming blanket authorization; and no state moves to
+itself, because a self-transition is how a runtime that lost an event looks like progress to every client reading it.
 
 ### 4.4 Concept boundaries (cross-document rule)
 

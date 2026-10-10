@@ -17,6 +17,8 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isKnownState, PERMITTED_TRANSITIONS } from "@crabby/agent-runtime";
+import { TASK_STATES } from "@crabby/api-contracts";
 import { CAPABILITIES, TIERS, TOOL_REGISTRY } from "@crabby/policy";
 import { COMMANDS } from "../apps/cli/registry.ts";
 
@@ -26,6 +28,7 @@ const SECURITY = "SECURITY.md";
 const TOOLS = "PROVIDERS_AND_TOOLS.md";
 const CLI_REVIEW = "docs/review/CLI.md";
 const TG_REVIEW = "docs/review/TELEGRAM.md";
+const RUNTIME = "AGENT_RUNTIME.md";
 
 export interface FeatureRow {
   /** The capability, in the document's words. */
@@ -357,12 +360,13 @@ function tableRows(body: string, heading: string): string[][] {
 
 export async function check(quiet = false): Promise<ParityProblem[]> {
   const problems: ParityProblem[] = [];
-  const [iface, security, toolsDoc, cliMd, tgMd] = await Promise.all([
+  const [iface, security, toolsDoc, cliMd, tgMd, runtimeDoc] = await Promise.all([
     readFile(path.join(REPO, IFACE), "utf8"),
     readFile(path.join(REPO, SECURITY), "utf8"),
     readFile(path.join(REPO, TOOLS), "utf8"),
     readFile(path.join(REPO, CLI_REVIEW), "utf8"),
     readFile(path.join(REPO, TG_REVIEW), "utf8"),
+    readFile(path.join(REPO, RUNTIME), "utf8"),
   ]);
 
   // ---- 1. the §8 table in the document, against the rows above
@@ -492,6 +496,9 @@ export async function check(quiet = false): Promise<ParityProblem[]> {
   for (const problem of compareRegistry(toolsDoc)) problems.push(problem);
   for (const problem of compareVocabulary(security)) problems.push(problem);
 
+  // ---- 6. the task state machine against the lifecycle document that owns it (D-083)
+  for (const problem of compareStateMachine(runtimeDoc)) problems.push(problem);
+
   if (!quiet) {
     const counts = {
       routes: routes.length,
@@ -499,6 +506,7 @@ export async function check(quiet = false): Promise<ParityProblem[]> {
       capabilities: CAPABILITIES.length,
       features: MATRIX.length,
       tiers: TIERS.length,
+      states: TASK_STATES.length,
     };
     console.log(
       `parity: ${Object.entries(counts)
@@ -508,6 +516,58 @@ export async function check(quiet = false): Promise<ParityProblem[]> {
           ? " — documents and code agree"
           : ` — ${problems.length} problem(s)`),
     );
+  }
+  return problems;
+}
+
+/** `AGENT_RUNTIME.md` §4.1's transition table against `PERMITTED_TRANSITIONS`. D-083 decided these rules in M2, and the
+ *  document that owns the lifecycle states them in a table — so the table is checked, in both directions, exactly like
+ *  §4.2's tier table: a state may not gain or lose an edge in prose alone, and a code-side edge with no row in the
+ *  document is the same defect wearing the other uniform. */
+function compareStateMachine(runtimeDoc: string): ParityProblem[] {
+  const problems: ParityProblem[] = [];
+  const rows = tableRows(runtimeDoc, "### 4.1 Task lifecycle").slice(1);
+  const documented = new Map<string, string[]>();
+  for (const row of rows) {
+    const from = backticked(row[0] ?? "");
+    const to = backticked(row[1] ?? "");
+    for (const name of from) {
+      if (documented.has(name)) {
+        problems.push({
+          file: RUNTIME,
+          message: `§4.1's table names \`${name}\` as a source state in two rows — a state with two rule sets is one rule set too many`,
+        });
+        continue;
+      }
+      documented.set(name, to);
+    }
+  }
+  for (const state of TASK_STATES) {
+    if (!documented.has(state)) {
+      problems.push({
+        file: RUNTIME,
+        message: `§4.1's transition table has no row whose From cell names \`${state}\`, so the lifecycle document is silent about a state the contract has`,
+      });
+    }
+  }
+  for (const [from, to] of documented) {
+    if (!isKnownState(from)) {
+      problems.push({
+        file: RUNTIME,
+        message: `§4.1's table has a row for \`${from}\`, which is not one of the nine states in \`TASK_STATES\``,
+      });
+      continue;
+    }
+    const actual = [...(PERMITTED_TRANSITIONS[from] ?? [])];
+    if (actual.join(",") !== to.join(",")) {
+      problems.push({
+        file: RUNTIME,
+        message:
+          `§4.1 says \`${from}\` may move to [${to.join(", ") || "nothing"}] and ` +
+          `PERMITTED_TRANSITIONS says [${actual.join(", ") || "nothing"}] — the transition table is the runtime's ` +
+          "rules as written in the document that owns them, so the two must read the same",
+      });
+    }
   }
   return problems;
 }

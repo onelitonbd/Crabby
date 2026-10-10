@@ -405,6 +405,9 @@ does, on every `npm run test:parity` and before every merge:
   anything a later milestone owns;
 - fails if `packages/policy`'s tool tiers or capability vocabulary disagree with `PROVIDERS_AND_TOOLS.md` §4.2 or
   `SECURITY.md` §6.1, either way round (F-32, a capability listed twice, was found this way);
+- fails if `AGENT_RUNTIME.md` §4.1's transition table and `PERMITTED_TRANSITIONS` in `packages/agent-runtime` disagree
+  in either direction, including a state with no row (D-083: the lifecycle document owns the rules, so the rules are
+  checked against the document that states them);
 - fails if a Telegram command in `docs/review/TELEGRAM.md` is absent from §7.4, or a command in §7.4 absent from the
   inventory.
 

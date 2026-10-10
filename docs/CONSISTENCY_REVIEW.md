@@ -615,6 +615,25 @@ runner exists. The general rule for a table of commands, extended: a CI row is a
 exists*, so it is verified by reading the upstream README, not by trusting the phrasing — the same discipline F-27
 demands of a citation, applied to a toolchain instead of a document.
 
+### F-38 — A required leg failed once on a freshly installed tree, and the record says so rather than shrinking
+**Severity: medium, and the finding is the record itself.** Verifying the pushed commit meant installing the GitHub
+tarball of it in an empty directory, and the first `npm test` there answered `# tests 173 · # pass 172 · # fail 1`.
+Nine further runs — two of them under 16 concurrent busy loops, one of them the exact same command again — were
+173/173, and the failure has not repeated since. What is written down is therefore not a fix but the shape of the thing
+to compare against if it happens again: the only two budgets a cold tree has to beat are already priced generously
+(`waitForGatewayInfo` at 25 s and the SIGTERM drain at 12 s, both in `tests/integration/gateway.test.ts`, and the spawn
+helpers in `tests/unit/cli.test.ts` carry no timeout at all, so slowness cannot fail them); the one known
+process-lifetime hazard in that file is the one it already documents and disarms, which is Node's fetch keeping the
+dispatcher's sockets open for 72 s and making a finished file look like a timeout, handled by the `after()` hook at the
+bottom of `tests/integration/gateway.test.ts`. What the exercise did establish as a *fact about the environment*, not
+about Crabby: a clean install with lifecycle scripts enabled fails here at `better-sqlite3`'s build step, because
+`node-gyp` wants the Node headers host and this sandbox reaches only the npm registry — while the same install with
+`--ignore-scripts` succeeds and runs, because npm's cache already held a matching prebuilt binary. So a
+locked-down image can install Crabby and still not be able to build its driver from source, and that is now written
+into `docs/DEVELOPMENT.md` §1's install row instead of being discovered by the next person on a captive network. The
+rule this file has been building since F-20 applies to a red you cannot reproduce: name it, date it, and record what
+was measured against it, because "could not reproduce" without the measurements is how a real race becomes folklore.
+
 ## 3. Checks That Passed
 
 | Check | Result |

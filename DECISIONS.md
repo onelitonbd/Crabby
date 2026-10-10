@@ -217,7 +217,7 @@ D-033 (`termux-api` tiers) accepted and propagated.
 | --- | --- |
 | Accepted decisions | 40 (D-001…D-040) |
 | Proposed technical choices | 9 (P-001…P-009) |
-| Open / needs-validation items | 27 (O-001…O-036, with O-026 closed) |
+| Open / needs-validation items | 36 (O-001…O-036; O-026 closed as non-goal D-040) |
 | Planning docs written | 9 (incl. `EXTENSIONS.md`, `PROVIDERS_AND_TOOLS.md`) |
 | Planning docs remaining | 7 |
 

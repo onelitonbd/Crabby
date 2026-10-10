@@ -147,6 +147,15 @@ coverage does not shrink.
 | `GET /config` · `PUT /config` · `GET /config/schema` | Configuration with the validation contract exposed. |
 | `POST /tunnel` · `DELETE /tunnel` | Enable/disable remote exposure; T3; response includes the current public URL and the reachable-identity list. |
 
+### 4.5 Clients and pairing
+
+| Method + path | Purpose |
+| --- | --- |
+| `POST /auth/pair-codes` | Mint a one-time pairing code for a named identity (`{ name, interface }`, optional `--restrict`). Requires a token *and* a loopback request: §3.2 forbids taking a code from an unauthenticated network caller, so the route that creates one is where both conditions apply, and it needs `auth.manage` (`SECURITY.md` §6.1). |
+| `POST /auth/pair` | Redeem a code for `{ clientId, token }`. The only route that answers without a token — it is how a client with no credential yet gets one — bounded by the code's 120 s TTL and single use (D-079). Failure text names the next action, never a bare "invalid code" (§3.1). |
+| `GET /auth/clients` | Paired identities: name, interface, created, last used, granted capabilities, and whether one is currently connected (§3.1). |
+| `DELETE /auth/clients/{id}` | Revoke by deleting the identity. `DATA_AND_MEMORY.md` §4's client table has no revocation column, and the durable "ended on this date" record belongs in §14's audit table — O-071 keeps that from being forgotten. Local only, because `auth.manage` is a local capability. |
+
 ## 5. Events and Streaming
 
 ### 5.1 Transport
@@ -357,7 +366,9 @@ keeps `retry_after`/429 handling in Crabby's code rather than the library's.
   `/watch <id>`, `/unwatch <id>`, `/cancel [id]`, `/resume <id>`, `/approve <id>`, `/deny <id>`, `/approvals`,
   `/sessions`, `/new`, `/rename <n> <title>`, `/context`, `/compact`, `/model <provider/model>`, `/providers`, `/probe <model>`, `/tools`,
   `/memory`, `/ext`, `/config`, `/logs`, `/export`, `/delete <n>`, `/tunnel on|off`, `/jobs`, `/job <id>`, `/report`,
-  `/status`, `/health`, `/help`.
+  `/status`, `/health`, `/help`. `/start` is on the list for a different reason than the other twenty-eight: it is not
+  a capability, it is Telegram's own handshake and the entry to pairing (G1-02, G-O01 in `docs/review/TELEGRAM.md`),
+  and a bot that does not answer it cannot be paired from a phone at all.
   A command may not be dropped from this list to save typing: dropping one removes a capability from the interface,
   which is the D-005 test failing. What *is* Telegram's to choose is how little of it needs typing — inline keyboards
   and reply targets carry the common paths, and the two documented limitations in §8 (provider add, identity
@@ -380,8 +391,28 @@ limitation **and** an accepted alternative interaction, which is what `ARCHITECT
 This table is **generated** from the tool registry plus per-tool interface annotations (D-067, closing O-042); the
 generator is committed, the output is checked in so a reviewer can read it, and CI fails on a diff. The reason is
 history rather than taste: `docs/CONSISTENCY_REVIEW.md` F-08, F-10 and F-11 were the same defect three times — three
-hand-maintained lists — and `scripts/check-docs.py` rules 10–12 stand in for the generator until it exists in M0, so
-even the hand-maintained version cannot drift silently.
+hand-maintained lists.
+
+`scripts/parity.ts` is the generator, and it arrived in M1c with the registry it reads (`packages/policy`). What it
+does, on every `npm run test:parity` and before every merge:
+
+- renders this table from the rows in `scripts/parity.ts` and fails if the file in the repository differs — so a
+  capability may not gain or lose an interface in prose alone;
+- fails if `packages/gateway/app.ts` registers a route that §3 or §4 does not document, which is the direction a
+  reviewer cannot see in a diff of the documents;
+- fails if a CLI noun this table or §7.1 requires is absent from `apps/cli/registry.ts`, or if a command that registry
+  marks `ready` appears in neither place — the D-005 test, in both directions, with `planned` as the answer for
+  anything a later milestone owns;
+- fails if `packages/policy`'s tool tiers or capability vocabulary disagree with `PROVIDERS_AND_TOOLS.md` §4.2 or
+  `SECURITY.md` §6.1, either way round (F-32, a capability listed twice, was found this way);
+- fails if a Telegram command in `docs/review/TELEGRAM.md` is absent from §7.4, or a command in §7.4 absent from the
+  inventory.
+
+Rules 11 and 12 of `scripts/check-docs.py` remain, because they ask whether `docs/review/*` inventories are *complete*
+— a property of the documents alone. Rule 10 was retired when its comparison moved here: prose checked against prose
+can be wrong together, and code checked against prose cannot.
+
+<!-- parity:begin -->
 
 | Capability | API | CLI | TUI | Web | Telegram |
 | --- | --- | --- | --- | --- | --- |
@@ -410,6 +441,8 @@ even the hand-maintained version cannot drift silently.
 | Review scheduled jobs | `GET /jobs`, `PATCH /jobs/{id}`, `POST /jobs/{id}/pause` | `job …` | jobs pane | Scheduled screen | `/jobs`, `/job <id>` |
 | Gateway lifecycle | `POST /admin/restart`, `POST /admin/shutdown` | `gateway restart` | status action | Access screen | refused here, local-only (like pairing, D-053) |
 | Diagnostics report | `GET /diagnostics` | `diagnostics` | status action | Export sanitized | `/report` as a file |
+
+<!-- parity:end -->
 
 Two entries deliberately carry a limitation instead of pretending to parity: minting identities from Telegram is a
 security hole, and pasting a URL on a phone is genuinely awkward. Both are recorded here so nobody "discovers"

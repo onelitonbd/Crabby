@@ -166,10 +166,9 @@ Permissions are named capabilities, not free-form text. Initial proposed vocabul
 | Capability | Grants |
 | --- | --- |
 | `session.read` / `session.write` | Read or modify conversation and session state. |
-| `task.create` / `task.cancel` / `task.read` | Start, cancel, inspect tasks. |
+| `task.create` / `task.cancel` / `task.read` | Start, cancel, and inspect tasks. `task.read` is the read-only half: state, history, and results. |
 | `fs.read:<root>` / `fs.write:<root>` | File access scoped to a configured root. |
 | `net.egress:<hostset>` | Outbound network from tools, scoped by host set. |
-| `task.read` | Inspect task state, history, and results (read-only). |
 | `shell.run` | Execute commands through the shell tool. |
 | `shell.privileged` | Commands touching package managers, services, system config. |
 | `provider.invoke` / `provider.billing` | Call a provider / call a paid endpoint. |

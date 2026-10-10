@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-31 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-37 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -84,11 +84,19 @@ is a *good* outcome — it is why the phase exists. Each step that ships after M
   provider (`PROVIDERS_AND_TOOLS.md` §3.3) so tests need no live API.
 - Test scaffolding for the parity and contract suites — before interfaces exist: `node:test`, one runner file per
   package, no runner configuration beyond globs (D-069).
-- CI per `docs/DEVELOPMENT.md` §12 (D-060): the ubuntu matrix plus `termux/termux-docker` for the toolchain half, with
-  `scripts/check-docs.py` a **required** job. `scripts/count-inventory.py` is what keeps the review-progress table honest.
-- The parity generator (D-067): `docs/INTERFACES_AND_API.md` §8 emitted from the tool registry plus annotations, with
-  rules 10–12 of `scripts/check-docs.py` retiring the day the generator lands — not before, because until the
-  generator exists the checker is the only thing standing between three lists and drift.
+- CI per `docs/DEVELOPMENT.md` §12 (D-060), **shipped in M1c as D-082**: seven legs on `linux-x64` and
+  `macos-arm64`, with `scripts/check-docs.py` a **required** job — and the `termux/termux-docker` row that §12 also
+  asked for deliberately *not* shipped, because the image has no Android runtime and `termux-api` does not work under
+  proot, so the container would have measured the container and reported it as phone evidence
+  (`docs/CONSISTENCY_REVIEW.md` F-37). `scripts/count-inventory.py` is what keeps the review-progress table honest.
+- The parity generator (D-067), **shipped in M1c** as `scripts/parity.ts`: §8 is emitted from `apps/cli/registry.ts`
+  and the tool registry rather than transcribed, and the same command compares §4's routes with
+  `packages/gateway/app.ts`, §7.4 with `docs/review/TELEGRAM.md`, §4.2 with `TOOL_REGISTRY` and §6.1 with
+  `CAPABILITIES`. Rules 10–12 retired as promised, and precisely: rule 10 left because a generator that can import the
+  registry does a strictly better job of what it did, rules 11 and 12 stayed because inventory *completeness* is a
+  property of the documents alone and no generator can supply it. The bullet's "not before" clause paid for itself the
+  week it was honoured — the generator's first run found two documents that had agreed on leaving a route family
+  undocumented (F-35).
 
 Exit: `crabby init`, `crabby status`, `crabby doctor` work against a real local Gateway; the contract test harness
 runs; a task can be created and read back with an id, and nothing else.
@@ -124,6 +132,25 @@ the first route; and any binding beyond `127.0.0.1`, per §13's "never offer the
 numbers and the shapes the contracts required but the documents had not defined are recorded as D-077, D-078, D-079
 and **O-070/O-071/O-072** — named rather than smoothed over, which is also how §11's two untestable auth rows stayed
 untested instead of being satisfied by a check that asserted nothing.
+
+**Delivered since — M1c, the half of M1 that was not a Gateway.** The plan's M1 bullets ask for a policy engine
+skeleton with the vocabulary and tier model enforced, the fake provider so tests need no live API, the parity
+generator, and CI; all four are now code, and none of them is a shell around nothing. `packages/policy` is
+`SECURITY.md` §6 as data and functions — 32 capabilities, four tiers, every §4.2 tool row transcribed with its base
+tier and its grants, argument-dependent escalation, and an answer that records which registry produced it
+(`registryDigest`, D-080). `packages/providers` is the adapter contract, the descriptor that says what a provider
+claims, and a fake provider run through the same conformance suite a real adapter will have to pass (D-081) — which is
+what makes §12's "no job may require a live model provider" a buildable rule rather than a wish. The surfaces M1c owes
+the interfaces: `GET /api/v1/tools` and `crabby tools ls`, so an interface asks the policy engine what is possible
+instead of keeping its own list, and `crabby diagnostics`, which writes the Gateway's sanitized report to a 0600 file in
+the temp directory and *refuses* a report that still carries a secret rather than redacting it after the write. Then the
+two checks: `scripts/parity.ts` (above) and `tests/security/policy-surface.test.ts`, which walks every route the
+Gateway prints and refuses an unauthenticated request, proves no T3 approval is answerable from a chat surface, and
+reads the documents for the off-by-default sentences `OFF_BY_DEFAULT` claims — a list of one (`shell.run`), because
+nothing documents `shell.privileged` that way and an inherited inference would have become a rule (F-34). What M1c did
+**not** do: `crabby task run`, `POST /admin/*`, and the TUI/Web/Telegram surfaces, all of which belong to M2 and M3
+(`docs/INTERFACES_AND_API.md` §8 marks their cells `planned`, and `scripts/parity.ts` fails a `ready` claim that has no
+command behind it).
 
 ## 4. Phase M2 — Core runtime and Gateway
 

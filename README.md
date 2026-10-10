@@ -9,10 +9,13 @@ that work the same way on Linux and macOS.
 It is not a mobile app and not a chatbot wrapper. It is a harness: model providers, multi-step agents,
 tools, memory, skills, plugins, and permission-controlled execution — all behind a single local-first Gateway.
 
-> **Current phase: M1c.** The planning set is what governs, and it is still the specification code must follow rather
-> than a description of it: M1a shipped the contracts, platform, core and CLI skeleton, and M1b shipped the Gateway and
-> the state directory, so `crabby gateway start` answers HTTP today. `DECISIONS.md` records what is still
-> deliberately undecided — including two shapes this build found the documents had not defined (O-070, O-071).
+> **Current phase: M2.** The planning set is what governs, and it is still the specification code must follow rather
+> than a description of it: M1a shipped the contracts, platform, core and CLI skeleton, M1b shipped the Gateway and the
+> state directory, and M1c shipped the policy engine, the provider contract, the parity generator and CI — so
+> `crabby gateway start` answers HTTP, `crabby tools ls` answers policy, and `npm run test:parity` is what stops the
+> documents drifting from either. `DECISIONS.md` records what is still deliberately undecided — including two shapes
+> those builds found the documents had not defined (O-070, O-071), and two questions M1c chose not to answer with an
+> inference (F-33, F-34).
 
 ## Planning documents
 
@@ -32,7 +35,7 @@ tools, memory, skills, plugins, and permission-controlled execution — all behi
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phases M0–M6, entry and exit conditions, and which open items block which phase. |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Environment, scripts, testing, CI, release and Termux development rules. |
 | [`docs/review/`](docs/review/README.md) | **M-D's element gate, now closed:** 675 elements across the four interfaces, every row reviewed (D-055, D-075) — the criteria and the scan are in that index, and review continues one implementation step at a time (D-076). `docs/review/mockups/crabby-web-ui.html` is the Web UI as one file, generated from the inventory. |
-| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-31), what it could not verify, and the owner's checklist. |
+| [`docs/CONSISTENCY_REVIEW.md`](docs/CONSISTENCY_REVIEW.md) | What the cross-document review found (F-01…F-37), what it could not verify, and the owner's checklist. |
 | [`AGENTS.md`](AGENTS.md) | The rules a coding agent works under, including the forbidden shortcuts. |
 
 `python3 scripts/check-docs.py` lints this planning set — decision-ID references, cross-links, section anchors,
@@ -79,6 +82,18 @@ what is scheduled from here:
     socket and drives one spawned CLI against one spawned Gateway — P-003's lifecycle half, as a test. What is
     *absent* on purpose: `task run` (an executor is M2's), `POST /admin/*` (M2's policy engine — an interface may
     request and relay, never grant), and any bind beyond loopback.
+03b. **M1c — shipped: policy, providers, the parity generator, CI.** `packages/policy` is `SECURITY.md` §6 as code —
+    the 32-capability vocabulary, the four tiers, every §4.2 tool row transcribed with its base tier and grants,
+    argument-dependent escalation, and a `registryDigest` so a stored answer says *which* policy gave it (D-080).
+    `packages/providers` is the adapter contract with a fake provider that is held to the same conformance suite a real
+    adapter will be, which is why no test in this repository needs a provider key (D-081). `GET /api/v1/tools` and
+    `crabby tools ls` expose the registry to the four interfaces, `crabby diagnostics` writes the sanitized report as a
+    0600 temp file and refuses a leaky one rather than redacting it after the fact, and `scripts/parity.ts` generates
+    `docs/INTERFACES_AND_API.md` §8 while failing on any route, command, tier or capability the documents and the code
+    disagree about. `.github/workflows/ci.yml` runs the seven legs that pass today and §12 names the ones that need a
+    milestone first, the Termux container among them (D-082). Writing that generator found six findings — F-32…F-37 —
+    three of them defects in the documents, which is the argument for a check that reads code and prose instead of two
+    prose files.
 04. **From there, every step that ships carries its own owner review:** the running screen or command plus the element
     IDs it implements, one unit at a time (`D-076`). An answer becomes a code change *and* an inventory-row change in
     the same commit; no answer is recorded as `unreviewed`, never as accepted.

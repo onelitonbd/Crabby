@@ -6,8 +6,9 @@
 >
 > **Reviewed:** 22 documents (16 planning at `*.md` and `docs/*.md`, 4 element inventories, the review index and
 > this file), most recently on 2026-10-10 — findings F-13…F-31 are from the six 2026-10-10 passes (the (R) round,
-> the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from), so
-> every earlier finding has been re-checked against the documents as they now stand.
+> the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from), and
+> F-32…F-36 from M1c's implementation pass, the first pass where a *generator* rather than a reader compared the
+> documents with the code, so every earlier finding has been re-checked against the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
 > a scratch pad: every finding below is either fixed with a decision ID, or explicitly listed as still open.
@@ -533,6 +534,87 @@ side of the same rule ("a stream you are not draining must still be read or canc
 backpressure on the task") belongs in M1c's element rows rather than in a comment in `sse.ts`.
 
 
+### F-32 — A capability was listed twice in the vocabulary, and only a generator could see it
+**Severity: low as a typo, medium as a signal.** `SECURITY.md` §6.1's capability table had `task.read` on two rows —
+one inside the grouped "read-only: state, history, and results" line, one on its own. A prose review does not flag that,
+because each row is individually plausible and a reader who wants the fact finds it twice rather than noticing the
+second copy. What caught it was the day `scripts/parity.ts` started comparing §6.1 against `CAPABILITIES` in
+`packages/policy`: the comparison counts a name once per row and one grant per name *between* rows, so the duplicate
+failed in the same commit that added the check. Fixed by folding the read-only wording into the grouped task row and
+deleting the second row. The extracted rule is that a capability list is a set, and "harmless redundancy" in a security
+document is two sentences that can drift apart — a grant renamed in one row and not the other is exactly what §6.1
+exists to prevent. The check keeps the distinction the fix taught it: repeated names inside one row's sentence are
+prose, the same name granted by two rows is a contradiction.
+
+### F-33 — Two documents disagreed about whether a read-only tool needs a grant, and the code had to choose
+**Severity: medium, and still open by decision.** `PROVIDERS_AND_TOOLS.md` §4.2 writes the words "read-only" in the
+cell where `tunnel.status`, `ext.list`/`ext.info` and `memory.search` would otherwise name a grant, and so names none;
+`SECURITY.md` §6.1 defines `ext.list` and `memory.read` as capabilities with scope `none`. One document therefore says
+"there is nothing to grant" and the other says "there is a grant". `packages/policy` could not defer the question,
+because evaluation order (D-014's boundary) has to know whether an unlisted capability is a deny. It follows §4.2 —
+§4.2 is the document that owns per-tool capability assignment — and the affected rows carry a `capabilityNote` with
+§4.2's own words rather than an empty list, so the registry can be read as a transcription instead of an opinion
+(`packages/policy/tools.ts`'s header says the same thing at the code). What was *not* done is the tempting version:
+attaching `ext.list` and `memory.read` to those rows, which would make `evaluate()` deny a tool that is supposed to
+work on every device until somebody grants a grant nobody asked for. The closing sentence belongs in §6.1 — that a
+scope-`none` capability is one the subject always holds, so naming it in §4.2 or not cannot change an answer — and is
+left for the next time §6.1 is open rather than written here, because this file records findings and does not edit a
+security document through the back door.
+
+### F-34 — `shell.privileged` is T3 in the tier table and off-by-default in nobody's prose
+**Severity: medium.** Writing `OFF_BY_DEFAULT` in `packages/policy/availability.ts` looked like a two-line job: `shell.run`
+is documented as shipping disabled, and the elevated sibling surely does too. It is not: §4.2's note for `shell.run`
+says the capability is off by default, and no document says anything of the kind about `shell.privileged`. Inheriting it
+would have made the constant carry one inference, and the inference would have read as a documented rule the next time a
+reviewer checked the code against the prose — the failure direction D-071's "recorded, never honored" note already
+describes. So `OFF_BY_DEFAULT` is exactly `["shell.run"]`, the comment names the gap, and the security suite asserts the
+list against the documents in both directions: every entry must have an "off by default" sentence to point at, and no
+capability may be in the list without one. `shell.privileged` inherits T3's approval requirement, which is enforced
+every call rather than at install time; whether it should *also* ship disabled is an owner question, and it is recorded
+here as that rather than answered.
+
+### F-35 — The parity generator found two documents missing rows that code already had
+**Severity: high for the documents, and it is the reason the generator was worth writing before `build` exists.** Two
+checks, two holes. First: `packages/gateway/app.ts` registers eleven routes from M1b's auth slice —
+`POST /clients/register`, `POST /pairings/redeem`, `GET /clients`, `DELETE /clients/{id}` — and `§4` documented none of
+them, because they existed only inside a fenced ASCII diagram in §3.1/§3.2. A reader of §4 got a complete-looking table
+that was missing the four rows every CLI on the planet calls first; the diagram's prose was true, and the *contract
+section* was not. Second: `docs/review/TELEGRAM.md` G1-02 and G-O01 both build on `/start`, `docs/INTERFACES_AND_API.md`
+§7.4 promised "one command per capability group", and `/start` was not in §7.4's 28-command list — so either the
+inventory proposed a command the contract forbade, or the contract had an exemption it never stated. Fixed by adding
+§4.5 "Clients and pairing" (four rows, worded from `registerAuthRoutes`' comments and §3.1/§3.2's own language, so the
+table says what the code does rather than what a design hoped) and by putting `/start` in §7.4 with the reason it is
+exempt: it is not a capability, it is how a chat learns the bot exists, and a rule that cannot say that is a rule that
+will be broken on purpose. Both directions of the lesson matter: a check that reads documents against documents found
+neither of these for three rounds, because two documents can agree on being incomplete.
+
+### F-36 — A planned command could not name its milestone, because the plan has none for it
+**Severity: low, and it is the good kind.** `tests/unit/cli.test.ts` refuses a help line that says "planned" without
+saying when — an assertion that had been easy for `crabby tunnel on` to satisfy with an invented `M4`. It could not,
+because `docs/ROADMAP.md` has no phase for the tunnel: `SECURITY.md` §13 defers remote exposure out of the initial
+release unless a request needs it, and the phase list never says which phase owns that. So the honest help text cites
+the section that defers it, the test now accepts a `§` citation as an answer of the same class as an `M` number, and
+the gap is recorded here: **the tunnel needs a place in the roadmap, or the roadmap should say explicitly that it is
+post-M6 by design.** Inventing `M4` would have been worse in two directions — the milestone would have been a lie, and
+the day someone scheduled the tunnel the lie becomes the citation. This is the F-28 shape (refuse to approximate a
+number the plan has not earned) applied to a help string, and it is why `planned` rows in `apps/cli/registry.ts` carry a
+`milestone` field at all: a command that cannot say when it arrives has to say what stopped it.
+
+### F-37 — A CI matrix row cited a Docker image as though it were an Action
+**Severity: medium, and it is the reason `docs/DEVELOPMENT.md` §12 now has an "absent legs" table.** The plan's CI
+section asked for a third matrix runner: "`termux` via `termux/termux-docker` for the toolchain half (D-060)". Read as a
+sentence it is a reasonable request; read against the thing it names, it is a category error — `termux/termux-docker` is
+a Docker **image**, so it arrives as a `container:` job rather than a runner, its own README states the environment has
+no Android runtime components, its `aarch64` tag needs `--privileged` or `seccomp:unconfined`, and `termux-api` binaries
+do not work under proot at all (`termux/proot-distro`#516). So the leg the sentence wanted — evidence about a phone — is
+exactly the evidence a container cannot give, and the leg a container *could* give (does `npm ci` and `node --test`
+survive bionic) was already answerable from the probes and is not what the row was for. D-082 records the outcome: the
+workflow ships the seven legs that pass today, §12 names each absent leg with the milestone that gives it something to
+run, and the Termux half stays with `npm run test:termux` and the M0 device checklist, with O-050 open until an ARM
+runner exists. The general rule for a table of commands, extended: a CI row is a promise about *infrastructure that
+exists*, so it is verified by reading the upstream README, not by trusting the phrasing — the same discipline F-27
+demands of a citation, applied to a toolchain instead of a document.
+
 ## 3. Checks That Passed
 
 | Check | Result |
@@ -551,6 +633,7 @@ backpressure on the task") belongs in M1c's element rows rather than in a commen
 | Every item in an open-questions list cites the decision or section that owns it | ✓ (rule 15, added because of F-18; negative-tested by blanking a citation) |
 | The section 8 counters and the `P-` row arithmetic are printed by a tool, not remembered | ✓ (`scripts/count-inventory.py --register-counters`) |
 | `allowed-tools` in an imported skill cannot grant a privilege | ✓ (D-071, `EXTENSIONS.md` §4.3 — F-19) |
+| Documents compared with the code they describe (`scripts/parity.ts`, `npm run test:parity`) | ✓ (12 routes, 45 tool rows, 32 capabilities, 25 matrix rows, 67 CLI commands; it exists because of F-08/F-10/F-11 and it found F-32 and F-35 — the first two findings in this file that a prose-against-prose check could not have seen) |
 | Markdown tables are rectangular, so a generator reads the same row a human does | ✓ (rule 16, added because of F-21; 4 pre-existing rows fixed) |
 | A count written inside `docs/review/` equals the count the file's rows produce | ✓ (rule 18, added because of F-22) |
 | A count quoted by a summary document equals what the inventories hold today | ✓ (rule 18 widened because of F-24; negative-tested with three planted wrong figures) |

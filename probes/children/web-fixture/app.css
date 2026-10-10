@@ -1,0 +1,106 @@
+/* P4 fixture: the 360px design case, with the §2.3 palette of docs/DESIGN_SYSTEM.md used verbatim. That is not
+   decoration — P4's pass condition is that the served bundle's colour values *are* the measured tokens, and the probe
+   reads the table out of the document to prove it, so a re-measured palette moves this file instead of drifting. */
+:root {
+  --bg-base: #101418;
+  --bg-raised: #171c22;
+  --bg-overlay: #1f262e;
+  --fg-primary: #e8ecf1;
+  --fg-secondary: #b6c0cc;
+  --fg-muted: #8592a3;
+  --accent: #4ea1ff;
+  --state-ok: #46c08a;
+  --state-warn: #e0a63c;
+  --state-err: #ff6b6b;
+  --border-subtle: #2a323b;
+  --gap: 8px;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-base: #fbfbfc;
+    --bg-raised: #f2f4f7;
+    --bg-overlay: #e7ebf0;
+    --fg-primary: #14181d;
+    --fg-secondary: #3c4653;
+    --fg-muted: #616b79;
+    --accent: #1864c0;
+    --state-ok: #0c6b45;
+    --state-warn: #8a5a00;
+    --state-err: #c02b2b;
+    --border-subtle: #c8ced7;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--fg-primary);
+  font:
+    15px / 1.45 system-ui,
+    sans-serif;
+}
+.bar {
+  display: flex;
+  gap: var(--gap);
+  padding: var(--gap);
+  overflow-x: clip;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-raised);
+}
+.chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.chip-more {
+  margin-left: auto;
+  color: var(--accent);
+}
+.sheet {
+  position: fixed;
+  inset: auto 0 0 0;
+  background: var(--bg-overlay);
+  border-top: 1px solid var(--border-subtle);
+  padding: var(--gap);
+}
+.sheet[hidden] {
+  display: none;
+}
+main {
+  min-height: 40dvh;
+  padding: var(--gap);
+  color: var(--fg-primary);
+}
+#composer {
+  display: flex;
+  gap: var(--gap);
+  padding: var(--gap);
+  border-top: 1px solid var(--border-subtle);
+}
+textarea {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-base);
+  color: inherit;
+  font: inherit;
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none;
+    transition: none;
+  }
+}

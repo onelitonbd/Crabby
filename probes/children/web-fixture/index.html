@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- P4's fixture, not the product: it exists to prove that a framework-free document carrying the accepted overflow
+     rule (D-067: four chips at 360px, the rest behind a more sheet) can be read, served and used with no build step.
+     apps/web replaces this in M-W, row by row against docs/review/WEB.md. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Crabby (P4 fixture)</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <header class="bar" id="status-bar">
+      <button class="chip" id="chip-model" type="button" aria-label="Model">opus</button>
+      <button class="chip" id="chip-connection" type="button" aria-label="Connection">local</button>
+      <button class="chip" id="chip-approvals" type="button" aria-label="Approvals">ask</button>
+      <button class="chip" id="chip-vault" type="button" aria-label="Vault">locked</button>
+      <button class="chip chip-more" id="chip-more" type="button" aria-expanded="false" aria-controls="more-sheet">more</button>
+    </header>
+    <!-- the sheet's content is in the document; the script only opens it -->
+    <div class="sheet" id="more-sheet" hidden>
+      <ul>
+        <li><a href="#session">session</a></li>
+        <li><a href="#files">files</a></li>
+        <li><a href="#memory">memory</a></li>
+        <li><a href="#extensions">extensions</a></li>
+      </ul>
+    </div>
+    <main id="transcript" aria-live="polite"></main>
+    <form id="composer">
+      <textarea id="input" rows="2" placeholder="Ask for something"></textarea>
+      <button type="submit">send</button>
+    </form>
+    <script src="/app.js"></script>
+  </body>
+</html>

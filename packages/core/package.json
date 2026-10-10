@@ -1,0 +1,11 @@
+{
+  "name": "@crabby/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "configuration loading with validation, redacting logger, graceful shutdown (ARCHITECTURE.md §5)",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@crabby/policy",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Capability vocabulary, tier model, the §4.2 tool registry, and the §4.4 order of checks (SECURITY.md §6, PROVIDERS_AND_TOOLS.md §4)",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@crabby/api-contracts": "0.0.0"
+  }
+}

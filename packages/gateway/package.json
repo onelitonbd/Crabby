@@ -1,0 +1,19 @@
+{
+  "name": "@crabby/gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fastify Gateway: the HTTP and SSE surface every interface reads (docs/INTERFACES_AND_API.md, D-069)",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@crabby/api-contracts": "0.0.0",
+    "@crabby/core": "0.0.0",
+    "@crabby/platform": "0.0.0",
+    "@crabby/policy": "0.0.0",
+    "@crabby/storage": "0.0.0",
+    "fastify": "^5.12.5"
+  }
+}

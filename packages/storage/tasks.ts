@@ -1,0 +1,134 @@
+// The task repository. `docs/DATA_AND_MEMORY.md` §6's first principle is "persist critical task state transitions
+// before reporting them as durably recorded", so every write here completes before its caller answers — the whole
+// reason this is synchronous SQLite rather than a fire-and-forget cache.
+import { newId, type TaskRecord, type TaskState } from "@crabby/api-contracts";
+import type { SqliteDb } from "./db.ts";
+
+export interface CreateTaskInput {
+  readonly objective: string;
+  readonly sessionId?: string;
+  readonly now?: string;
+  readonly id?: string;
+}
+
+export interface ListTasksOptions {
+  readonly limit: number;
+  readonly cursor?: string | undefined;
+  readonly state?: TaskState | undefined;
+  readonly sessionId?: string | undefined;
+}
+
+const SELECT = `SELECT id, session_id, state, objective, created_at, updated_at, last_seq, error_code, error_message FROM task`;
+
+type Row = {
+  id: string;
+  session_id: string;
+  state: string;
+  objective: string;
+  created_at: string;
+  updated_at: string;
+  last_seq: number;
+  error_code: string | null;
+  error_message: string | null;
+};
+
+export function createTask(db: SqliteDb, input: CreateTaskInput): TaskRecord {
+  const now = input.now ?? new Date().toISOString();
+  const record: TaskRecord = {
+    id: input.id ?? newId("tsk"),
+    sessionId: input.sessionId ?? newId("ses"),
+    state: "queued",
+    objective: input.objective,
+    createdAt: now,
+    updatedAt: now,
+    lastSeq: 0,
+  };
+  db.prepare(
+    `INSERT INTO task (id, session_id, state, objective, created_at, updated_at, last_seq)
+     VALUES (@id, @sessionId, @state, @objective, @createdAt, @updatedAt, @lastSeq)`,
+  ).run(record);
+  return record;
+}
+
+export function getTask(db: SqliteDb, id: string): TaskRecord | undefined {
+  const row = db.prepare(`${SELECT} WHERE id = ?`).get(id) as Row | undefined;
+  return row && toRecord(row);
+}
+
+/** §2's pagination: ordered by stable id, cursor is "give me everything after this id", so a list cannot shift under
+ *  a client while the task it is watching appends records. */
+export function listTasks(
+  db: SqliteDb,
+  options: ListTasksOptions,
+): { items: TaskRecord[]; nextCursor?: string } {
+  const where: string[] = [];
+  const params: Record<string, unknown> = { limit: options.limit + 1 };
+  if (options.state) {
+    where.push("state = @state");
+    params.state = options.state;
+  }
+  if (options.sessionId) {
+    where.push("session_id = @sessionId");
+    params.sessionId = options.sessionId;
+  }
+  if (options.cursor) {
+    where.push("id > @cursor");
+    params.cursor = options.cursor;
+  }
+  const sql = `${SELECT}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY id ASC LIMIT @limit`;
+  const rows = db.prepare(sql).all(params) as Row[];
+  const page = rows.slice(0, options.limit);
+  const last = page[page.length - 1];
+  return {
+    items: page.map(toRecord),
+    ...(rows.length > options.limit && last ? { nextCursor: last.id } : {}),
+  };
+}
+
+export function setState(
+  db: SqliteDb,
+  id: string,
+  state: TaskState,
+  now = new Date().toISOString(),
+  error?: { code: string; message: string },
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE task SET state = ?, updated_at = ?, error_code = ?, error_message = ?
+       WHERE id = ? AND state <> ?`,
+    )
+    .run(state, now, error?.code ?? null, error?.message ?? null, id, state);
+  return result.changes > 0;
+}
+
+export function setLastSeq(db: SqliteDb, id: string, seq: number): void {
+  db.prepare("UPDATE task SET last_seq = ?, updated_at = ? WHERE id = ? AND last_seq < ?").run(
+    seq,
+    new Date().toISOString(),
+    id,
+    seq,
+  );
+}
+
+export function stateCounts(db: SqliteDb): Record<string, number> {
+  const rows = db.prepare("SELECT state, COUNT(*) AS n FROM task GROUP BY state").all() as {
+    state: string;
+    n: number;
+  }[];
+  return Object.fromEntries(rows.map((row) => [row.state, row.n]));
+}
+
+function toRecord(row: Row): TaskRecord {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    state: row.state as TaskState,
+    objective: row.objective,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastSeq: row.last_seq,
+    ...(row.error_code === null || row.error_message === null
+      ? {}
+      : { error: { code: row.error_code, message: row.error_message } }),
+  };
+}

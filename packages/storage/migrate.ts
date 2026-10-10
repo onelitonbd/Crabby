@@ -1,0 +1,109 @@
+// Migrations, because `docs/DATA_AND_MEMORY.md` §2.6 says "configuration migrations must be considered when
+// upgrading Crabby" and a database that cannot say which version it is on turns an upgrade into a re-install. The
+// table is append-only and every entry is one `up()` — no down path in v1: a phone that failed halfway needs a
+// restore from backup (§8), not a reverse migration nobody has tested.
+import type { SqliteDb } from "./db.ts";
+
+export interface Migration {
+  readonly version: number;
+  readonly name: string;
+  up(db: SqliteDb): void;
+}
+
+export const MIGRATIONS: readonly Migration[] = [
+  {
+    version: 1,
+    name: "tasks-events-clients-idempotency",
+    up(db) {
+      db.exec(`
+        CREATE TABLE task (
+          id            TEXT PRIMARY KEY,
+          session_id    TEXT NOT NULL,
+          state         TEXT NOT NULL,
+          objective     TEXT NOT NULL,
+          created_at    TEXT NOT NULL,
+          updated_at    TEXT NOT NULL,
+          last_seq      INTEGER NOT NULL DEFAULT 0,
+          error_code    TEXT,
+          error_message TEXT
+        );
+        CREATE INDEX task_state  ON task (state, id);
+        CREATE INDEX task_session ON task (session_id, id);
+
+        CREATE TABLE task_event (
+          id              TEXT PRIMARY KEY,
+          task_id         TEXT NOT NULL REFERENCES task (id) ON DELETE CASCADE,
+          session_id      TEXT NOT NULL,
+          seq             INTEGER NOT NULL,
+          type            TEXT NOT NULL,
+          ts              TEXT NOT NULL,
+          schema_version  INTEGER NOT NULL,
+          correlation_id  TEXT,
+          payload_json    TEXT NOT NULL,
+          truncated       INTEGER NOT NULL DEFAULT 0,
+          overflow_path   TEXT,
+          UNIQUE (task_id, seq)
+        );
+        CREATE INDEX event_task_seq_desc ON task_event (task_id, seq DESC);
+        CREATE INDEX event_ts ON task_event (ts);
+
+        CREATE TABLE client_identity (
+          id              TEXT PRIMARY KEY,
+          name            TEXT NOT NULL,
+          interface       TEXT NOT NULL,
+          capability_json TEXT NOT NULL,
+          token_hash      TEXT NOT NULL UNIQUE,
+          created_at      TEXT NOT NULL,
+          last_used_at    TEXT
+        );
+
+        CREATE TABLE pairing_code (
+          code_hash  TEXT PRIMARY KEY,
+          client_id  TEXT NOT NULL REFERENCES client_identity (id) ON DELETE CASCADE,
+          expires_at TEXT NOT NULL,
+          used_at    TEXT
+        );
+
+        CREATE TABLE idempotency (
+          key           TEXT NOT NULL,
+          route         TEXT NOT NULL,
+          request_hash  TEXT NOT NULL,
+          response_json TEXT NOT NULL,
+          created_at    TEXT NOT NULL,
+          PRIMARY KEY (key, route)
+        );
+      `);
+    },
+  },
+];
+
+export function schemaVersion(db: SqliteDb): number {
+  const row = db.prepare("SELECT MAX(version) AS v FROM schema_migration").get() as
+    | { v: number | null }
+    | undefined;
+  return row?.v ?? 0;
+}
+
+/** Applies whatever is missing and returns the versions it ran, so the Gateway can log them and `crabby doctor` can
+ *  print the storage half of `GET /status` truthfully. */
+export function migrate(db: SqliteDb): { applied: number[]; version: number } {
+  // The ledger table is created here and not inside a migration, because a migration that creates the table recording
+  // itself cannot be rolled back consistently if it fails halfway.
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS schema_migration (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
+  );
+  const before = schemaVersion(db);
+  const applied: number[] = [];
+  const insert = db.prepare(
+    "INSERT INTO schema_migration (version, name, applied_at) VALUES (?, ?, ?)",
+  );
+  for (const migration of MIGRATIONS) {
+    if (migration.version <= before) continue;
+    db.transaction(() => {
+      migration.up(db);
+      insert.run(migration.version, migration.name, new Date().toISOString());
+    })();
+    applied.push(migration.version);
+  }
+  return { applied, version: schemaVersion(db) };
+}

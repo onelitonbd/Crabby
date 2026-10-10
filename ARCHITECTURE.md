@@ -204,7 +204,10 @@ The API must use versioned contracts and validated request and response schemas.
 
 The architecture requires live delivery of streaming output and events.
 
-SSE over HTTP is the current recommended candidate; WebSocket remains an alternative (see `DECISIONS.md` P-002 / O-004). The final transport and reconnect semantics remain open until the relevant requirements are evaluated.
+**Accepted (D-048):** SSE over HTTP for server-to-client events, with every client action as a plain HTTP request;
+WebSocket is not in v1. Reconnect, `seq`, and replay semantics are fixed by D-049 (`docs/INTERFACES_AND_API.md` §5).
+The transport is reached only through the event-publisher abstraction, so a later switch must not touch application
+logic.
 
 The selected transport must support the required behavior for:
 

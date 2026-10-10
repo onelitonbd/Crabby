@@ -107,7 +107,7 @@ genuinely differs.
 | `anthropic` | Claude APIs | Yes (message format, tool use) | Different system-role and tool-block semantics justify a dedicated adapter |
 | `gemini` | Google AI / Vertex | Yes | Distinct streaming and safety metadata |
 | `openai-compatible` **user-defined** | Any endpoint the user points at: base URL + API key + model name | **Yes — required** | Accepted in D-041. First-class feature, not a workaround: a user must never need a Crabby code change or a released preset to attach an endpoint |
-| `generic-http` (non-OpenAI-shaped template) | Anything else via a user-supplied request template | No | Rejected for now (O-033): a user-authored request/response template is its own security review, and `openai-compatible` already covers the practical cases |
+| `generic-http` (non-OpenAI-shaped template) | Anything else via a user-supplied request template | No | Rejected (O-033 closed): a user-authored request/response template is its own security review, and `openai-compatible` already covers the practical cases |
 | `mock/fake` | Deterministic test provider | Yes | Required so tests never hit live APIs (`SECURITY.md` §17) |
 
 Two distinct things, deliberately separated:
@@ -463,7 +463,7 @@ Tracked in `DECISIONS.md`:
 - **O-031** — token estimation method when a provider exposes no counter, and how estimates are labeled.
 - **O-032** — the initial `shell.run` command-classifier ruleset and where its data lives (in-tree table vs
   updatable skill).
-- **O-033** — whether `generic-http` (user-defined provider template) is ever in scope.
+- ~~**O-033**~~ — **closed as rejected:** user-authored request templates are out; D-041 covers the practical cases.
 - **O-034** — local inference on Android: unsupported, documented-unsupported, or supported only via an external
   server (which is what §3.3 already assumes).
 - **O-035** — output cap and temp-file lifetime defaults per platform.

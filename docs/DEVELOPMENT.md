@@ -11,6 +11,7 @@
 | --- | --- |
 | Node.js | LTS; supported range pinned by M0 P1 and recorded in `DECISIONS.md` (O-002 context: reports tested v22.x–v26.x on Termux) |
 | Package manager | npm with workspaces (P-005) unless O-003 changes it after the Termux comparison |
+| Install model | D-050: clone/checkout + `npm install`, `--build-from-source` where native modules need it; no global install, no self-updater in v1 |
 | TypeScript | `strict: true`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`; ESM only |
 | Runtime | `tsx` for development; compiled output for release; no postinstall scripts in Crabby packages |
 | Native toolchain (Termux) | `pkg install python make clang` for `better-sqlite3` source builds — documented, and checked by `crabby doctor` |

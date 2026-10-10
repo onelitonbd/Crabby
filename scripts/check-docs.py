@@ -24,7 +24,7 @@ FILE_REF_RE = re.compile(r"`((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.md)`|`([A-Za-
 # reported as advisory, because the plan explicitly defers them (DECISIONS.md section 8).
 ADVISORY_FILENAMES = {
     "INTERFACES_AND_API.md", "UI_UX_SPEC.md", "DESIGN_SYSTEM.md", "ROADMAP.md",
-    "DEVELOPMENT.md", "AGENTS.md", "LICENSE", "SKILL.md", "CHANGELOG.md",
+    "DEVELOPMENT.md", "AGENTS.md", "LICENSE", "SKILL.md", "CHANGELOG.md", "CONSISTENCY_REVIEW.md",
 }
 SECTION_RE = re.compile(r"`([A-Z][A-Z_]+\.md)`\s*§(\d+(?:\.\d+)*)")
 H2_RE = re.compile(r"^##\s+(\d+)(?:[^\n]*)$", re.M)
@@ -175,6 +175,31 @@ def main() -> int:
         print(f"! {len(advisories)} advisory item(s) (documents planned but not yet written):")
         for a in sorted(set(advisories)):
             print(f"  - {a}")
+
+    # 7. traceability: every accepted decision must be enforced by at least one document,
+    #    and the map in DECISIONS.md section 4A must not invent IDs that do not exist.
+    d_ids = {k for k, v in defined.items() if k.startswith("D-") and "Accepted" in v}
+    trace_match = re.search(r"## 4A\..*?\n## 5\.", bodies[decisions_path], flags=re.S)
+    if trace_match:
+        mapped = set()
+        doc_names = set()
+        for line in trace_match.group(0).splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) < 2:
+                continue
+            doc_names |= {d for d in re.findall(r"`([A-Za-z0-9_./]+\.md)`", cells[0])}
+            mapped |= {f"{a}-{b}" for a, b in ID_RE.findall(cells[1]) if a == "D"}
+        for ident in sorted(d_ids - mapped):
+            problems.append(
+                f"DECISIONS.md: {ident} is Accepted but absent from the section 4A traceability map"
+            )
+        for ident in sorted(mapped - d_ids):
+            problems.append(f"DECISIONS.md: traceability map cites {ident}, which is not an Accepted row")
+        for fname in sorted(doc_names):
+            if fname not in bodies and not (ROOT / fname).exists():
+                problems.append(f"DECISIONS.md: traceability map names missing document {fname}")
+    elif d_ids:
+        problems.append("DECISIONS.md: section 4A traceability map is missing")
 
     if problems:
         print(f"✗ {len(problems)} documentation problem(s):")

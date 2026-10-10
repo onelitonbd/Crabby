@@ -65,6 +65,13 @@ A recommendation must not be treated as an accepted decision without approval.
 | D-045 | Any model's capability descriptor is user-overridable (force on/off, context ceiling, output reserve). Priority: user override → preset → discovery → adapter default. Forcing a capability on does not exempt it from runtime verification. | Accepted |
 | D-046 | Tier confirmations: `history.export` T2, `cron.schedule` T2 with runtime per-step approval (§4.5 of `PROVIDERS_AND_TOOLS.md`), `memory.save` T1 while external-derived memory is T2. Closes O-020. | Accepted |
 | D-047 | Automatic provider/model fallback is off by default; a per-identity pre-approved narrow ladder may be configured, limited to reliability classes that change neither cost nor data destination. | Accepted |
+| D-048 | Streaming transport: SSE for server-to-client events, plain HTTP for every client action, no WebSocket in v1. The transport sits behind an abstraction so the decision is revisitable without touching application logic. Closes O-004. | Accepted |
+| D-049 | Event replay is per-task and count-bounded, ordered by a monotonic per-task `seq`; outside the window the Gateway returns an explicit gap marker and the client must reconcile from `GET /tasks/{id}`. Events for display, GET for truth. Closes O-010. | Accepted |
+| D-050 | First-release installation path: clone/checkout plus `npm install` with the documented `--build-from-source` step for native modules, per-platform docs, `crabby doctor` for recovery. No global install target, no package-manager repository, no self-updater in v1. Closes O-012. | Accepted |
+| D-051 | Client credential format: opaque random token, owner-only file permissions, no expiry by default and no rotation requirement in v1; revocation is the control. Closes the O-019 remainder. | Accepted |
+| D-052 | Approvals are once-only in the first release. "Remember this choice" approvals are out of scope for v1, and therefore unavailable for T3 by definition. | Accepted |
+| D-053 | Paired-identity management (`auth.manage`) is available only to local clients. It is the one accepted asymmetry in the feature-parity matrix, recorded with its alternative path rather than hidden. | Accepted |
+| D-054 | `--restrict` removes capabilities from an identity; it never converts them into an approval the same restricted client must answer. | Accepted |
 
 ## 3. Proposed Technical Choices
 
@@ -92,22 +99,22 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-001 | Database engine | Largely informed: SQLite is the leading candidate after comparison against `docs/DATA_AND_MEMORY.md` §4. Final confirmation still requires reproduction on a clean environment. |
 | O-002 | Database driver | Needs Validation: reproduce `better-sqlite3` build and runtime behaviour on a clean Termux environment; pin supported version range. |
 | O-003 | npm vs pnpm | Open: compare installation, reproducibility, workspace workflow, and Termux compatibility. |
-| O-004 | SSE vs WebSocket | Open: evaluate streaming, reconnection, bidirectional control, and event replay. |
+| O-004 | SSE vs WebSocket | **Closed (D-048).** SSE + HTTP; WebSocket not in v1. |
 | O-005 | Zod vs TypeBox | Open: confirm schema validation and API contract requirements. |
-| O-006 | TUI library | Researched 2026-10-09 against the npm registry; recommendation P-010 (Ink 8) awaiting acceptance. Evidence in §5A. |
+| O-006 | TUI library | Researched 2026-10-09 against the npm registry (evidence in §5A). **Intentionally not accepted yet:** Ink 8 stays P-010 (Proposed) until `docs/ROADMAP.md` M0 P5 measures streaming repaint cost on a phone terminal. Owner decision this round: measure first, accept after. |
 | O-007 | Windows support | Open: define the initial WSL support boundary and assess native Windows support. |
 | O-008 | Extension isolation | Needs Validation. Candidates and the hard gate are written up in `EXTENSIONS.md` §15: filtered in-process for bundled/first-party only, child process + capability RPC for everything else; `worker_threads` and `node:vm` rejected as security boundaries. Blocking item: hostile-extension test on Termux. |
 | O-009 | Tunnel lifecycle | Partly resolved: authentication is defined in `SECURITY.md` §5 and D-030/D-032. Open remainder: URL rotation on restart, reconnect handling, shutdown ordering, and exposure auditing. |
-| O-010 | Event replay | Open: define event IDs, ordering, retention window, replay, and reconnection semantics. |
+| O-010 | Event replay | **Closed (D-049).** Per-task `seq`, count-bounded window, explicit gap + reconcile-by-GET. |
 | O-011 | Context management algorithms | Needs Validation: evaluate token budgeting, compaction, retrieval, checkpointing, and recovery. |
-| O-012 | Installation and upgrades | Open: define installation, upgrade, rollback, backup, and recovery requirements per platform. |
+| O-012 | Installation and upgrades | **Closed (D-050)** for the v1 path. Still open: backup/restore specifics (O-017) and rollback behavior after a failed migration (O-013-adjacent). |
 | O-013 | Checkpoint recovery semantics | Needs Validation: establish safe resume rules, idempotency, and handling of partially completed external actions. |
 | O-014 | Event retention policy | Open: determine retention duration, storage limits, and deletion rules. |
 | O-015 | Memory retrieval implementation | Open: define text-search implementation, indexing, and criteria for introducing vector search. |
 | O-016 | Memory deletion and privacy | Open: specify how deleting conversations affects summaries, memories, and derived records. |
 | O-017 | Backup and restore | Open: define a reliable, portable backup and restore procedure for persistent data. |
 | O-018 | Secrets storage mechanism | Accepted direction in D-031. Open remainder: Android/Termux `keystore` reachability from Termux, and the KDF/encryption parameters for the fallback file. |
-| O-019 | Local client authentication method | Accepted in D-030 (per-client pairing tokens). Open remainder: token format, expiry policy, and pairing UX on a phone-sized terminal. |
+| O-019 | Local client authentication method | **Closed** (D-030 mechanism, D-051 format/expiry). Open remainder: pairing UX on a phone-sized terminal only. |
 | O-020 | Risk classification levels for tools | **Closed (D-046).** Tier model in `SECURITY.md` §6.2, per-tool assignment in `PROVIDERS_AND_TOOLS.md` §4.2; the three judgement calls confirmed. |
 | O-021 | Prompt-injection hardening depth for imported content | Open: instruction-source tagging vs full isolation. |
 | O-022 | Audit log redaction rules | Open: which payload fields are stripped vs hashed vs retained. |
@@ -130,6 +137,7 @@ Each proposal remains pending until explicitly accepted or validated as required
 | O-039 | API versioning style | Open: `/api/v1` path prefix vs header-based versioning (`docs/INTERFACES_AND_API.md` §12). |
 | O-040 | Web UI serving | Open: served by the Gateway, or by a separate static step behind `crabby web open`. |
 | O-041 | Approval expiry policy | Open: single duration vs per-tier durations (a T3 prompt should not age like a T2 one). |
+| O-052 | Remembered approvals after v1 | Open: whether scoped "remember this" approvals return, and with which persistence and revocation guarantees. Out of scope for v1 per D-052. |
 | O-042 | Parity matrix source | Open, recommended: generate `docs/INTERFACES_AND_API.md` §8 from the tool registry plus annotations instead of hand-maintaining it. |
 | O-043 | Web component approach | Open: in-house primitives vs a dependency-free library. Tokens must not depend on the choice (`docs/DESIGN_SYSTEM.md` §1 rule 05). |
 | O-044 | Concrete palette values | Open: hex values plus verified WCAG 2.2 AA contrast for text and non-text. |
@@ -165,6 +173,30 @@ Selection rationale against Crabby's constraints:
   fallback, and that outcome is recorded as a *useful* M0 result, not a setback.
 - Anything layered on top (termcn-style component collections) is treated as copy-in source, not a dependency, so it
   cannot smuggle in an install-time native build.
+
+## 4A. Traceability — Which Document Enforces Which Decision
+
+An accepted decision with no enforcing document is a decision nobody implements, so every `D-` row must appear at
+least once below. Adding a decision without naming its enforcer is a documentation failure, not a detail.
+
+| Enforced by | Decisions |
+| --- | --- |
+| `PROJECT_BRIEF.md` (product scope, platforms, principles) | D-001, D-002, D-003, D-004, D-016, D-017, D-019, D-021 |
+| `ARCHITECTURE.md` (structure, contracts, platform) | D-006, D-007, D-008, D-009, D-010, D-011, D-012, D-015, D-032, D-045, D-048, D-049, D-050, D-053 |
+| `AGENT_RUNTIME.md` (execution lifecycle) | D-018, D-022, D-023, D-024, D-025, D-026, D-027, D-028, D-029, D-044 |
+| `SECURITY.md` (policy, authn, secrets, exposure) | D-005, D-013, D-014, D-020, D-030, D-031, D-033, D-040, D-043, D-046, D-047, D-051, D-052, D-053, D-054 |
+| `EXTENSIONS.md` (packaging, compatibility, trust) | D-035, D-036, D-037, D-038, D-039, D-040 |
+| `PROVIDERS_AND_TOOLS.md` (adapters, tools, tiers) | D-041, D-042, D-043, D-044, D-045, D-046, D-047 |
+| `docs/DATA_AND_MEMORY.md` (persistence, memory, deletion) | D-017, D-018, D-019, D-020, D-021 |
+| `docs/INTERFACES_AND_API.md` (API surface, parity) | D-005, D-030, D-048, D-049, D-051, D-052, D-053 |
+| `docs/UI_UX_SPEC.md` + `docs/DESIGN_SYSTEM.md` (presentation) | D-005, D-045, D-046, D-052 |
+| `docs/ROADMAP.md` + `docs/DEVELOPMENT.md` (sequencing, workflow) | D-016, D-034, D-050, D-051 |
+| `AGENTS.md` (agent contract) | D-013, D-014, D-016, D-026, D-034, D-038, D-040, D-043, D-044, D-052 |
+
+Rules: a decision may be enforced by several documents but must be enforced by at least one; the enforcing document
+states the behavior and this register records the status; and no document restates a rule it does not own — which is
+exactly how the stored-approval and export-endpoint contradictions described in
+`docs/CONSISTENCY_REVIEW.md` came to exist.
 
 ## 5. Database Evaluation Record
 
@@ -245,7 +277,7 @@ For each open item:
 
 ## 8. Current Next Actions
 
-**Done this round:** `SECURITY.md` written; D-030 (pairing tokens), D-031 (secrets), D-032 (remote posture),
+**Done this round:** M-D opened with a mechanical consistency review (`docs/CONSISTENCY_REVIEW.md`); D-030 (pairing tokens), D-031 (secrets), D-032 (remote posture),
 D-033 (`termux-api` tiers) accepted and propagated.
 
 1. ~~Write `EXTENSIONS.md`~~ done — D-035…D-039 accepted, O-008 narrowed to a validation gate, first-release scope confirmed (no third-party executable).
@@ -256,16 +288,20 @@ D-033 (`termux-api` tiers) accepted and propagated.
 3b. Add `scripts/check-docs.py` to a pre-commit or CI step once the repository has workflows (O-036).
 4. ~~`docs/INTERFACES_AND_API.md`~~ · ~~`docs/UI_UX_SPEC.md`~~ · ~~`docs/DESIGN_SYSTEM.md`~~ ·
    ~~`docs/ROADMAP.md`~~ · ~~`docs/DEVELOPMENT.md`~~ · ~~`AGENTS.md`~~ all written this round.
-5. **M-D:** final cross-document consistency review (owner + agent together), then close the 6 implementation-
-   blocking items listed in `docs/ROADMAP.md` §11 — O-004, O-010, O-019 (remainder), O-002, O-006, O-012.
+5. **M-D in progress:** cross-document consistency review written up in `docs/CONSISTENCY_REVIEW.md`. Four
+   blocking items closed this round (O-004, O-010, O-012, O-019). Remaining blockers need a device: O-002
+   (driver reproduction), O-006/O-051 (TUI repaint measurement), which is exactly M0 P3/P5 work.
+7. M-D mechanical findings and their fixes are recorded in `docs/CONSISTENCY_REVIEW.md`; five defects were found and
+   repaired, including two real contradictions (stored approvals, export endpoint) and one policy deadlock
+   (`--restrict` vs T3 approval on a restricted identity).
 6. Then M0 Termux validation prototype. Still no product code before M-D finishes and those gates are addressed.
 
 | Counter | Value |
 | --- | --- |
-| Accepted decisions | 47 (D-001…D-047) |
+| Accepted decisions | 54 (D-001…D-054) |
 | Proposed technical choices | 10 (P-001…P-010) |
-| Open / needs-validation items | 51 tracked: 5 closed as decided (O-020, O-026, O-028, O-030, O-033), 46 still open — 6 of them block implementation (`docs/ROADMAP.md` §11) |
-| Planning docs written | 15 — documentation set complete except the final consistency review |
+| Open / needs-validation items | 52 tracked; closed as decided: O-004, O-010, O-012, O-019, O-020, O-026, O-028, O-030, O-033 (O-006 stays open until M0 P5 measures). Remaining blockers are device measurements, not opinions: O-002, O-006, O-051 |
+| Planning docs written | 16 — includes `docs/CONSISTENCY_REVIEW.md` (M-D record) |
 | Custom endpoint / fallback decisions | D-041…D-047 accepted this round |
 | Planning docs remaining | 0 (M-D review is the last step) |
 

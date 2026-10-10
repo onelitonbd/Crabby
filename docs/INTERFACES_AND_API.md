@@ -55,7 +55,12 @@ Requirements:
 
 - The pairing code is generated inside the Gateway's own host/terminal, never accepted from an unauthenticated
   network caller. Redeeming a stolen code is therefore bounded by the TTL and the single-use rule.
-- Token storage: owner-only permissions in the client's config location; secrets follow `SECURITY.md` §7/D-031.
+- Token storage: owner-only permissions in the client's config location; secrets follow `SECURITY.md` §7/D-031. A
+  credential is checked once at request start and again when a live event stream is upgraded to an action, so a
+  revoked identity cannot keep acting on an open stream.
+- Managing identities requires `auth.manage` (`SECURITY.md` §6.1), which exists only on a local paired client. This
+  is the single legitimate asymmetry in the parity matrix: minting or revoking identities from a network-facing
+  interface would let a stolen remote token create a second one. It is recorded in §8 rather than hidden.
 - `crabby auth list` shows name, interface, created, last used, granted capabilities, and whether it is currently
   connected. `crabby auth revoke <clientId>` must be effective on the next request **and** must terminate live event
   streams for that client.
@@ -68,7 +73,9 @@ Requirements:
 
 ### 3.2 Open detail
 
-O-019 remainder — token format, optional expiry, and pairing UX on a phone. On Termux the code must be readable
+Token format and expiry are settled by D-051: an opaque random token with no expiry by default, since revocation is
+the control and a phone cannot reliably run a rotation UX. **O-019 now has one remainder: pairing UX on a phone** —
+a code that is readable, typeable, and copyable in one screen. On Termux the code must be readable
 and typeable in one screen; copy/paste is not guaranteed to work.
 
 ## 4. Endpoints
@@ -96,6 +103,7 @@ coverage does not shrink.
 | `GET /sessions/{id}/messages?cursor=` | Ordered history with tool calls attached to their turn. |
 | `POST /sessions/{id}/messages` | Add a user message; returns `messageId` and the resulting `taskId` when a task is implied. |
 | `POST /sessions/{id}/compact` | Ask for compaction now rather than at the budget limit (D-027). |
+| `POST /sessions/{id}/export` · `POST /export` | Render a sanitized export (`json`, `md`, or `jsonl`) and return a download handle for the artifact, which lives in a temp directory with the §5.2 output caps. `history.export` is T2, so this route creates a task-shaped action rather than streaming bytes blindly (`PROVIDERS_AND_TOOLS.md` §4.2). |
 | `GET /sessions/{id}/context` | Current working-context view: what is in budget, what was compacted, what is pinned. |
 | `POST /sessions/{id}/pin` | Protect important context from compaction. |
 
@@ -109,7 +117,7 @@ coverage does not shrink.
 | `GET /tasks/{id}/steps` | Step-level plan and outcomes. |
 | `POST /tasks/{id}/cancel` | Cancellation request; returns `cancelling` and, once settled, the terminal state (`ARCHITECTURE.md` §10). |
 | `POST /tasks/{id}/resume` | Explicit resume, for the cases auto-resume declined (§7.2 of the runtime doc). |
-| `GET /tasks/{id}/events?cursor=` | Historical events for a task, replay window bounded by policy (O-010). |
+| `GET /tasks/{id}/events?cursor=` | Historical events for a task; replay window is per-task and count-bounded (D-049). |
 | `GET /approvals?state=pending` | Approval queue for this client. |
 | `POST /approvals/{id}/decision` | `{ decision: approve|deny, scope: once }`. Only `once` exists in the first release for T2/T3 per `SECURITY.md` §6. |
 | `GET /tasks/{id}/checkpoint` | Checkpoint view for recovery transparency. |
@@ -135,10 +143,11 @@ coverage does not shrink.
 
 ### 5.1 Transport
 
-`GET /events` returns an SSE stream (`text/event-stream`) filtered by query (`sessionId`, `taskId`, `types`).
-The client sends `Last-Event-ID` on reconnect. WebSocket is the rejected alternative for now (O-004) — every
-client action is a plain HTTP request, so a persistent bidirectional channel buys Crabby little and costs
-reconnect/replay complexity on mobile networks.
+**Accepted (D-048):** `GET /events` returns an SSE stream (`text/event-stream`) filtered by query (`sessionId`,
+`taskId`, `types`); the client sends `Last-Event-ID` on reconnect. Every client action is a plain HTTP request, so a
+persistent bidirectional channel would buy Crabby little while adding reconnect, ordering, and lifecycle complexity
+on mobile networks. WebSocket is therefore not in v1 — and because the transport is reached only through the event
+publisher abstraction, adding it later must not require touching application logic.
 
 Requirements on whichever transport ships:
 
@@ -206,8 +215,9 @@ stream drops
 
 - A gap is always explicit. Silently resuming a live tail as though nothing was missed is prohibited: an interface
   must never show a task as still running when it completed during the outage.
-- Replay retention and window size are O-010 (currently proposed: replay by `taskId` within a bounded count,
-  not a time window, because the thing a client needs after a 3-second phone-network blip is *this task's* tail).
+- **Accepted (D-049):** replay is per-task and count-bounded, not time-bounded — what a client needs after a
+  three-second phone-network blip is *this task's* tail, not every event from the last hour. Outside the window the
+  response carries the explicit gap marker and the client reconciles from `GET /tasks/{id}`.
 - The client-visible contract is: **events for display, GET for truth.**
 
 ## 6. Error Envelope
@@ -325,7 +335,7 @@ limitation **and** an accepted alternative interaction, which is what `ARCHITECT
 | Logs / audit | `/logs`, `/audit` | `logs`, `audit` | log pane | logs view | `/logs` (tail + file export) |
 | Tunnel on/off | `POST/DELETE /tunnel` | `tunnel on/off` | status + action | settings | `/tunnel on` (T3 confirm) |
 | Pair / revoke client | `/auth…` | `auth pair/revoke` | settings | settings | revoke from a trusted local client only — a remote client must not be able to mint identities; **documented limitation with local-only alternative** |
-| History export | `POST …` via `history.export` | `history export` | export action | Download | `/export` as a file |
+| History export | `POST /sessions/{id}/export` (`history.export`) | `history export` | export action | Download | `/export` as a file |
 | Delete conversation | `DELETE /sessions/{id}` | `history delete-session` | `d` | Delete | `/delete <id>` with typed confirm |
 
 Two entries deliberately carry a limitation instead of pretending to parity: minting identities from Telegram is a
@@ -373,23 +383,24 @@ them later as an implementation shortcut.
 
 ## 12. Open Decisions
 
-Recorded in `DECISIONS.md`: **O-004** (SSE vs WebSocket), **O-010** (event ids, ordering, replay window, retention),
-**O-019** remainder (token format, expiry, pairing UX), **O-009** remainder (tunnel lifecycle), **O-036** (run the
-doc checker in CI), plus:
+Recorded in `DECISIONS.md`: **O-004** and **O-010** are closed by D-048/D-049; **O-019** keeps only its pairing-UX
+remainder; still open here: **O-009** remainder (tunnel lifecycle), **O-036** (doc checker in CI), plus:
+
+Decided with this document's review round: transport (D-048) and replay semantics (D-049). Still open:
 
 - **O-039** — URL scheme: `/api/v1` prefix vs header-based versioning.
 - **O-040** — whether the Web UI is served by the Gateway or by a separate static step in `crabby web open`.
-- **O-041** — approval expiry duration and whether expiry is per tier (a T3 prompt should not expire on the same
+- **O-041** — approval expiry duration, and whether expiry is per tier (a T3 prompt should not age on the same
   clock as a T2 one).
-- **O-042** — whether the parity matrix in §8 is generated from the tool registry plus an annotation, instead of
-  being maintained by hand. Recommended, because a hand-maintained table is how drift starts.
+- **O-042** — whether the §8 parity matrix is generated from the tool registry plus annotations rather than
+  hand-maintained. Recommended, because a hand-maintained table is how drift starts.
 
 ## 13. Acceptance Criteria
 
 01. Every capability in `PROVIDERS_AND_TOOLS.md` §4.2 appears in the §8 matrix with a real command per interface or a
     documented limitation.
-02. The event envelope, `seq` rule, and gap-handling contract are agreed, closing O-010's behavioral half.
-03. Pairing and revocation are specified well enough that no implementer invents a trust rule.
+02. The event envelope, `seq` rule, and gap-handling contract are agreed (D-049); retention *size* tuning stays open.
+03. Pairing and revocation are specified well enough that no implementer invents a trust rule (D-030, D-051).
 04. Error classes and codes are frozen enough to build a CLI exit-code convention against.
 05. The Telegram adapter has no capability of its own: everything is expressible through §4 endpoints.
 06. Tests in §11 exist before the second interface is written, so parity is proven, not asserted.

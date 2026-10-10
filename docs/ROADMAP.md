@@ -19,8 +19,10 @@ Documentation ──────────────────────
 All 15 planning documents now exist. What remains in this phase is the **consistency review** (M-D below) and
 closing or consciously deferring the six implementation-blocking decisions in §11.
 
-Implementation has not started, and no phase below is authorized to start until the documentation phase closes
-with the consistency review (M-D) and the owner accepts the decisions marked **blocking** in §6.
+Implementation has not started. M-D (documentation close-out) is **in progress**: its mechanical half is written up
+in `docs/CONSISTENCY_REVIEW.md`, and four of the six original blockers were closed this round (D-048…D-051). M0 is
+the phase that closes the rest, because those remaining items are measurements, not opinions — it stays gated on
+the owner's go-ahead.
 
 ## 1. Phase M-D — Documentation close-out
 
@@ -80,7 +82,8 @@ runs; a task can be created and read back with an id, and nothing else.
 - Auto-recovery on restart that cannot bypass approvals (`AGENT_RUNTIME.md` §7.2).
 - Event delivery with gap handling and reconciliation-by-`GET`.
 - Initial tools with tiers: `file.*`, `session.*`, `task.*`, `net.fetch`, `memory.*`, `config.*`
-  (`PROVIDERS_AND_TOOLS.md` §4.2). `shell.run` may exist but stays off by default.
+  (`PROVIDERS_AND_TOOLS.md` §4.2). `shell.run` ships in this phase but is **not enabled by default**: it is off until the user opts in during
+`crabby init`, and M2's exit demo is run once with it off and once with it on (`SECURITY.md` §9).
 
 Exit: a multi-step task started from a stub CLI completes, streams, persists, survives a kill + restart, and its
 state matches `GET /tasks/{id}` from a second client. Policy denies what policy must deny, in tests.
@@ -169,12 +172,15 @@ Blocking means the shape of code depends on it, so guessing would be expensive:
 
 | ID | Why it blocks |
 | --- | --- |
-| O-004 (SSE vs WebSocket) | Every interface's transport code depends on it |
-| O-010 (event ids, replay window) | Gap handling and `seq` semantics are core behavior |
-| O-019 remainder (token format, expiry) | Auth is the first thing written in M1 |
-| O-002 (`better-sqlite3` reproduction) | Storage abstraction and migrations depend on the driver |
-| O-006 (TUI library) | M0 P5 must pick it; the whole TUI workstream waits |
-| O-012 (install/upgrade/recovery) | M1 packaging is built around it |
+| O-002 (`better-sqlite3` reproduction) | Storage abstraction and migrations depend on the driver; needs a real device |
+| O-006 / O-051 (TUI: Ink 8 pending measurement) | P-010 stays Proposed until M0 P5 measures repaint cost; the TUI workstream waits on the result, not on a preference |
+
+**Closed during M-D (2026-10-09):** O-004 transport → D-048 (SSE + HTTP, no WebSocket in v1); O-010 replay →
+D-049 (per-task `seq`, count-bounded window, gap + reconcile-by-GET); O-012 install path → D-050; O-019
+token/expiry → D-051.
+
+What that leaves blocking nothing but *shaping* M0: the only way to close O-002 and O-006 is to run the probes, so
+M0 is now unblocked by decision and blocked only by the owner's go-ahead.
 
 Not blocking, and safe to decide during the phase that needs them: O-001, O-003, O-005, O-007, O-011, O-013…O-018,
 O-021…O-025, O-027, O-029…O-046 — the rest of the 38 open items, each tracked where it applies.

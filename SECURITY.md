@@ -26,7 +26,7 @@ Out of scope here: the internal state machine of the agent (`AGENT_RUNTIME.md`),
 08. **Defense against our own agent:** Content returned by tools, the web, files, MCP servers, and imported extensions is untrusted data and must not become instructions that override policy.
 09. **Auditable:** Security-relevant events are recorded durably enough to reconstruct what was allowed, by whom, and when — without turning the log into a leak.
 10. **Honest limitations:** Platform constraints (Android background limits, no real sandbox in Termux, mutable app home directory) are documented as limitations, never described as protections we do not have.
-11. **Reversible where possible:** Users can revoke tokens, deny stored approvals, disable extensions, rotate secrets, and delete data.
+11. **Reversible where possible:** Users can revoke tokens, cancel or deny pending approvals, disable extensions, rotate secrets, and delete data.
 
 ## 3. Trust Boundaries
 
@@ -82,7 +82,7 @@ Boundary rules:
 | T-02 | **Prompt injection via imported extension** — a skill from another harness smuggles instructions in its description or README. | Compatibility importer | §11, `EXTENSIONS.md` |
 | T-03 | **Untrusted extension code** — a plugin with shell or network access misuses it. | Plugin install | §11, O-008 |
 | T-04 | **Unauthorized remote control** — attacker reaches the Gateway through a tunnel, LAN, or a shared device and issues high-impact tasks. | B5, weak local trust | §5, §13 |
-| T-05 | **Approval fatigue / rubber-stamping** — user approves destructive actions reflexively; agent exploits a broad stored approval. | Approval UX | §6 |
+| T-05 | **Approval fatigue / rubber-stamping** — user approves destructive actions reflexively; a broad or remembered approval is then exploited. | Approval UX | §6.3 (once-only approvals in v1) |
 | T-06 | **Cross-interface privilege confusion** — a task started on Telegram is silently granted TUI-level permissions, or vice versa. | Interface-specific policy drift | §2 rule 02, §7 parity |
 | T-07 | **Recovery overreach** — auto-resume repeats a non-idempotent action (double send, double purchase) after a restart. | Full auto-resume (D-026) | `AGENT_RUNTIME.md` §7.2 |
 | T-08 | **Secret leakage** — keys in logs, crash reports, conversation records, memory search results, or exported backups. | Error paths, telemetry | §7, §14, `docs/DATA_AND_MEMORY.md` §2.6 |
@@ -126,7 +126,9 @@ Pairing requirements:
 - Revocation takes effect on the next request and must also terminate live event streams.
 - Unauthenticated requests are rejected before routing, including `GET /health` and event subscriptions.
 
-Remaining open detail (O-019): token format, optional expiry policy, and pairing UX on a phone-sized terminal.
+Token format and lifetime are fixed by D-051 (opaque token, no expiry; revocation is the control). **O-019** keeps a
+single remainder: the pairing code's presentation on a phone-sized terminal — readable, typeable, and copyable in one
+screen (`docs/INTERFACES_AND_API.md` §3.2).
 
 Alternatives considered and rejected:
 
@@ -179,6 +181,7 @@ Permissions are named capabilities, not free-form text. Initial proposed vocabul
 | `ext.list` | Enumerate installed extensions and their metadata. |
 | `ext.read` | Read an extension's own manifest, docs, and conversion reports. |
 | `tunnel.enable` | Expose the Gateway remotely. |
+| `auth.manage` | Create, list, and revoke paired client identities. Local-only by construction: no remote or agent-facing path may grant it (`docs/INTERFACES_AND_API.md` §3.1). |
 | `device.<capability>` | One independently enabled Termux device capability: `device.sms`, `device.contacts`, `device.camera`, `device.location`, `device.sensor`, `device.notify`, `device.control`, `device.screen`, `device.clipboard`. Each is a distinct grant; `device.notify` and `device.control` for benign outputs are the only low-risk members (D-033, `PROVIDERS_AND_TOOLS.md` §4.2). |
 
 A task may additionally be given a *task-scoped* narrowing of these, so "just do this repo job" does not mean "and everything else".
@@ -206,7 +209,12 @@ An approval request must carry: task id, tool, tier, human-readable action summa
 
 Approval binding: a decision applies to *that* action with *those* arguments in *that* task. Approval must never be interpreted as a general license, and re-approval is required when the action materially changes (targets a new path, host, or destination) — per `AGENT_RUNTIME.md` §5.
 
-Stored/remembered approvals (optional convenience) must be scoped, listed in one place, individually revocable, and unavailable for T3.
+**Stored ("remember this") approvals are out of scope for the first release** (D-052). v1 supports exactly one
+answer shape — approve this one action, once — which is also what `docs/INTERFACES_AND_API.md` §4.3 exposes as
+`scope: once`. If a remembered approval is ever added, it must be scoped to the tool plus argument pattern, listed
+in one place, individually revocable, unavailable for T3 entirely, and it must not survive a material change to the
+action. This is the honest reading of the parity promise: approval fatigue (T-05) is better answered by asking less
+often — fewer, larger, reversible steps — than by pre-authorizing the dangerous ones.
 
 Denials are recorded and respected; the agent must not rephrase a denied action to obtain a different answer, and repeated denial of the same class should pause the task and surface it to the user rather than loop.
 
@@ -299,7 +307,13 @@ Default posture: **loopback only**. Requirements for the optional remote mode:
 - Remote clients authenticate with the same mechanism as other clients (§5.1) over TLS to the tunnel. Without a valid token, the Gateway must reject every route, including health and SSE.
 - Remote access must not add capabilities. **Selected (D-032):** Crabby applies no tunnel-specific hardening on top of normal policy — a remote client may use exactly what its paired identity is allowed, preserving feature parity (D-005) across local and remote.
 - Residual risk is accepted and must be documented for users: with a valid token, a remote client can drive a shell-capable task. The compensating controls are risk-tier approvals (§6.2), per-action T2/T3 prompts, token revocation, and audit records.
-- Narrowing remains available per client, not per transport: `crabby auth pair --restrict shell,config` produces a limited identity. This keeps parity intact — the *identity* is narrower, the *transport* is not.
+- Narrowing remains available per client, not per transport: `crabby auth pair --restrict shell,config` produces a
+  limited identity. This keeps parity intact — the *identity* is narrower, the *transport* is not.
+- Restriction semantics, so a narrow identity cannot deadlock: `--restrict` **removes** capabilities from that
+  identity; it does not convert them into always-deny-with-an-approval-prompt. A removed capability is reported as
+  `platform-unsupported`-style "not available to this client" with the reason, rather than queueing an approval the
+  same restricted client may be unable to answer. Approvals may be answered from *any* paired client that holds
+  `auth` visibility, but relying on that as the only escape hatch is a design bug.
 - Because exposure is the risky part, enabling a tunnel is T3, and the approval text must list which paired identities would become reachable remotely.
 - Tunnel lifecycle: URL changes on restart, so clients must discover rather than assume; the runtime must handle tunnel drops with clear state, and `crabby tunnel stop` must fully revoke exposure and close the listener.
 - Log the tunnel's active periods and any accepted remote auth failures.
@@ -342,7 +356,7 @@ The test suite must include, at minimum (see also `docs/DEVELOPMENT.md`):
 
 - **Policy unit tests:** every capability check has a positive and a negative case; unparsable or unknown input denies.
 - **Boundary tests:** file tools reject traversal, symlink escape, and absolute paths outside roots; on both POSIX and WSL path shapes.
-- **Approval tests:** approval is bound to the exact action; material change re-prompts; T3 refuses stored approvals; a restart does not silently satisfy a pending approval.
+- **Approval tests:** approval is bound to the exact action; material change re-prompts; no remembered-approval path exists in v1, and a request for one is refused (`D-052`); a restart does not silently satisfy a pending approval.
 - **Injection fixtures:** corpus of adversarial tool outputs and imported skill text; expected behavior is denial or reporting, never execution.
 - **Redaction tests:** inject a fake secret through every path (tool error, provider error, extension crash, audit payload) and assert it appears nowhere.
 - **Auth tests:** unauthorized Telegram sender, wrong token, missing Origin header, expired/revoked token — all rejected, with no capability leak in the error text.
@@ -357,7 +371,8 @@ Security-relevant tests must run without live model APIs, using deterministic pr
 The security design is ready for implementation planning when:
 
 01. Capability vocabulary and risk tiers are defined, and every initial tool is classified.
-02. A client authentication mechanism is selected and specified (closing O-019).
+02. A client authentication mechanism is selected and specified — closed by D-030 (mechanism) and D-051 (format and
+   lifetime); the pairing-screen UX stays open and does not block M1.
 03. Secrets storage behavior is decided per platform, with an explicit weaker-fallback disclosure (O-018).
 04. Approval payload content, binding rules, and revocation UX are specified for all four interfaces.
 05. The untrusted-content policy is written into tool and importer implementations as a requirement, not a convention.
@@ -379,9 +394,8 @@ Still open:
 - **O-008** Extension isolation strategy and supported trust levels.
 - **O-009** Tunnel lifecycle details (URL rotation, reconnect, shutdown ordering).
 - **O-018** (remainder) Android `keystore` reachability from Termux; KDF and encryption parameters for the fallback.
-- **O-019** (remainder) Token format, optional expiry policy, pairing UX on narrow terminals.
-- **O-020** Per-tool risk-tier assignment: proposed in `PROVIDERS_AND_TOOLS.md` §4.2, pending owner
-  confirmation of its three judgement calls.
+- **O-019** (remainder) Pairing-code presentation on a phone-sized terminal. Format and expiry are decided (D-051).
+- ~~**O-020**~~ Per-tool risk-tier assignment — **closed (D-046)**; table in `PROVIDERS_AND_TOOLS.md` §4.2.
 - **O-021** Depth of prompt-injection hardening for imported content.
 - **O-022** Audit log redaction rules.
 - **O-024** Initial `termux-api` capability list.

@@ -1,0 +1,17 @@
+{
+  "name": "@crabby/tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The \u00a74.1 tool record's executor half and the file tools \u00a74.2 classifies, with SECURITY \u00a78's path enforcement in the adapter that \u00a78 names",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@crabby/agent-runtime": "0.0.0",
+    "@crabby/api-contracts": "0.0.0",
+    "@crabby/policy": "0.0.0",
+    "@crabby/providers": "0.0.0"
+  }
+}

@@ -244,11 +244,16 @@ describe("D-065's checkpoint (saved state, and the rule that judges it)", () => 
     assert.equal(
       answer.verdict,
       "re-ask",
-      "`file.delete` started and never reported, and no tool in this build declares `idempotent`, so D-065's rule " +
+      "`file.delete` started and never reported, and this fixture's runtime declares no facts at all, so D-065's rule " +
         "re-asks instead of repeating an action whose completion status is unknown",
     );
     assert.deepEqual(answer.inFlight, { tool: "file.delete", startedSeq: started.seq });
-    assert.match(answer.reason, /PENDING_RECORD_FIELDS/);
+    assert.match(
+      answer.reason,
+      /does not declare it idempotent/,
+      "the reason names the missing permission rather than a package: `packages/tools` has declared `idempotent` since " +
+        "M2k (D-098), so a reason claiming nothing in the build declares one would be a sentence grep contradicts",
+    );
     assert.match(answer.reason, /tool\.execution\.started/);
   });
 

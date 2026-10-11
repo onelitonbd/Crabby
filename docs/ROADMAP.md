@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-53 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-55 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -219,10 +219,11 @@ nothing to pass (D-095, closing half of F-47). D-044's second rung — ask the u
 absent, and building the checkpoint is what showed why: the saved state it resumes from now exists, but there is no switch
 surface to ask on, no runner to answer to, and `failed` is terminal and absorbing, which is F-50. So an exhausted budget
 fails the task and says how many attempts it took. **Still absent, and the reason `crabby task run` and a
-cancellation route are not `ready`:** the loop has no tools to run (`ARCHITECTURE.md` §18's `packages/tools` does not
-exist, so the executor is a seam), no provider adapter to call (`PROVIDERS_AND_TOOLS.md` §3.3's four arrive in M2/M4, and
-the fake is a test reference rather than a product provider), and nothing in the Gateway that drives a task — so a route
-that started a run, or one that cancelled a run nobody started, would be the demo this phase has refused to ship. F-46 was the debt that slice
+cancellation route are not `ready`:** no provider adapter to call (`PROVIDERS_AND_TOOLS.md` §3.3's four arrive in M2/M4,
+and the fake is a test reference rather than a product provider), and nothing in the Gateway that drives a task — so a
+route that started a run, or one that cancelled a run nobody started, would be the demo this phase has refused to ship.
+That list had a third item, `ARCHITECTURE.md` §18's `packages/tools` ("the executor is a seam"), and the eleventh slice
+removed it. F-46 was the debt that slice
 named, and the next one closed it: schema version 3 is the `cancellation_json` column, `TaskRecord.cancellation` is the
 contract, `packages/storage/journal.ts` is the runtime's write seam over the real database, and `crabby task show` prints
 whether the operation stopped and whether an external effect is in doubt (D-091).
@@ -235,6 +236,52 @@ book of who is watching (F-53). The same slice put §3.1's "local only" on the
 two identity routes that lacked it, measured on the socket rather than on `auth.manage`, for the reason F-52 states: no
 code in this build assigns capabilities at pairing, so the capability the documents name has no writer — which is the same
 unanswered question `POST /admin/*` waits on, and is why it is recorded rather than quietly defaulted (D-097).
+
+The eleventh slice is that third item: `packages/tools`, the executor §18 reserved a directory for, with eight of §4.2's
+forty-five rows behind it — `file.read`, `file.list`, `file.stat`, `file.write`, `file.edit`, `file.delete`, `file.move`,
+`fs.search` — each declaring the five fields of §4.1's record that belong to a runtime rather than to a registry (D-098).
+Declaring them is what turned two constants into facts: §6.2's `effectsUncertain` is now derived from `sideEffects`, so a
+cancellation that arrives during a read is recorded as certain and one that arrives during a delete as in doubt, which is
+the first measurement that field has ever been; and D-065's first permission has a witness, so `verdictFor` answers `pass`
+for a step killed mid-`file.edit` and `re-ask` for one killed mid-`file.move`, with `stepFactsFromDeclarations` as the
+bridge from a declaration to the checkpoint's `StepFacts` — one source for two rules, because a second copy of "is this
+tool idempotent" would be a second opinion about the same permission. That closes F-47's other half only as far as a
+declaration can: the half that remains is still a runner that would call `loop.resume`. Writing bytes rather than prose is
+what forced the rules that follow, and each is a decision rather than a default. **`file.write` is create-only**: it refuses
+a path that exists and names `file.edit`, because §4.2 prices those as two rows at two tiers and an executor that quietly
+overwrote would have merged them. **Both writers are atomic** — a temporary file in the target's own directory and a rename
+over it — and `file.write` creates through a *hard link* onto the destination, which is the only create that fails
+atomically when the path appeared between the check and the write; where a filesystem has no hard links (Termux's shared
+storage is a FUSE mount that often does not) it renames instead and the outcome says which happened, rather than implying a
+guarantee the device did not give. **`file.delete` trashes by rename** into the task's scratch directory, which D-064 prunes
+24 h after the task ends, and refuses a cross-device directory by naming `hard: true` — the option §4.2 prices and §8 calls
+T2/T3 — instead of choosing a hard delete on the user's behalf. **`fs.search` is bounded** by the output cap and the 10 s
+`fs.*` deadline and follows no symlink, so a walk that would take longer ends as a partial result that says it is partial.
+§4.4's two output rules got numbers at the same time: the cap is 64 KiB of the **wrapped** text — storage's own inline
+limit, so an overflow is cut once by the executor rather than twice by whoever stores it — the cut falls on a UTF-8
+boundary, the whole result goes to scratch with its path printed in the label, and the label sits outside the delimiter
+because a note inside untrusted content is content; and §10's marker got a shape, `<external-content source subject
+trust="untrusted" at nonce>` closed by the same nonce, re-rolled up to six times if the content contains the closer and
+thrown rather than emitted if six rolls collide, because a wrapper its own content can close is a wrapper in name only. One
+design change came from a refusal rather than a preference, and it is the slice's most consequential sentence: §4.3's two
+file escalations turn on facts about the filesystem — a path that already exists, a destination that is occupied — and
+merging an observation into `args` is denied by §4.3's own undeclared-argument rule, while letting it through would mean
+declaring that key in the model-visible schema, which §10's "a declared field is never an authority" forbids outright. So
+facts travel on a second channel, `ToolCall.facts`, filled by the executor before `evaluate` is asked, recorded in
+`tool.call.proposed` so the prompt shows what policy saw, and hashed into the approval's binding so D-084's comparison at
+the moment of execution covers the observation as well as the request (D-099). `preExistingUserFile` means *the path
+exists*, which is weaker than §4.2's "a file Crabby did not create" and deliberately so: this build keeps no created-by
+ledger, and the conservatism is one-sided, costing one prompt for a file the agent wrote itself rather than lowering a tier
+on evidence that does not exist. `validateToolArguments` landed in `packages/api-contracts` with it — §4.4's step 1, and
+the one place a schema's two spellings (typebox where it is checked, JSON Schema where it is published) are reconciled; a
+schema that arrived as data is name-checked and not type-checked, which is F-54 recorded rather than a validator that
+quietly passed. The other thirty-seven rows stay absent because each needs a subsystem this build does not have — no memory
+store, no scheduler, no shell policy with a runner to enforce it, no egress allow-list with a writer — and a name with
+nothing behind it is the mock this phase has refused to ship; `GET /tools` still prints the five executor fields as pending
+for the same composition reason, which is F-55 rather than an omission. The review surface is `node packages/tools/demo.ts`:
+one task over a real directory tree, a T0 read, a T1 create, an edit that stops at a T2 prompt *because the runtime
+observed the file*, the answer from a TUI-shaped client, the resume, the workspace afterwards, and then the two
+cancellations and the three verdicts that the declarations make different from each other.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

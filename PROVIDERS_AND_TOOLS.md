@@ -310,7 +310,40 @@ Every tool — native, first-party, or discovered via MCP client — is describe
 | `availability` | Platform predicate; false yields a documented reason instead of a broken tool. |
 
 Registration rules: duplicate id is fatal at startup; a tool with an unparsable schema cannot register; `describe`
-output is versioned with the API contract so all four interfaces can render it consistently.
+output is versioned with the API contract so all four interfaces can render it consistently. A tool whose name is not in
+§4.2's registry cannot register either (D-098): §5 of `SECURITY.md` requires every tool to be classified before it may be
+exposed, and an executor is the only party that could introduce an unclassified one, so `assertRegistrable` in
+`packages/tools` refuses the declaration rather than letting the registry grow a row nobody priced.
+
+**What this build declares (M2k, D-098).** `packages/tools` implements eight of §4.2's forty-five rows — `file.read`,
+`file.list`, `file.stat`, `file.write`, `file.edit`, `file.delete`, `file.move`, `fs.search` — and each carries the fields
+above that belong to an executor rather than to a registry: `inputSchema`, `limits` (`fsTimeoutMs`, the same 10 s D-074
+set for `fs.*`), `idempotent` and `sideEffects`. The four that answer §7.3 and §6.2 are the interesting ones, and they are
+not uniform within a family:
+
+- reads (`file.read`, `file.list`, `file.stat`, `fs.search`) — `idempotent: true`, `sideEffects: "none"`.
+- `file.edit` — `idempotent: true` (it replaces whole content, so a repeat reaches the same end state and cannot
+  compound), `sideEffects: "local"`.
+- `file.write`, `file.move` — `idempotent: false`. `file.write` refuses a path that already exists, so a repeat corrupts
+  nothing but does not reproduce its outcome either: the first attempt returns ok and the second returns `exists`, and a
+  resume that cannot tell which it is looking at has no business passing the step.
+- `file.delete` — `idempotent: true` **and** `sideEffects: "irreversible"`, which is not a contradiction but the two
+  questions §4.1 asks: `sideEffects` answers whether the user's data can be got back (the executor moves it into the
+  task's scratch trash, which D-064 prunes 24 h after the task ends — a courtesy, not an undo the loop may promise), while
+  `idempotent` answers whether repeating the call makes it worse (a file already gone cannot be deleted twice).
+
+`availability` stays out of the declaration on purpose. Whether a tool is present in a given process is a fact about a
+build and a runner, and a declaration that asserted it would be a second source for what `GET /tools` answers — the reason
+that route still reports these five fields as pending (`PENDING_RECORD_FIELDS`) is that no runner composes an executor
+yet, not that the fields are unknown (`docs/CONSISTENCY_REVIEW.md` F-55).
+
+Two rules came with the executor because §4.4 required them and nothing could implement them before: **the output cap
+(64 KiB, `MAX_TOOL_OUTPUT_BYTES`) is applied to the *wrapped* text**, cut on a UTF-8 boundary, with the whole result
+written to the task's scratch directory and its path printed in the label — capping the unwrapped content instead would
+risk truncating the delimiter itself, and a boundary that no longer closes is §10's defence with the door open; and
+**the delimiter carries a nonce** (`SECURITY.md` §10 has its shape), re-rolled if the content happens to contain the
+closer and thrown rather than emitted if six rolls all collide, because bytes in a user's file must not be able to end
+the block they are inside.
 
 ### 4.2 Initial tool set with risk-tier assignment (closes O-020)
 
@@ -378,7 +411,14 @@ Tier is computed per call, from the validated arguments:
   in-tree and is versioned with the release (O-032 closed by D-066); it is deliberately not updatable by a skill.
 - Redirection, command substitution, and `;`/`&&` chains force a re-evaluation of the *whole* chain — a `T0`
   command with a `> ~/.bashrc` redirect is a write.
-- `file.*` — escalation by resolved path after symlink resolution.
+- `file.*` — escalation by resolved path after symlink resolution, and by two facts about the filesystem: `file.edit`
+  of a path that already exists and `file.move` onto an occupied destination are the §4.2 bumps to T2. Neither can be
+  decided from the arguments, so neither travels in them (D-099): the runtime observes and passes what it saw on
+  `ToolCall.facts`, a channel the model cannot write to, because a fact smuggled in as an argument is either rejected by
+  the rule below or declared in the model-visible schema — and `SECURITY.md` §10's "a declared field is never an
+  authority" is exactly the sentence that forbids the second. The observation is recorded in `tool.call.proposed` and
+  hashed into the approval's binding, so the prompt shows what policy saw and an approval signed against "this file did
+  not exist" cannot be spent on a step that found it did.
 - `net.fetch` — escalation by destination: any host not in the allow-list is T2 with the host named in the prompt.
 - New provider model discovered → its descriptor is re-validated; a capability that vanished since registration must
   produce `unsupported-capability`, not a silent degradation.
@@ -388,7 +428,9 @@ Tier is computed per call, from the validated arguments:
 ### 4.4 Execution rules
 
 - Order of checks, always: schema validation → capability check → tier/approval → execution → result validation.
-  A tool never runs "to see if it works".
+  A tool never runs "to see if it works". The runtime's observed facts are gathered between validation and the capability
+  check (D-099), because §4.3's file escalations are argument-dependent in the only sense that matters: they depend on
+  what the arguments *are about*, and the party that knows is the one about to touch the filesystem.
 - Every execution carries: timeout, output byte cap, and a cancellation signal. On Termux, spawn in a process
   group so a kill reaches children (`SECURITY.md` §9). A timeout ends the call with the code `timeout` and the class
   name of the deadline that tripped, never as a generic failure — "it took too long" and "it did not work" need
@@ -396,8 +438,15 @@ Tier is computed per call, from the validated arguments:
 - Child environment is an explicit allow-list; the parent's provider keys are not inherited.
 - Temp files live in a per-task scratch directory with a documented lifetime and automatic cleanup on task end,
   with leftovers reported rather than silently retained.
-- Results above the cap are truncated *and labeled*; a tool must not pretend a partial result is complete.
-- Output is delivered to the model as delimited, attributed, untrusted content (`SECURITY.md` §10).
+- Results above the cap are truncated *and labeled*; a tool must not pretend a partial result is complete. Concretely
+  (D-098): the cap is 64 KiB of the **wrapped** text — the same number storage uses for an event payload, so an overflow
+  is cut once, by the executor, rather than twice, by whoever stores it — the cut falls on a UTF-8 boundary so the model
+  never receives half a character, the full bytes go to the task's scratch directory, and the label names both the
+  truncation and the path the rest is at. The label and the runtime note sit *outside* the delimiter, because a note
+  inside untrusted content is content.
+- Output is delivered to the model as delimited, attributed, untrusted content (`SECURITY.md` §10), and since M2k that
+  sentence has a shape rather than an intention: `wrapUntrusted` in `packages/tools` emits the marker §10 specifies, with
+  a nonce in both the opener and the closer.
 
 ### 4.5 Scheduled and background work
 

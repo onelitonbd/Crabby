@@ -311,10 +311,15 @@ supposed to *know* either half, which is the question that had to be answered be
 `terminated` is true only when the operation **reported** that it stopped — an executor that returned after its signal, or
 a step that was never started. A step the runtime walked away from, because a deadline fired or an `immediate`
 cancellation stopped the waiting, is `terminated: false`: "we stopped waiting" is a fact about the runtime and this
-sentence is about the operation. `effectsUncertain` is true for **every tool step** that was in flight, because §4.1's
-tool record includes `sideEffects` and no tool in this build declares it (`PENDING_RECORD_FIELDS`), so the runtime cannot
-tell a read from a send and fails closed; a tool declaring `sideEffects: none` is the only thing that should ever make it
-false, and that is a change to make in the registry rather than in the manager. A **provider call** in flight is recorded
+sentence is about the operation. `effectsUncertain` was true for **every tool step** that was in flight, because §4.1's
+tool record includes `sideEffects` and no tool declared it (`PENDING_RECORD_FIELDS`), so the runtime could not tell a read
+from a send and failed closed; a tool declaring `sideEffects: none` was named as the only thing that should ever make it
+false, and as a change to make in the registry rather than in the manager. **M2k made that change and left the rule
+standing (D-098).** `packages/tools` declares `sideEffects` for the eight rows it implements, and the loop derives the
+evidence from the declaration: a cancelled `file.read` (`"none"`) is `effectsUncertain: false` and a cancelled
+`file.delete` (`"irreversible"`) is `true`, which is the first time §6.2's second fact has been a measurement rather than
+a posture. A surface that declares nothing still gets the constant, because the fail-closed default is what made it safe to
+wait for a declarer instead of guessing one. A **provider call** in flight is recorded
 as `effectsUncertain: false` — a completion request affects nothing on the user's device beyond the provider having seen a
 prompt it was already sent — and because that is a classification rather than a measurement, `inFlight` travels in the
 event payload beside both booleans, so a reader who disagrees can see which judgement was made.
@@ -401,8 +406,11 @@ If the runtime cannot determine whether retrying an action would cause a duplica
 the boundary the run last committed, the task's state now, and the log tail after the boundary's sequence number. Nothing
 after the boundary was left unanswered → `resume`. A `tool.execution.started` with no outcome beside it → `pass` if that
 tool's runtime declares it idempotent or its external effect is on the record (D-065's two permissions, both of which
-belong to `packages/tools`, which does not exist yet: `PENDING_RECORD_FIELDS` lists `idempotent` and `sideEffects` as
-fields the registry cannot answer, so the default declares neither), and `re-ask` otherwise. No boundary at all, or a task
+belong to the runtime that executes the step: `packages/tools` has declared `idempotent` for six of its eight rows since
+M2k, D-098, and `stepFactsFromDeclarations` is the bridge from that declaration to the `StepFacts` this function reads —
+so `pass` is an answer a composed Gateway can give rather than one only a test that invents a declaration can produce. A
+surface that declares nothing still gets neither permission, which is the fail-closed half of the same rule), and `re-ask`
+otherwise. No boundary at all, or a task
 that has ended → `none`, because §4.1's terminal states are absorbing and a `re-ask` on a finished task would be an offer
 nothing can accept. Two properties of the reading matter more than the answers. **The verdict is computed at read time**,
 never stored: all three inputs can move after the boundary is written, and a stored verdict is a guess in the one field a
@@ -497,8 +505,11 @@ about what is retryable. Three things about the wiring are decisions rather than
 - **The ladder retries provider calls and never tool steps.** The sentence above about establishing whether an operation
   succeeded applies to a step that may have had an external side effect; a completion request has none on the user's device
   beyond the provider having seen a prompt it was already sent (the same classification D-089 makes for cancellation). A
-  tool step is the opposite case, and no tool declares `idempotent` (`PENDING_RECORD_FIELDS`), so §7.3's answer is always
-  "re-ask rather than repeat": a failed tool result goes back to the model as that tool's answer, which is how §3.2's plan
+  tool step is the opposite case, and §7.3's answer for one is always "re-ask rather than repeat" — not because nothing
+  declares `idempotent` (M2k's executor declares it for six of its eight rows, D-098) but because that declaration is
+  spent by the *resume* path, where D-065 prices it, and never by a retry ladder: repeating a step with `sideEffects`
+  behind the model's back is the act §7.3 exists to prevent, and a transport-level rung is no place to discover an opinion
+  about a filesystem. So a failed tool result goes back to the model as that tool's answer, which is how §3.2's plan
   revision happens rather than how a retry loop starts.
 - **A retry is scheduled work, so §6.1 stops it.** A cancellation recorded during a backoff ends the ladder at once and the
   task settles as `cancelled` rather than `failed`, because waiting out a 16 s rung for a task the user has already stopped

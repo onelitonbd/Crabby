@@ -278,6 +278,39 @@ Fallback rules:
 - Trash-or-rename should be offered in place of hard delete where the platform supports it; hard delete is T2/T3.
 - Path checks are enforced in the tool adapter, and the tool must not accept a caller-provided path that it then re-interprets (e.g. shell redirection as a "read" call is still a write).
 
+**What M2k implemented, and what it had to decide to do so (D-098, D-099).** `packages/tools` is the first executor in the
+tree, so five of the bullets above stopped being requirements and became behaviour — and each one needed a choice that is
+recorded here rather than only in a code comment, because §8 is the section a reviewer reads before trusting a file tool.
+
+- **The adapter is the enforcement point.** `checkPath` (`packages/policy/paths.ts`) runs before any syscall in the
+  executor, on every argument that names a path, and its verdict is what the tool acts on — the executor does not re-derive
+  a path from an argument it was handed. It follows no symlink that the check did not resolve, and `file.stat` reports the
+  *resolved* path (plus `brokenLink` when only `lstat` answers), so the fact §4.3 prices and the file the executor touches
+  are the same file. That is what makes "re-checked *after* resolving links" a property of the call rather than of the
+  first check.
+- **Atomic write + rename, with the create made atomic too.** Both writing tools write a temporary file in the target's own
+  directory and rename over the destination, so a crash mid-write leaves the previous bytes. `file.write` is create-only and
+  creates through a *hard link* onto the destination, because that is the only create which fails atomically when the path
+  appeared between the check and the write; where the filesystem has no hard links — Termux's shared storage is a FUSE mount
+  that often does not — it renames instead, and the outcome says which happened rather than implying a guarantee the device
+  did not give. An overwrite is `file.edit`'s job, and §4.2 prices the two rows differently, so the refusal is a tier
+  boundary and not a convenience.
+- **"Pre-existing user file" means *the path exists*, and that is weaker than the sentence above.** This build keeps no
+  ledger of what Crabby created, so a file the agent itself wrote one step earlier still prices at T2 when it is edited. The
+  conservatism is one-sided on purpose: guessing "the agent created this" would *lower* a tier on evidence that does not
+  exist, while guessing the other way costs one prompt for a file the agent wrote itself. When a created-by ledger arrives,
+  the observation narrows and the tier falls with no change to this section. The observation itself travels on a channel the
+  model cannot write to (D-099), because a fact an argument could set would be a declared field acting as an authority —
+  which §10 forbids two sections below.
+- **Trash-or-rename is the default delete, not an offer.** `file.delete` renames the target into the task's scratch trash,
+  which D-064 prunes 24 h after the task ends; `hard: true` is the exception and §4.2 prices it. Where the target is a
+  directory on a different device from scratch — a rename across `EXDEV` — the tool refuses and names the option instead of
+  silently hard-deleting, because the platform not supporting the courtesy is a fact the user should see rather than a
+  fallback the runtime should choose.
+- **A search is not a traversal.** `fs.search` walks configured roots only, follows no symlink, and is bounded by the output
+  cap and the 10 s `fs.*` deadline (D-074), so a walk that would take longer ends as a partial result that says it is
+  partial (§4.4's truncation rule) rather than as a task that owns the device.
+
 ## 9. Shell and Process Execution
 
 - Shell execution is capability-gated (`shell.run`) and **never enabled by default** for a fresh install; enabling it is an explicit act.
@@ -296,7 +329,7 @@ Crabby's agent consumes text that it did not author: web pages, files, tool resu
 Requirements:
 
 - **Instruction precedence** must be explicit and documented: system/security policy > user request in the current session > approved configuration > skill and memory content > retrieved or external content. Lower tiers may inform, never authorize.
-- External content is wrapped with structural delimiters and metadata (source, fetch time, trust label) so both the model and the audit log can attribute it.
+- External content is wrapped with structural delimiters and metadata (source, fetch time, trust label) so both the model and the audit log can attribute it. **The marker's shape (M2k, D-098):** `wrapUntrusted` in `packages/tools` emits `<external-content source="…" subject="…" trust="untrusted" at="…">` … `</external-content …>`, and *both* halves carry a nonce that is rolled per call. The nonce is the whole point: bytes inside a user's file that read `</external-content>` must not be able to end the block they are inside, so a collision re-rolls the nonce up to six times and then throws rather than emitting an ambiguous boundary — a wrapper that can be closed by its own content is a wrapper in name only. Two consequences follow and are rules, not details: the §4.4 output cap applies to the **wrapped** text, because capping the content first could truncate the delimiter and leave the block unclosed; and any label, truncation note or runtime commentary sits **outside** the markers, because a note inside untrusted content is content. Markers inside the content are *not* neutralised: rewriting what the user asked to read is a worse lie than an attributed block that says it is untrusted, and this section's rule is about attribution, not sterilisation.
 - Policy-relevant decisions must never be derived from content inside a tool result. Even if a model is persuaded, the Policy Engine still denies a capability that was not granted — this is why §2 rule 02 exists.
 - A declared field is never an authority: no manifest key and no skill frontmatter field can lower a tier, widen a
   capability, or pre-approve a tool. `allowed-tools` in an imported `SKILL.md` is read into the capability diff and

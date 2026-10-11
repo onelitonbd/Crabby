@@ -38,7 +38,7 @@ export interface EvalContext {
   readonly schemasValidated?: boolean;
 }
 
-type Args = Record<string, unknown>;
+type Args = Readonly<Record<string, unknown>>;
 
 function expandHome(target: string, home: string | undefined): string | undefined {
   if (target.startsWith("/") && home === undefined) return target;
@@ -124,6 +124,7 @@ export function escalate(
   spec: ToolSpec,
   args: Args,
   ctx: EvalContext,
+  facts: Args = {},
 ): { tier: Tier; reasons: string[] } {
   const reasons: string[] = [];
   let tier: Tier = spec.tier;
@@ -176,8 +177,10 @@ export function escalate(
       }
       break;
     }
-    // §4.2's file rows: the path decides. `file.edit` also has the "Crabby did not create it" sentence, which needs a
-    // fact only the runtime has, so it is read from an argument and stays silent when the argument is absent.
+    // §4.2's file rows: the path decides. Two of them — `file.edit`'s "a file Crabby did not create" and `file.move`'s
+    // "onto an existing target" — turn on a fact about the filesystem rather than on an intention the caller declared, so
+    // they read `facts` and not `args` (D-099). A fact nobody observed leaves the row's base tier standing, which is the
+    // only honest reading: this module can raise a tier on evidence, and it cannot invent evidence.
     case "file.edit":
     case "file.write":
     case "file.delete":
@@ -189,7 +192,7 @@ export function escalate(
     case "file.read":
     case "file.list": {
       raise(pathEscalation(args, ctx, spec));
-      if (spec.tool === "file.edit" && boolArg(args, "preExistingUserFile")) {
+      if (spec.tool === "file.edit" && boolArg(facts, "preExistingUserFile")) {
         raise({
           tier: "T2",
           reason:
@@ -199,7 +202,7 @@ export function escalate(
       if (spec.tool === "file.delete" && boolArg(args, "recursive")) {
         raise({ tier: "T3", reason: "recursive delete (§4.2's T3 sentence for this row)" });
       }
-      if (spec.tool === "file.move" && boolArg(args, "overwrites")) {
+      if (spec.tool === "file.move" && boolArg(facts, "overwrites")) {
         raise({ tier: "T2", reason: "moving onto an existing file (§4.2)" });
       }
       break;

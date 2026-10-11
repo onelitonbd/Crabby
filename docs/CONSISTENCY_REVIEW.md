@@ -816,9 +816,13 @@ column, written once at the settle, read back by `GET /tasks/{id}` and printed b
 judge — whether the operation stopped, and whether an external effect is in doubt. What made it more than a column is
 `packages/storage/journal.ts`, the runtime's write seam over the real database: `packages/storage/journal.test.ts` now runs a
 whole gated task against SQLite, with the arbiter's rows committing in the same transaction as the task's events, and
-reopens the file afterwards to prove the outcome and every event that carried it survived. The one part of F-46 still open is
-the half that was never this finding's to close: `sideEffects` remains in `PENDING_RECORD_FIELDS`, so `effectsUncertain` is
-`true` for every tool step until a tool declares otherwise.)*
+reopens the file afterwards to prove the outcome and every event that carried it survived. The one part of F-46 still open was
+the half that was never this finding's to close: `sideEffects` remained in `PENDING_RECORD_FIELDS`, so `effectsUncertain`
+was `true` for every tool step until a tool declared otherwise — and M2k closed it, because `packages/tools` declares
+`sideEffects` for all eight of its rows (D-098) and the loop now derives the evidence from the declaration instead of
+writing the constant: a cancelled `file.read` is `effectsUncertain: false` and a cancelled `file.delete` is `true`, which
+is the first time §6.2's second fact has been a measurement. What survives of F-46 is nothing; what survives of
+`PENDING_RECORD_FIELDS` is a reporting question and has its own row, F-55.)*
 
 ### F-47 — After a restart, a prompt is answerable and nothing can act on the answer
 **Severity: medium, open by choice, and the one thing recovery could not make honest.** §7.1's scan marks every
@@ -995,6 +999,53 @@ implied: a pairing-time grant decision — what `--restrict` means, who may set 
 `PolicySubject.grants` — which is the same unanswered question `POST /admin/*` waits on, so it should be answered once, in
 whichever slice takes it. Until then §4.5's `auth.manage` sentences are a rule the documents state and the build can only
 approximate, and this row is where a reader learns that.
+
+### F-54 — §4.4's first check is a *type* check, and a schema that arrives as data cannot be type-checked
+
+**Severity: low, open, and named in the code that skips it.** `PROVIDERS_AND_TOOLS.md` §4.4 fixes the order of checks —
+"schema validation → capability check → tier/approval → execution" — and §4.1 says `inputSchema` is "validated before
+policy evaluation". M2k had to make that check runnable, because `packages/tools` publishes an `inputSchema` per tool and
+the loop validates arguments before it asks policy anything. What it found is that the sentence hides two spellings: in
+this repository a schema is a **typebox** object where it is checked and a **JSON Schema** where it is published (a
+provider's tool list, `GET /tools`, an MCP server's `describe`). `validateToolArguments` in `packages/api-contracts` is the
+one place the two are reconciled, so the cast lives beside a reason instead of at every call site that needs one.
+
+The gap is the second spelling. A schema that arrived as *data* carries no typebox `Kind` symbol, and typebox's visitor
+throws "Unknown type" on it instead of answering, so the type half of step 1 is **skipped** rather than crashed. Skipping
+is recorded, not designed: the argument *names* are still compared against the declaration before policy is asked
+(`ToolCall.declaredArgs`, §4.3's "arguments it did not declare → reject before policy"), so a discovered tool cannot be
+called with invented parameters, and what it loses is only the types, ranges and required-ness of the ones it was given.
+Every schema this repository authors is typebox, so today the skip fires for a discovered MCP tool and for nothing else —
+and there is no MCP client in the build, which is why this is `low` rather than `medium`: the affected party does not exist
+yet, and the row exists so that when it does, the skip is a known debt with a closing condition rather than a validator
+that quietly passed.
+
+**Closing condition:** a JSON Schema validator in the tree (or a compile-at-registration step that turns a discovered
+JSON Schema into a typebox one and refuses the tool when it cannot), so §4.4's step 1 means the same thing for a native
+tool and a discovered one. Until then `validateToolArguments`'s comment is where a reader learns which half ran.
+
+### F-55 — `GET /tools` reports five fields as pending, and the party that could answer them now exists
+
+**Severity: low, open by composition rather than by judgement.** §4.1 describes a tool by ten fields; four come from §4.2's
+registry (`capability`, base tier, tier rules, `availability`) and five are properties of the runtime that executes it —
+`inputSchema`, `outputSchema`, `limits`, `idempotent`, `sideEffects`. `packages/policy/availability.ts` lists those five in
+`PENDING_RECORD_FIELDS` and `GET /tools` prints the list, because naming a gap in a response is cheaper than inventing a
+default: `sideEffects: "none"` for `file.delete` would be a lie a recovery path could act on.
+
+M2k removed the reason the fields were unanswerable and left the reason they are unreported. `packages/tools` declares all
+five for the eight rows it implements (D-098), and `ToolDeclaration` in `packages/api-contracts` is the shape they arrive
+in precisely so a registry row and an executor's declaration can be merged without either inventing the other's half. What
+is missing is a party to merge them: the Gateway composes no executor, so no route holds a declaration to publish, and the
+honest response is still the pending list. A runner — the slice that makes `crabby task run` real — composes
+`createFileTools` and passes its `declares` to the loop; the same value answers `GET /tools`, and F-46's closed half shows
+what the merge buys: §6.2's evidence and D-065's first permission both read the declaration rather than a constant.
+
+**Closing condition:** the Gateway runner composes an executor, `GET /tools` reports a merged record for the rows an
+executor implements and keeps naming the rest as absent, and `PENDING_RECORD_FIELDS` shrinks to the rows nothing implements
+— which is a smaller list than the one printed today and a truer one. Note the deliberate asymmetry: an *unimplemented*
+tool stays out of the response entirely rather than appearing with empty fields, because §4.2's inventory is a document of
+what the product will do and `GET /tools` is a statement of what this process can do, and F-20 is the finding about
+confusing two copies of one list.
 
 ## 3. Checks That Passed
 

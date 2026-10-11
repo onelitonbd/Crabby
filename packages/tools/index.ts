@@ -1,0 +1,140 @@
+// `packages/tools` — the executor `ARCHITECTURE.md` §18 lists and `AGENT_RUNTIME.md` §4.4 named as a seam until now ("the
+// loop has an executor interface and **no tools at all**, because §18's `packages/tools` does not exist yet. The executor
+// is a seam"). §19 fixes the direction of the dependency — "adapters implement the runtime's abstractions" — so this
+// package implements `ToolSurface` and nothing in `packages/agent-runtime` knows it exists.
+//
+// What is here is the eight file tools `PROVIDERS_AND_TOOLS.md` §4.2 classifies (`file.read`, `file.list`, `file.stat`,
+// `file.write`, `file.edit`, `file.delete`, `file.move`, `fs.search`), with §4.1's record filled in for them. That is the
+// whole of `docs/ROADMAP.md` §4's "initial tools" line that can be built without a subsystem that does not exist yet:
+// `session.*`, `task.*`, `memory.*` and `config.*` all read stores this build has no manager for, and §4.2's remaining rows
+// need a tunnel, an extension registry, a provider or Termux's own API. Shipping a name with nothing behind it is the mock
+// this repository refuses, so those tools stay absent and `crabby tools ls` keeps saying so from the registry rather than
+// from an executor.
+//
+// `shell.run` is deliberately not here either. §4.2 says its "capability itself is off by default" and `docs/ROADMAP.md` §4
+// says it ships in this phase but stays off until `crabby init` opts in — an executor for it is a slice that has to arrive
+// with that opt-in path, and arriving before it would be a T2-per-command classifier with no way to be turned off.
+//
+// Two members beyond `ToolSurface`'s `specs`/`run` are the reason this package is more than a bag of functions:
+//
+//   - `declarations()` is §4.1's record as data, so whoever serves `GET /tools` can merge it with the registry rows
+//     instead of the registry guessing at fields it does not own (`PENDING_RECORD_FIELDS` in `packages/policy`).
+//   - `facts(call)` answers the questions §4.3's escalations ask about arguments that only a runtime can supply —
+//     `preExistingUserFile` for `file.edit`, `overwrites` for `file.move`. Without it, §4.2's T2 for "overwriting a file
+//     Crabby did not create" is unreachable the moment an executor exists to overwrite one, because the only party who
+//     could have supplied the fact is the party asking for the permission (D-099).
+
+import { realpathSync } from "node:fs";
+import path from "node:path";
+import type { ToolOutcome, ToolRunContext, ToolSurface } from "@crabby/agent-runtime";
+import { MAX_TOOL_OUTPUT_BYTES, type ToolDeclaration } from "@crabby/api-contracts";
+import { LIMITS_DEFAULTS } from "@crabby/core";
+import type { PathContext, ToolCall } from "@crabby/policy";
+import type { ProviderToolSpec } from "@crabby/providers";
+import { assertRegistrable, fileToolDeclarations } from "./declare.ts";
+import { type FileToolEnv, fileFacts, runFileTool } from "./fs.ts";
+import { defaultNonce } from "./untrusted.ts";
+
+export { assertRegistrable, fileToolDeclarations } from "./declare.ts";
+export { type FileToolEnv, fileFacts, runFileTool } from "./fs.ts";
+export {
+  capWrapped,
+  cutAtByteBoundary,
+  EXTERNAL_CONTENT_TAG,
+  labelForTruncation,
+  TRUST_UNTRUSTED,
+  wrapUntrusted,
+} from "./untrusted.ts";
+
+export interface FileToolOptions {
+  /** §8's "one or more configured workspace roots", plus the home directory and the Crabby data directory the deny-list
+   *  is measured against. Required, and required whole: a partial path context is the difference between "inside the
+   *  workspace" and "somewhere we did not check". */
+  readonly paths: PathContext;
+  /** Where D-064's over-cap output and §8's trash-or-rename go: the task's scratch directory. Injected because
+   *  `packages/storage/scratch.ts` owns that layout, and a tool package that computed it would be a second owner. */
+  readonly scratchDirFor: (taskId: string) => string;
+  /** §8's "re-checked *after* resolving links". Defaults to a resolver that walks up to the nearest existing ancestor,
+   *  which is what a create needs: the file does not exist yet, and the link hop that matters is the directory it lands
+   *  in. Injectable so the symlink rule is testable without building a symlink. */
+  readonly realpathOf?: (absolutePath: string) => string;
+  /** D-074's `fs.*` class deadline and D-064's inline cap, both read from `limits` in `config.json` so the declaration
+   *  and the deadline the loop enforces are the same number by construction. */
+  readonly limits?: { readonly fsTimeoutMs?: number; readonly maxOutputBytes?: number };
+  readonly now?: () => number;
+  readonly nonce?: () => string;
+}
+
+/** `ToolSurface` with this package's two optional members made definite: a file executor always declares its records and
+ *  always answers the facts policy asks for, and a caller that only has a `ToolSurface` may still treat both as absent. */
+export interface FileToolExecutor extends ToolSurface {
+  readonly declarations: () => readonly ToolDeclaration[];
+  /** Definite here and optional on `ToolSurface`: this executor always answers both, and a caller holding only the seam
+   *  is allowed to find an executor that does not. */
+  readonly facts: (call: ToolCall) => Record<string, unknown>;
+  readonly declares: (tool: string) => ToolDeclaration | undefined;
+}
+
+/** The default §8 resolver. `realpathSync` throws for a path that does not exist, which is the normal case for a create,
+ *  so the resolver walks up to the nearest ancestor that does and re-joins the rest: the containment question for a new
+ *  file is about the directory it will land in, and that directory's links are resolvable. */
+export function defaultRealpathOf(absolutePath: string): string {
+  try {
+    return realpathSync(absolutePath);
+  } catch {
+    const parent = path.dirname(absolutePath);
+    if (parent === absolutePath) return absolutePath;
+    return path.join(defaultRealpathOf(parent), path.basename(absolutePath));
+  }
+}
+
+export function createFileTools(options: FileToolOptions): FileToolExecutor {
+  const fsTimeoutMs = options.limits?.fsTimeoutMs ?? LIMITS_DEFAULTS.fsTimeoutMs;
+  const maxOutputBytes = options.limits?.maxOutputBytes ?? MAX_TOOL_OUTPUT_BYTES;
+  const declarations = fileToolDeclarations({ fsTimeoutMs, maxOutputBytes });
+  // §4.1's registration rules run at construction, which is startup for a Gateway: a duplicate id or an unparsable schema
+  // is fatal here rather than a refusal discovered by a user mid-task.
+  assertRegistrable(declarations);
+
+  const env: FileToolEnv = {
+    paths: options.paths,
+    realpathOf: options.realpathOf ?? defaultRealpathOf,
+    scratchDirFor: options.scratchDirFor,
+    maxOutputBytes,
+    declarations,
+    now: options.now ?? (() => Date.now()),
+    nonce: options.nonce ?? defaultNonce,
+  };
+
+  const byName = new Map(declarations.map((declaration) => [declaration.name, declaration]));
+
+  const specs = (): readonly ProviderToolSpec[] =>
+    declarations.map((declaration) => ({
+      name: declaration.name,
+      description: declaration.description,
+      parameters: declaration.inputSchema,
+    }));
+
+  const run = async (call: ToolCall, ctx: ToolRunContext): Promise<ToolOutcome> => {
+    if (!byName.has(call.tool)) {
+      return {
+        ok: false,
+        // The loop refuses an undeclared name before policy is asked, so this branch is for a caller that did not go
+        // through the loop. It is an answer rather than a throw for the same reason every other failure here is.
+        output: `'${call.tool}' is not a file tool; this executor declares ${declarations.length}: ${declarations
+          .map((declaration) => declaration.name)
+          .join(", ")}`,
+        code: "not-declared",
+      };
+    }
+    return runFileTool(call, ctx, env);
+  };
+
+  return {
+    specs,
+    run,
+    declarations: () => declarations,
+    facts: (call) => fileFacts(call, env),
+    declares: (tool) => byName.get(tool),
+  };
+}

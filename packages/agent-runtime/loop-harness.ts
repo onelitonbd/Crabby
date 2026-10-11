@@ -3,9 +3,11 @@
 // `loop.ts` has four seams — a journal, an arbiter, a provider and an executor — and a test that built all four by hand
 // would spend its lines on plumbing and its reviewer's attention on the plumbing too. This file composes the real ones
 // where real ones exist: `createApprovals` over `createMemoryApprovalStore` is the arbiter itself (D-084), the provider
-// is `packages/providers`' fake held to the same §7 conformance suite a real adapter must pass, and the journal and the
-// executor are the two things this build genuinely does not have yet — `packages/storage`'s SQLite journal is a
-// Gateway-side composition, and `ARCHITECTURE.md` §18's `packages/tools` does not exist.
+// is `packages/providers`' fake held to the same §7 conformance suite a real adapter must pass, and the journal is the one
+// thing this build genuinely does not have in-process — `packages/storage`'s SQLite journal is a Gateway-side composition.
+// The executor is a recording stand-in, and `options.surface` replaces it with a real one: `packages/tools` exists since
+// M2k, and importing it *here* would be a cycle (it implements this package's `ToolSurface`), so the composition happens in
+// the test that wants it rather than in the harness.
 //
 // What it does NOT model, stated because a harness that quietly stands in for a missing subsystem is how a mock gets
 // shipped as a product:
@@ -17,8 +19,10 @@
 //     (`SECURITY.md` §7; `packages/storage/events.ts` and `packages/storage/checkpoints.ts` both do it on the way in), so
 //     a harness that redacted would be asserting a property of itself. What the harness *does* assert is the checkpoint's
 //     transaction rule, through `guardCheckpoints`: a boundary written outside a phase throws.
-//   - The executor records. It runs no filesystem, no network and no shell, and it declares only the tools a test gives
-//     it — which is the point: the loop offers the model nothing an executor cannot run.
+//   - The executor records. By default it runs no filesystem, no network and no shell, and it declares only the tools a
+//     test gives it — which is the point: the loop offers the model nothing an executor cannot run. A test that passes
+//     `surface` gets that executor's real behaviour *and* the recording, because a test that swapped in a filesystem and
+//     lost `executions` would have to re-derive them from the event log.
 //
 // It also owns the §6 manager, wired to the same journal and the same subscriber as the loop, so a test can request a
 // cancellation from the outside the way an interface would and watch the loop honour it: `harness.cancel({ mode })` is
@@ -97,6 +101,11 @@ export interface HarnessOptions {
   /** One script per provider round, because the fake replays its whole script on every request. */
   readonly rounds: readonly (readonly FakeStep[])[];
   readonly tools?: readonly HarnessTool[];
+  /** A real executor to run instead of the recording one — `packages/tools`' `createFileTools`, in
+   *  `tests/integration/tools.test.ts`. Its `specs`, `facts` and `declarations` are used as declared, so a test that
+   *  composes one is testing §4.3's escalations and §6.2's evidence against a runtime that answers them, rather than
+   *  against this harness's silence. */
+  readonly surface?: ToolSurface;
   readonly grants?: readonly string[];
   readonly removedGrants?: readonly string[];
   readonly clientKind?: LoopSubject["clientKind"];
@@ -107,10 +116,10 @@ export interface HarnessOptions {
    *  sleeping through it: five rungs cost 31 real seconds, and a test that slow is a test nobody runs twice. */
   readonly random?: () => number;
   readonly wait?: (ms: number, signal?: AbortSignal | undefined) => Promise<void>;
-  /** D-065's two permissions to pass a step that was in flight. Nothing in the build declares either —
-   *  `packages/policy`'s `PENDING_RECORD_FIELDS` lists `idempotent` and `sideEffects` as fields the registry cannot
-   *  answer — so a test that wants the `pass` branch has to supply the declaration and therefore has to say which tool it
-   *  is inventing it for. */
+  /** D-065's two permissions to pass a step that was in flight. The harness's own executor declares neither, so a test
+   *  that wants the `pass` branch supplies the declaration and therefore says which tool it is inventing it for; a test
+   *  that composes a real one with `surface` gets `idempotent` from §4.1's record instead
+   *  (`stepFactsFromDeclarations`). */
   readonly stepFacts?: (tool: string) => StepFacts;
   readonly modelId?: string;
   readonly models?: readonly string[];
@@ -372,19 +381,39 @@ function createMemoryJournal(input: {
   return { journal, events, states, task: () => record, insideTransaction: () => inTransaction };
 }
 
-function createRecordingTools(declared: readonly HarnessTool[]): {
+function createRecordingTools(
+  declared: readonly HarnessTool[],
+  delegate?: ToolSurface,
+): {
   surface: ToolSurface;
   executions: Execution[];
 } {
   const executions: Execution[] = [];
   const surface: ToolSurface = {
     specs: (): readonly ProviderToolSpec[] =>
+      delegate?.specs() ??
       declared.map((tool) => ({
         name: tool.name,
         description: tool.description ?? `${tool.name}, as the harness declares it`,
         parameters: tool.parameters ?? { type: "object", properties: {} },
       })),
+    // D-099's facts and D-098's declarations are forwarded rather than reimplemented: the whole reason a test composes a
+    // real executor is that these two answers come from a party that touches the filesystem, and a harness that invented
+    // them would be asserting its own fiction twice.
+    ...(delegate?.facts === undefined ? {} : { facts: delegate.facts }),
+    ...(delegate?.declares === undefined ? {} : { declares: delegate.declares }),
     run: async (call, ctx: ToolRunContext): Promise<ToolOutcome> => {
+      if (delegate !== undefined) {
+        const outcome = await delegate.run(call, ctx);
+        executions.push({
+          tool: call.tool,
+          args: call.args,
+          outcome,
+          deadlineMs: ctx.deadlineMs,
+          aborted: ctx.signal.aborted,
+        });
+        return outcome;
+      }
       const tool = declared.find((candidate) => candidate.name === call.tool);
       if (tool === undefined) {
         // Unreachable through the loop — it refuses a name no executor declares before policy is asked — and still
@@ -507,7 +536,7 @@ export function createHarness(options: HarnessOptions): Harness {
     objective: options.objective ?? "the harness objective",
     clock,
   });
-  const tools = createRecordingTools(options.tools ?? []);
+  const tools = createRecordingTools(options.tools ?? [], options.surface);
   const provider = createScriptedProvider(options.rounds, {
     ...(options.models === undefined ? {} : { models: options.models }),
   });

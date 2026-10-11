@@ -27,8 +27,10 @@
 //
 // What is deliberately NOT here, because a stub of it would be worse than its absence:
 //
-//   - **No tools.** `ToolSurface` is the seam `ARCHITECTURE.md` §18's `packages/tools` will implement; nothing in this
-//     build can execute a `file.write`, so the loop offers the model only what an executor declares it can run.
+//   - **No tools of its own.** `ToolSurface` is the seam `ARCHITECTURE.md` §18's `packages/tools` implements, and since
+//     M2k it does: eight file tools with §4.1's record filled in, which a runner composes into a loop. The loop still ships
+//     none and still offers the model only what the executor it was given declares it can run — the seam is a dependency
+//     injected at construction, so this file has no import of `packages/tools` and no opinion about which tools exist.
 //   - **No second ladder rung.** D-043's stage 1 is here — the same model and provider, transient classes only, on D-064's
 //     schedule with its jitter, `Retry-After` overriding upward, and a `provider.retry.*` event per rung. D-044's stage 2
 //     (ask the user which model to use instead, then resume from the checkpoint) is not: the checkpoint it would resume
@@ -43,8 +45,8 @@
 //     runtime inventing a requester.
 //   - **No conversation store, and nothing that resumes from a restart.** A suspended run carries its messages in process
 //     memory; since M2i a redacted copy of them is durable at each committed step boundary (`checkpoint.ts`, D-095), which
-//     is what a runner would rebuild a `RunInput` from — but there is no runner, no `packages/tools` and no product
-//     provider adapter, so §7.1 still marks the task `interrupted` and §7.2 still decides what may resume. A loop that
+//     is what a runner would rebuild a `RunInput` from — but there is no runner and no product provider adapter, so §7.1
+//     still marks the task `interrupted` and §7.2 still decides what may resume. A loop that
 //     rebuilt a conversation from the event log instead would be inventing §8's compaction, with the log's redaction and
 //     64 KiB truncation already applied to it.
 //   - **No streaming.** The loop calls `generate()`, so assistant text arrives whole and is logged as `message.added`;
@@ -60,6 +62,8 @@ import {
   isTerminal,
   newId,
   type TaskRecord,
+  type ToolDeclaration,
+  validateToolArguments,
 } from "@crabby/api-contracts";
 import { LIMITS_DEFAULTS } from "@crabby/core";
 import {
@@ -157,9 +161,12 @@ export function deadlineFor(tool: string, limits: LoopLimits = LOOP_LIMITS): num
   return limits.toolDeadlines?.[tool] ?? toolDeadlineMs(tool, limits);
 }
 
-/** What a tool execution owes the loop. `output` is the text the model sees next and the text the event carries;
- *  `packages/storage` applies §5.2's 64 KiB cap and the scratch reference on write, so a large output is not this
- *  type's problem. */
+/** What a tool execution owes the loop. `output` is the text the model sees next and the text the event carries. Two caps
+ *  apply to it, and they are not the same cap: §4.4's output limit belongs to the executor, which since M2k truncates and
+ *  labels the **wrapped** text at 64 KiB and puts the whole result in scratch with its path in the label (D-098), while
+ *  §5.2's inline limit belongs to `packages/storage`, which spills an over-cap event *payload* to a scratch reference on
+ *  write. The second one still runs, because an executor is not the only producer of an event and a payload is more than
+ *  one tool's output — so a large result is no longer none of this type's problem, and was never only storage's. */
 export interface ToolOutcome {
   readonly ok: boolean;
   readonly output: string;
@@ -183,6 +190,19 @@ export interface ToolRunContext {
 export interface ToolSurface {
   readonly specs: () => readonly ProviderToolSpec[];
   readonly run: (call: ToolCall, ctx: ToolRunContext) => Promise<ToolOutcome> | ToolOutcome;
+  /** The facts §4.3's argument-dependent escalations need and only a runtime can supply (D-099): `preExistingUserFile`
+   *  for `file.edit`, `overwrites` for `file.move`. Asked for before the arbiter is. The answer travels as `ToolCall.facts`
+   *  and never as an argument, because §10's rule that "a declared field is never an authority" applies with full force to
+   *  a field that decides a tier: a completion that wanted T1 would simply declare `preExistingUserFile: false`, and a
+   *  channel the model can write to is not an observation. Optional because an executor with no argument-dependent
+   *  escalations has nothing to answer, and an absent answer leaves §4.2's base tier standing rather than inventing a
+   *  fact. */
+  readonly facts?: (call: ToolCall) => Record<string, unknown>;
+  /** §4.1's record as the executor declares it (D-098). The loop reads exactly one field of it — `sideEffects`, for
+   *  §6.2's cancellation evidence — and the rest is for whoever serves `GET /tools`, because the registry in
+   *  `packages/policy` cannot answer fields that are properties of the runtime (`PENDING_RECORD_FIELDS`). Optional for the
+   *  same reason, and its absence is D-089's fail-closed default rather than a guess. */
+  readonly declares?: (tool: string) => ToolDeclaration | undefined;
 }
 
 /** Who is asking: `PolicySubject` minus the `taskId` the loop fills in from the task it is running. */
@@ -426,8 +446,12 @@ export function createLoop(deps: LoopDeps): Loop {
   }
 
   /** D-089's answer to §6.2's "that uncertainty MUST be recorded explicitly": a tool step was in flight, so its external
-   *  effect may already have happened, and no tool in this build declares `sideEffects` (§4.1's record fields are
-   *  `PENDING_RECORD_FIELDS`), so the runtime cannot tell a read from a send. Fail closed and say why. */
+   *  effect may already have happened. When M2e wrote this, nothing declared `sideEffects` — every one of §4.1's record
+   *  fields was in `PENDING_RECORD_FIELDS` — so the answer was a constant `true` and the comment said why. `packages/tools`
+   *  declares one now (D-098), so the constant became a question: a step whose tool says `none` cannot have left an effect
+   *  behind, and reporting uncertainty for a `file.read` is how a user learns to ignore the word. Everything else —
+   *  `local`, `external`, `irreversible`, and an executor that declares nothing at all — stays uncertain, which is D-089's
+   *  fail-closed default and the whole of what changed here. */
   function toolEvidence(
     outcome: ToolOutcome | undefined,
     abandoned: boolean,
@@ -437,7 +461,7 @@ export function createLoop(deps: LoopDeps): Loop {
       // Confirmed termination means the operation reported that it stopped. A step the loop walked away from reported
       // nothing, and §6.2 forbids resolving that by pretending it stopped.
       terminated: outcome !== undefined && !abandoned,
-      effectsUncertain: true,
+      effectsUncertain: tools.declares?.(tool)?.sideEffects !== "none",
       inFlight: "tool",
       step: {
         tool,
@@ -504,6 +528,31 @@ export function createLoop(deps: LoopDeps): Loop {
     };
   }
 
+  /** §4.1's `inputSchema`, checked against what the model actually sent. Returns the refusal text, or `undefined` when
+   *  there is nothing to check with — a tool whose spec carries no `parameters` takes no arguments, and a name no
+   *  executor declared was already refused before this ran. */
+  function validateCallArguments(call: ToolCall): string | undefined {
+    const spec = declaredSpec(call.tool);
+    if (spec === undefined) return undefined;
+    const checked = validateToolArguments(spec.parameters, call.args);
+    if (checked.ok) return undefined;
+    return `'${call.tool}' was called with arguments its own schema rejects: ${checked.problems
+      .map((problem) => `${problem.path === "" ? "(root)" : problem.path} ${problem.message}`)
+      .join("; ")} (§4.1 validates the schema before policy is asked)`;
+  }
+
+  /** D-099's one place where a runtime observation becomes part of what policy judges. Two channels, and each party gets
+   *  one: the arbiter sees the arguments *and* the facts, the executor sees only the arguments it declared. A fact placed
+   *  in `args` instead would be rejected by §4.3's own undeclared-argument rule — which is that rule working, and the
+   *  reason this is a field rather than a merge. Both are logged separately in `tool.call.proposed`, because an audit
+   *  record that could not tell what was asked for from what was observed could not answer the one question it exists
+   *  for. */
+  function withRuntimeFacts(call: ToolCall): { call: ToolCall; facts: Record<string, unknown> } {
+    const facts = tools.facts?.(call) ?? {};
+    if (Object.keys(facts).length === 0) return { call, facts };
+    return { call: { ...call, facts }, facts };
+  }
+
   function toolMessage(toolCallId: string, content: string): ProviderMessage {
     return { role: "tool", content, toolCallId };
   }
@@ -557,8 +606,10 @@ export function createLoop(deps: LoopDeps): Loop {
    *  the runtime to establish whether an operation succeeded before retrying a step that may have had an external side
    *  effect, and a completion request has none on the user's device beyond the provider having seen a prompt it was
    *  already sent (the same classification D-089 makes for cancellation). A *tool* step is the opposite case and this loop
-   *  never retries one: no tool declares `idempotent` (`PENDING_RECORD_FIELDS`), so §7.3's answer is always "re-ask rather
-   *  than repeat", and a failed tool result goes back to the model to plan around. */
+   *  never retries one, and that is D-094's decision rather than a gap in the record: `packages/tools` declares
+   *  `idempotent` for every file tool now (D-098), and the declaration is read where §7.3 reads it — by a resume deciding
+   *  whether a step may be repeated (`checkpoint.ts`'s verdict), not by a retry ladder deciding whether to guess. A failed
+   *  tool result goes back to the model to plan around, which is the ladder's rung for an action with consequences. */
   async function callProvider(
     state: RunState,
     offered: readonly ProviderToolSpec[],
@@ -685,7 +736,23 @@ export function createLoop(deps: LoopDeps): Loop {
         ? Math.min(priced, abandon)
         : (priced ?? abandon);
     const { value, abandoned } = await withDeadline(
-      async (signal) => tools.run(call, { taskId, signal, deadlineMs }),
+      async (signal) => {
+        try {
+          return await tools.run(call, { taskId, signal, deadlineMs });
+        } catch (error) {
+          // An executor that throws is a failed step, not a crashed task. Without this the promise `start()` returned
+          // would reject with the task still in `running` and nobody left to drive it, which is a state with no terminal
+          // edge taken and no event for it — the two things §5.1's pairing rule and §4.1's table both forbid. The model
+          // gets the reason and can plan around it, exactly as it does for a refusal.
+          return {
+            ok: false,
+            output: `'${call.tool}' threw instead of returning an outcome: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            code: "executor-error",
+          };
+        }
+      },
       deadlineMs,
       outer,
       () => ({
@@ -958,13 +1025,41 @@ export function createLoop(deps: LoopDeps): Loop {
     }
 
     const call = toToolCall(proposed);
-    const decision = evaluate(call, state.subject, state.input.ctx, at);
+
+    // §4.4's first step, complete: `toToolCall` compared the argument *names* against the declaration, and this compares
+    // their shapes. Both run before the arbiter is asked, because §4.1 says so in terms ("`inputSchema` validated before
+    // policy evaluation; malformed arguments are rejected pre-execution") and §4.3 gives the reason — "so a schema
+    // mismatch can never be mistaken for permission". A `path` holding a number is not a tier question.
+    const malformed = validateCallArguments(call);
+    if (malformed !== undefined) {
+      const next = [...messages, toolMessage(proposed.id, malformed)];
+      phase(task.id, correlationId, (emit) => {
+        emit(
+          "tool.call.proposed",
+          { tool: call.tool, args: call.args, outcome: "invalid-arguments" },
+          at,
+        );
+        emit(
+          "tool.execution.blocked",
+          { tool: call.tool, reason: malformed, class: "validation" },
+          at,
+        );
+        // A refusal is a committed boundary for the same reason a denial is: the step has an outcome, the model will be
+        // told it, and nothing external happened (D-095).
+        checkpointAt(state, "step", next, steps);
+      });
+      return { messages: next, steps };
+    }
+
+    const gated = withRuntimeFacts(call);
+    const decision = evaluate(gated.call, state.subject, state.input.ctx, at);
     phase(task.id, correlationId, (emit) => {
       emit(
         "tool.call.proposed",
         {
           tool: call.tool,
           args: call.args,
+          ...(Object.keys(gated.facts).length === 0 ? {} : { facts: gated.facts }),
           outcome: decision.outcome,
           ...(decision.outcome === "unavailable" ? {} : { tier: decision.tier }),
           ...(decision.outcome === "allow" || decision.outcome === "require-approval"
@@ -1319,7 +1414,13 @@ export function createLoop(deps: LoopDeps): Loop {
     // §5's rule 6 and §6.3's material-change rule can only be checked against the action as it stands *now*, so policy is
     // asked again on this line instead of being trusted from the moment the prompt was built. The case that matters is a
     // grant revoked while the prompt was pending: the user approved, and the answer is still no.
-    const decision = evaluate(run.call, state.subject, run.input.ctx, at);
+    //
+    // Enriched exactly as it was when the prompt was built, because §6.3's binding is computed from what policy sees and
+    // D-084 compares that binding at the moment of execution: a re-evaluation on the bare arguments would fingerprint a
+    // different action from the one the user signed, and spend the signature on a refusal. A fact that genuinely changed
+    // while the prompt was open does produce a different binding, which is a material change and the arbiter's verdict to
+    // give rather than this loop's.
+    const decision = evaluate(withRuntimeFacts(run.call).call, state.subject, run.input.ctx, at);
     if (decision.outcome === "deny" || decision.outcome === "unavailable") {
       const reason =
         `approval ${row.id} was approved, but re-evaluating at the moment of execution answers \`${decision.outcome}\`: ` +
@@ -1417,7 +1518,9 @@ export function createLoop(deps: LoopDeps): Loop {
    *  and the task stays where a prompt puts it. */
   function reRequest(state: RunState, run: SuspendedRun, why: string): LoopOutcome {
     const at = now();
-    const decision = evaluate(run.call, state.subject, run.input.ctx, at);
+    // The same enrichment as the moment of execution, so the fresh request carries the binding that execution will be
+    // compared against — a re-ask built on the bare arguments would open a prompt the next resume could not spend (D-099).
+    const decision = evaluate(withRuntimeFacts(run.call).call, state.subject, run.input.ctx, at);
     if (decision.outcome !== "require-approval") {
       return fail(
         run.taskId,

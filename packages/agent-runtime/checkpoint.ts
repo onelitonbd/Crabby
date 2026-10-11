@@ -26,10 +26,12 @@
 //
 // What this makes possible, and what it still does not: a restart now has something to resume *from*, which is the half
 // of F-47 that checkpoints owed. The other half is a runner — a party that would call `loop.resume` with a rebuilt
-// `RunInput` — and there is still no `packages/tools` and no product provider adapter, so `recovery.ts` reports the
-// verdict and resumes nothing. The verdict's `re-ask` answer is also why that is safe rather than merely slow: in this
-// build no tool declares `idempotent` (`packages/policy`'s `PENDING_RECORD_FIELDS` lists it as a field the registry
-// cannot answer), so a step that was in flight when the process died is never passed.
+// `RunInput` — and there is still no product provider adapter and no Gateway runner, so `recovery.ts` reports the
+// verdict and resumes nothing. M2k closed a different part of the same sentence: `packages/tools` declares §4.1's
+// `idempotent` for the rows it implements (D-098) and `stepFactsFromDeclarations` below turns a declaration into the
+// `StepFacts` this file reads, so `pass` is an answer a composed Gateway can give. A surface that declares nothing still
+// gets `re-ask` for every step that was in flight when the process died, which is the default D-065 wants: the permission
+// belongs to the tool, and a tool that does not claim it does not have it.
 import {
   type CheckpointBoundary,
   type CheckpointPending,
@@ -39,6 +41,7 @@ import {
   type TaskCheckpoint,
   type TaskRecord,
   type TaskState,
+  type ToolDeclaration,
 } from "@crabby/api-contracts";
 import type { ProviderMessage } from "@crabby/providers";
 import { RuntimeError, type TaskJournal } from "./journal.ts";
@@ -87,7 +90,9 @@ export interface CommitInput {
 /** D-065's two permissions to pass a step that was in flight. Both belong to the tool runtime that executes it, which is
  *  why `packages/policy` reports them as pending rather than guessing (`PENDING_RECORD_FIELDS`), and why the default here
  *  answers neither: a runtime that assumed `file.delete` was idempotent would be the exact lie `record.ts`'s header
- *  refuses. A test injects a declaration to prove the `pass` branch works; nothing in this build does. */
+ *  refuses. Since M2k an executor does declare the first of them — `packages/tools` fills in §4.1's `idempotent` for its
+ *  eight file tools — and `stepFactsFromDeclarations` below is the bridge, so the `pass` branch is reachable in a composed
+ *  Gateway rather than only in a test that invents a declaration. */
 export interface StepFacts {
   readonly idempotent: boolean;
   /** The step's external effect is on the record — an operation identifier, a reconciled state, a receipt. §7.3's
@@ -131,6 +136,27 @@ export interface CheckpointDeps {
 }
 
 const NO_FACTS: StepFacts = { idempotent: false, effectRecorded: false };
+
+/** The bridge between §4.1's record and D-065's first permission: an executor's `declares` (D-098) answers whether
+ *  re-running a step is safe, which is exactly the question `verdictFor` asks before it will say `pass` instead of
+ *  `re-ask`. A runner composes this once, at startup, and hands the result to `createCheckpoints`.
+ *
+ *  `effectRecorded` stays `false` for every tool, and that is a statement about this build rather than an oversight:
+ *  §7.3's "operation identifiers, or external-state checks where available" means a receipt — an idempotency key a remote
+ *  service honours, a reconciled state read back after the fact. A file tool's effect is on the local filesystem and in
+ *  the event log, and neither of those is a receipt for an operation that may or may not have completed. So the verdict
+ *  for a step that was in flight is carried by the idempotence half alone, which is the half the executor can actually
+ *  know. */
+export function stepFactsFromDeclarations(
+  declares: (tool: string) => ToolDeclaration | undefined,
+): (tool: string) => StepFacts {
+  return (tool) => {
+    const declaration = declares(tool);
+    // An unknown tool answers neither fact, which is the default's own rule: §7.3's "anything else re-asks rather than
+    // repeating an external action" is the safe reading of a tool nobody declared.
+    return { idempotent: declaration?.idempotent ?? false, effectRecorded: false };
+  };
+}
 
 export function createCheckpoints(deps: CheckpointDeps): Checkpoints {
   const now = deps.now ?? ((): number => Date.now());
@@ -319,10 +345,9 @@ export function verdictFor(input: VerdictInput): ResumeAnswer {
     verdict: "re-ask",
     reason:
       `'${inFlight.tool}' was in flight when the run ended — its \`tool.execution.started\` at seq ${inFlight.startedSeq} ` +
-      "has no outcome beside it — and neither permission D-065 names holds: no tool in this build declares `idempotent` " +
-      "(`packages/policy`'s `PENDING_RECORD_FIELDS` lists it as a field the registry cannot answer), and nothing recorded " +
-      "this step's external effect. §7.3 forbids repeating an action whose completion status is unknown, so a runner " +
-      "re-asks instead of re-running",
+      "has no outcome beside it — and neither permission D-065 names holds: the runtime that executes it does not declare " +
+      "it idempotent, and nothing recorded this step's external effect. §7.3 forbids repeating an action whose completion " +
+      "status is unknown, so a runner re-asks instead of re-running",
     inFlight,
   };
 }

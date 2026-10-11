@@ -46,6 +46,8 @@ interface Call {
   tool: string;
   args?: Record<string, unknown>;
   declaredArgs?: readonly string[];
+  /** What the runtime observed, as distinct from what the caller asked for (D-099). */
+  facts?: Record<string, unknown>;
 }
 
 function decide(
@@ -68,6 +70,7 @@ function decide(
       tool: call.tool,
       args: call.args ?? {},
       ...(call.declaredArgs ? { declaredArgs: call.declaredArgs } : {}),
+      ...(call.facts ? { facts: call.facts } : {}),
     },
     {
       grants,
@@ -397,6 +400,101 @@ describe("path judgement (SECURITY.md §8)", () => {
   it("fails closed when no workspace root exists at all", () => {
     const decision = decide({ tool: "file.read", args: { path: "a.txt" } });
     assert.match(asApproval(decision).reasons.join(" "), /no workspace root/);
+  });
+});
+
+describe("escalation on observed facts (PROVIDERS_AND_TOOLS.md §4.3, D-099)", () => {
+  // §4.3's file rows turn on facts about the filesystem rather than on intentions the caller declared, and `escalate`
+  // reads them from a channel the caller cannot write to. These four are the first tests those two escalations have ever
+  // had, which is the measure of how unreachable they were: before an executor existed there was no party to observe
+  // anything, so the rule could not be exercised even in principle.
+  const CTX = { paths: PATHS, realpathOf: (absolutePath: string) => absolutePath };
+  const EDIT = {
+    tool: "file.edit",
+    args: { path: "a.txt", content: "x" },
+    declaredArgs: ["path", "content"],
+  };
+
+  it("raises an edit of a file that was already there to T2, and leaves it at T1 with nothing observed", () => {
+    assert.equal(
+      tierOf(decide(EDIT, {}, CTX)),
+      "T1",
+      "§4.2's `file.edit (existing)` row is T1, and a fact nobody observed cannot raise it — this module can escalate on " +
+        "evidence and it cannot invent evidence",
+    );
+    const observed = decide({ ...EDIT, facts: { preExistingUserFile: true } }, {}, CTX);
+    assert.equal(
+      tierOf(observed),
+      "T2",
+      "§4.2: 'Bumped to T2 when overwriting a file Crabby did not create'",
+    );
+    assert.match(
+      asApproval(observed).approval.effects,
+      /overwriting a file Crabby did not create/,
+      "§6.2's T2 row is 'explicit approval with full context', so the sentence that raised the tier is in the prompt",
+    );
+  });
+
+  it("refuses the same fact from the caller, because §10 says a declared field is never an authority", () => {
+    const forged = decide(
+      {
+        tool: "file.edit",
+        args: { path: "a.txt", content: "x", preExistingUserFile: false },
+        declaredArgs: ["path", "content"],
+      },
+      {},
+      CTX,
+    );
+    const denial = asDeny(forged);
+    assert.equal(
+      denial.class,
+      "validation",
+      "a fact smuggled in as an argument is an argument the tool never declared, and §4.3's rule for those is rejection " +
+        "before policy — the model cannot lower its own tier by declaring the answer",
+    );
+    assert.match(denial.reason, /does not declare/);
+  });
+
+  it("raises a move onto an occupied destination to T2, on the runtime's observation of the destination", () => {
+    const MOVE = {
+      tool: "file.move",
+      args: { path: "a.txt", destination: "b.txt" },
+      declaredArgs: ["path", "destination"],
+    };
+    assert.equal(tierOf(decide(MOVE, {}, CTX)), "T1", "§4.2's `file.move` row");
+    assert.equal(
+      tierOf(decide({ ...MOVE, facts: { overwrites: true } }, {}, CTX)),
+      "T2",
+      "§4.2: 'T2 across roots or onto an existing target' — and the target's state is a fact, not an intention",
+    );
+  });
+
+  it("puts the observed fact inside the binding, so a signature covers what policy actually saw", () => {
+    // `file.delete` is used because the fact changes nothing about its tier, which isolates the only difference between
+    // the two calls: §6.3's binding has to cover the observation as well as the request, or D-084's comparison at the
+    // moment of execution would be comparing half of what the user priced.
+    const DELETE = { tool: "file.delete", args: { path: "a.txt" }, declaredArgs: ["path"] };
+    const plain = asApproval(decide(DELETE, {}, CTX));
+    const observed = asApproval(
+      decide({ ...DELETE, facts: { preExistingUserFile: true } }, {}, CTX),
+    );
+    assert.equal(
+      plain.approval.tier,
+      observed.approval.tier,
+      "the tier is the same, so the tier is not what differs",
+    );
+    assert.notEqual(
+      plain.approval.binding,
+      observed.approval.binding,
+      "the fact is part of the action's identity: two calls that policy judged on different evidence are two approvals",
+    );
+    assert.equal(
+      asApproval(decide({ ...DELETE, facts: { preExistingUserFile: true } }, {}, CTX)).approval
+        .binding,
+      observed.approval.binding,
+      "and the same evidence produces the same binding, which is what makes the comparison at execution a comparison " +
+        "rather than a coin toss",
+    );
   });
 });
 

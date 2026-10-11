@@ -1051,6 +1051,34 @@ tool stays out of the response entirely rather than appearing with empty fields,
 what the product will do and `GET /tools` is a statement of what this process can do, and F-20 is the finding about
 confusing two copies of one list.
 
+### F-56 — §3.7 gives an adapter a vault handle, and nothing in the build resolves one
+
+**Severity: medium, open, and the same shape as F-52.** §3.7 is specific: provider credentials "are supplied once, stored
+in the vault, and referenced by name in configuration — `provider.groq.key = vault://groq`", and "adapters receive a
+handle that yields the value at call time; the agent never reads it, and it never enters model context". `SECURITY.md` §7
+and D-031 say the same thing from the secrets side, and `docs/DATA_AND_MEMORY.md` §4.1 lists `vault/` at mode `0700` as
+part of the state directory's whole footprint.
+
+What exists is the directory and two honest reports about it. `packages/platform/paths.ts` names `vault/`;
+`crabby doctor` checks that it exists and that its mode is `0700`, and says plainly when it does not exist yet;
+`GET /health` reports `vault: { managed: false }` rather than `locked: false`, because a lock nobody implements is a
+protection nobody has. What does not exist is any code that stores a secret, resolves a `vault://` reference, or hands an
+adapter a handle — so `ProviderConfig.apiKey` is a plain string, and M2l's adapter holds one for the lifetime of the
+process (D-100 records that as what the build does instead, rather than letting a reader assume §3.7 is implemented).
+
+Not fixed in that slice because the honest fix is a subsystem, not a signature: an encrypted or at-rest-protected store
+whose keys survive a process restart, a `vault://` resolver with a rule for a missing or locked vault, `crabby provider
+add` writing a reference instead of a value, and a decision about what unlocks it on a device with no keyring — which is
+O-065's question ("what a phone's sandbox can actually enforce") and cannot be answered from a laptop. Inventing a
+plaintext file with a `vault://` prefix in front of it would have made the sentence true in a grep and false in every way
+that matters.
+
+**Closing condition:** a vault that stores, resolves and refuses; `ProviderConfig` taking a reference rather than a value;
+and a test that a key never appears in an event payload, a log line or a prompt — which is the property §3.7 and
+`SECURITY.md` §14 are actually about. Until then two duties sit with whoever composes an adapter and are stated in
+`PROVIDERS_AND_TOOLS.md` §3.7 rather than left to a reader: the key must not reach a log line (`packages/core/redact.ts`
+is defence in depth, not the control) and must not enter model context.
+
 ## 3. Checks That Passed
 
 | Check | Result |

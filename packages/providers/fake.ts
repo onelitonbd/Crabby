@@ -8,8 +8,10 @@
 // Everything a test wants to happen is scripted, and nothing else is invented — there is no default reply text, no
 // simulated latency unless asked for, and no model that was not declared.
 
+import { validateProviderConfig } from "./config.ts";
 import type {
   CancellationHandle,
+  ConfigValidation,
   GenerateResult,
   Provider,
   ProviderConfig,
@@ -180,42 +182,12 @@ export class FakeProvider implements Provider {
     return this.models;
   }
 
-  validateConfig(config: ProviderConfig): { ok: true } | { ok: false; reason: string } {
+  validateConfig(config: ProviderConfig): ConfigValidation {
     // Not "anything goes because it is a fake": §3.1 requires rejection of unusable configuration with an actionable
-    // reason, and the fake is the reference implementation of that requirement.
-    if (typeof config?.baseUrl !== "string" || config.baseUrl === "") {
-      return {
-        ok: false,
-        reason: "'baseUrl' is required: without it there is no endpoint to call",
-      };
-    }
-    let url: URL;
-    try {
-      url = new URL(config.baseUrl);
-    } catch {
-      return { ok: false, reason: `'baseUrl' is not a URL (${config.baseUrl})` };
-    }
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return { ok: false, reason: `'baseUrl' must be http(s), got '${url.protocol}'` };
-    }
-    if (config.apiKey !== undefined && typeof config.apiKey !== "string") {
-      return { ok: false, reason: "'apiKey' must be a string when present" };
-    }
-    if (config.headers !== undefined) {
-      const bad = Object.entries(config.headers).filter(([, value]) => typeof value !== "string");
-      if (bad.length > 0)
-        return {
-          ok: false,
-          reason: `'headers' values must be strings (${bad.map(([k]) => k).join(", ")})`,
-        };
-    }
-    const unknown = Object.keys(config).filter(
-      (key) => !["baseUrl", "apiKey", "headers"].includes(key),
-    );
-    if (unknown.length > 0) {
-      return { ok: false, reason: `unknown configuration field(s): ${unknown.join(", ")}` };
-    }
-    return { ok: true };
+    // reason, and the fake is the reference implementation of that requirement — which is why it delegates to the same
+    // function a product adapter calls (`./config.ts`, §3.3's custom-provider rules) rather than keeping a second copy
+    // that could drift from the one a user's endpoint is actually checked against.
+    return validateProviderConfig(config);
   }
 
   countTokens(text: string): number {

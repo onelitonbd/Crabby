@@ -65,8 +65,10 @@ export class ProviderError extends Error {
   readonly raw?: unknown;
   readonly retryAfterMs?: number | undefined;
   /** Which deadline tripped, for `timeout`: §3.5 asks that connect, first-token, and stall be distinguishable, and a
-   *  ladder that cannot tell them apart retries the wrong thing (§4.4). */
-  readonly deadline?: "connect" | "first-token" | "stall" | undefined;
+   *  ladder that cannot tell them apart retries the wrong thing (§4.4). `absolute` is the fourth number D-074 priced
+   *  (`providerAbsoluteMs`), which §3.1 makes the runtime wrapper's to enforce and the adapter's to report — a call that
+   *  ran out of budget is a different fact from an endpoint that never answered. */
+  readonly deadline?: "connect" | "first-token" | "stall" | "absolute" | undefined;
   readonly attempt: number;
 
   constructor(

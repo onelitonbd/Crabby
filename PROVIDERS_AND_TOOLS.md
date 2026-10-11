@@ -110,6 +110,20 @@ genuinely differs.
 | `generic-http` (non-OpenAI-shaped template) | Anything else via a user-supplied request template | No | Rejected (O-033 closed): a user-authored request/response template is its own security review, and `openai-compatible` already covers the practical cases |
 | `mock/fake` | Deterministic test provider | Yes | Required so tests never hit live APIs (`SECURITY.md` §17) |
 
+**Implemented in M2l (D-100): `openai-compatible`.** `createOpenAiCompatibleProvider` in `packages/providers` is the
+first product adapter, and it is this row rather than a vendor's because §3.3's own reasoning is "implement families, not
+N vendors": one adapter serves Groq, OpenRouter, Together, Fireworks, LM Studio, vLLM, Ollama's compatibility layer,
+GitHub Models and D-041's user-defined endpoint, and a **preset is the same adapter with a name, a base URL and a model
+list** — the constructor takes an `id`, so `groq` and a user's own endpoint differ in nothing that could behave
+differently. What the user supplies is §3.3's three required things plus a §3.2 descriptor per model, because that is the
+part no endpoint in this family serves: `GET /models` returns ids and nothing else, so discovery would produce exactly
+what the conformance suite refuses — a model `listModels()` names whose limits are unknowable. What the adapter does with
+a call is §3.1's contract and §3.5's taxonomy, and what it does with a configuration is the "Custom-provider
+requirements" list below, implemented once in `packages/providers/config.ts` and called by the fake too, so the reference
+adapter and the product adapter cannot drift apart on the rules a user's endpoint is checked against. `ollama`'s native
+API, `anthropic`'s message format and `gemini`'s streaming metadata remain absent for the reason this section gives: each
+differs genuinely, and none of them has a caller in this build yet.
+
 Two distinct things, deliberately separated:
 
 - **Bundled presets** (O-028, accepted as the lean set — D-042): `groq`, `openrouter`, `ollama`, `anthropic`,
@@ -156,7 +170,7 @@ labels it `estimated` rather than dimming it.
 | `auth` | Bad or expired credential | No | Message must name the credential, never show it |
 | `rate-limit` | 429 / quota window | Yes, with backoff honoring provider hints | Surface remaining quota when provided |
 | `overloaded` | 5xx, capacity | Yes, bounded | Escalate after N attempts |
-| `timeout` | Deadline exceeded | Yes, bounded | Distinguish connect vs first-token vs stall |
+| `timeout` | Deadline exceeded | Yes, bounded | Distinguish connect vs first-token vs stall. Since M2l the error carries which one tripped as a `deadline` field, plus `absolute` for D-074's fourth row — the budget the *runtime* supplies and the adapter reports (D-100), because "the endpoint never answered" and "the call ran out of budget" are different facts with different ladder behaviour. |
 | `context-overflow` | Request too large | Only after compaction | §3.4 |
 | `unsupported-capability` | Model refused a feature it claimed | No | Flag the descriptor for review; report to user |
 | `invalid-response` | Unparsable, truncated, or schema-violating output | Sometimes | Keep the raw fragment in audit, redacted |
@@ -244,6 +258,15 @@ is normal operation, a stalled stream is not.
 Provider credentials are secrets under `SECURITY.md` §7 and D-031: they are supplied once, stored in the vault, and
 referenced by name in configuration — `provider.groq.key = vault://groq`. Adapters receive a handle that yields the
 value at call time; the agent never reads it, and it never enters model context (`SECURITY.md` §7).
+
+**What this build does instead, stated rather than glossed (M2l).** There is no vault code: `crabby doctor` checks the
+directory's existence and mode, `GET /health` reports `vault: { managed: false }` rather than claiming a lock it cannot
+show, and nothing resolves a `vault://` reference. So `ProviderConfig.apiKey` is a plain string and the adapter holds it
+for the lifetime of the process. Two duties follow for whoever composes an adapter, and they are the reason this
+paragraph exists: the key must never reach a log line (`packages/core/redact.ts` is defence in depth, not the control)
+and never enter model context — an adapter that put its own configuration into a prompt would leak the one secret the
+product is built to keep on-device. `docs/CONSISTENCY_REVIEW.md` F-56 records the gap and its closing condition, in the
+same shape as F-52's: a column and a sentence exist, and the writer that would fill them does not.
 
 ### 3.8 Per-model capability override by the user
 

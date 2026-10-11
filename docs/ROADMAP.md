@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-55 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-56 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -219,11 +219,11 @@ nothing to pass (D-095, closing half of F-47). D-044's second rung — ask the u
 absent, and building the checkpoint is what showed why: the saved state it resumes from now exists, but there is no switch
 surface to ask on, no runner to answer to, and `failed` is terminal and absorbing, which is F-50. So an exhausted budget
 fails the task and says how many attempts it took. **Still absent, and the reason `crabby task run` and a
-cancellation route are not `ready`:** no provider adapter to call (`PROVIDERS_AND_TOOLS.md` §3.3's four arrive in M2/M4,
-and the fake is a test reference rather than a product provider), and nothing in the Gateway that drives a task — so a
-route that started a run, or one that cancelled a run nobody started, would be the demo this phase has refused to ship.
-That list had a third item, `ARCHITECTURE.md` §18's `packages/tools` ("the executor is a seam"), and the eleventh slice
-removed it. F-46 was the debt that slice
+cancellation route are not `ready`:** nothing in the Gateway that drives a task — so a route that started a run, or one
+that cancelled a run nobody started, would be the demo this phase has refused to ship. That list had three items, and two
+slices removed two of them: `ARCHITECTURE.md` §18's `packages/tools`, which the eleventh slice built, and a product
+provider adapter, which the twelfth built for §3.3's first and widest family (its other three arrive when something calls
+them). F-46 was the debt that slice
 named, and the next one closed it: schema version 3 is the `cancellation_json` column, `TaskRecord.cancellation` is the
 contract, `packages/storage/journal.ts` is the runtime's write seam over the real database, and `crabby task show` prints
 whether the operation stopped and whether an external effect is in doubt (D-091).
@@ -282,6 +282,42 @@ for the same composition reason, which is F-55 rather than an omission. The revi
 one task over a real directory tree, a T0 read, a T1 create, an edit that stops at a T2 prompt *because the runtime
 observed the file*, the answer from a TUI-shaped client, the resume, the workspace afterwards, and then the two
 cancellations and the three verdicts that the declarations make different from each other.
+
+The twelfth slice is that adapter: `openai-compatible`, §3.3's first row and deliberately its widest rather than its most
+famous, because "implement families, not N vendors" means one adapter now serves Groq, OpenRouter, Together, Fireworks,
+LM Studio, vLLM, Ollama's compatibility layer, GitHub Models and D-041's user-defined endpoint — and a **preset is the
+same adapter under a different `id`**, which is what §3.3's "presets carry no privileged behavior" means once there is
+nothing else about them that could differ. What the user supplies is the base URL, the key, the model names and a §3.2
+descriptor per model, and that last one is a decision rather than an omission: `GET /models` in this family returns ids
+and nothing else, so discovery would have produced exactly what the conformance suite refuses — a model `listModels()`
+names whose limits are unknowable. §3.5's `timeout` row finally means what it says, and the split is three-to-one: the
+adapter arms connect, first-token and stall because only the party holding the socket can tell them apart, reading D-074's
+numbers out of `packages/core` rather than retyping them, while the absolute deadline arrives as `ctx.timeoutMs` and is
+reported under its own label — §3.1 makes timeouts the runtime wrapper's job, and "the endpoint never answered" is a
+different fact from "the call ran out of budget". Writing that split caught the slice's own worst bug, worth recording
+because it is invisible in a unit test: a deadline whose abort stops reaching the socket once headers have arrived is a
+hang wearing a timeout's clothes, so the propagation now lives for the whole request. `cancellation` is declared
+`best-effort` for the honest reason — aborting closes this side of the socket and stops the task waiting, and cannot stop
+a remote server generating tokens it will bill for, which is more than `supported` would let §6.2's evidence claim. A
+stream that carries no usage reports **zeros rather than an estimate**, because §3.4's budget spends these numbers and
+`Usage` has no "unknown"; the honest fix is a `reported` flag on `Usage`, which belongs to §3.4's owner and not to an
+adapter, and D-100 records it so the zero reads as a decision. §3.3's custom-provider rules became one implementation
+both adapters call, and the fake now delegates to it, because a reference adapter that validates configuration
+differently from the product one teaches the wrong thing about what "an actionable reason" means; `ConfigValidation`
+gained a `warnings` channel for the same section's plain-HTTP requirement, which is a warning and not a refusal — a LAN
+`llama-server` on plain HTTP is a setup §3.3 accepts and the user chooses, while credentials embedded in a base URL are
+refused outright, because a key in a URL is a key in every log and shell history that records one. What §3.7 promises and
+this build does not have is stated in the document rather than left to a reader: there is no vault code, so the key is a
+plain string in the adapter's configuration, F-56 records the gap in F-52's shape, and the two duties that follow — never
+a log line, never model context — sit with whoever composes an adapter. Testing is §7's rule taken literally: the shared
+conformance suite passes for this adapter against a **local server speaking the real wire protocol** (SSE frames, a
+keep-alive comment, a tool call streamed in three fragments, `retry-after`, four `finish_reason` values, a socket closed
+before headers, a body that is HTML), because a stub *server* is not a stub *provider* and §7 forbids the alternative;
+forty-three cases in the adapter's own file, and not one of them reaches the internet. Absent on purpose: `ollama`'s
+native API, `anthropic`'s tool blocks and `gemini`'s streaming metadata, because each differs genuinely and none has a
+caller in this build; adapter-side retries, because D-043's ladder is the loop's and an adapter that retried would double
+it; and `countTokens`, because §3.1 says absence means §3.4's own estimation, and an estimate dressed as a count would be
+spent as if it were one.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

@@ -1,24 +1,33 @@
-// `crabby task ls|show|cancel` — reads and writes over the same HTTP surface a phone uses, never into SQLite
-// (`ARCHITECTURE.md` §19). `cancel` is here because §6 has a route behind it and a stop button that only three of four
-// interfaces had would be the "one behaviour, four surfaces" rule broken where it matters most.
+// `crabby task ls|show|cancel|watch` — reads, writes and streams over the same HTTP surface a phone uses, never into
+// SQLite (`ARCHITECTURE.md` §19). `cancel` is here because §6 has a route behind it and a stop button that only three of
+// four interfaces had would be the "one behaviour, four surfaces" rule broken where it matters most. `watch` is here for
+// the same reason over §5.4: `GET /events` has filtered by `taskId`, replayed from `Last-Event-ID` and answered an
+// out-of-window cursor with a `gap` frame since D-048, so the events existed and no terminal could follow them.
+//
+// `watch` is also the one verb in this file that does not answer with a single document. §7.1 promises NDJSON — one event
+// per line, each carrying the per-task `seq` so a script notices a gap the way a browser does — which means the JSON
+// rendering is a stream rather than a snapshot, and the difference is deliberate rather than an oversight: a trailing
+// summary document would be a line a script parsing one-event-per-line never asked for.
 // `task run` is not here: creating a task that no runtime will move is the placeholder work the owner asked me not to
 // do, so the verb stays `planned` in the registry until the milestone that gives it an executor.
 import {
   CANCELLATION_MODES,
   type CancellationMode,
+  type Event,
   EXIT,
   type ExitCode,
+  isTerminal,
   type TaskCheckpoint,
   type TaskRecord,
 } from "@crabby/api-contracts";
-import { GatewayFailure } from "@crabby/gateway";
+import { GatewayFailure, readCredentials } from "@crabby/gateway";
 import type { DataLayout } from "@crabby/platform";
 import { parseTail } from "../args.ts";
 import { connect, reportFailure, reportNoGateway } from "../connect.ts";
 import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
 
-export type TaskVerb = "ls" | "show" | "cancel";
+export type TaskVerb = "ls" | "show" | "cancel" | "watch";
 
 export async function runTask(
   verb: TaskVerb | undefined,
@@ -46,6 +55,13 @@ export async function runTask(
   if (cancelMode !== undefined && !CANCELLATION_MODES.includes(cancelMode as CancellationMode)) {
     renderer.line("bad --mode", `"${cancelMode}" is not a cancellation mode`);
     renderer.fix(`${CANCELLATION_MODES.join(" | ")} — leaving it off asks for §6.1's finish-step`);
+    return EXIT.usage;
+  }
+  // Same rule as `cancel`, and for the same reason: `watch` is the verb most likely to be run in a script or over SSH,
+  // where "which task?" answered as a connection failure is the difference between a fixed command and a mystery.
+  const watchId = verb === "watch" ? tail.positionals[0] : undefined;
+  if (verb === "watch" && watchId === undefined) {
+    renderer.line("task watch", "which task? `crabby task ls` prints the ids");
     return EXIT.usage;
   }
   const connection = await connect(layout);
@@ -211,7 +227,166 @@ export async function runTask(
     }
   }
 
-  renderer.line("task", "which verb? `ls`, `show` or `cancel`");
+  if (verb === "watch" && watchId !== undefined) {
+    // The task is read once before the stream opens, for a reason that is about hanging rather than about convenience: a
+    // task that already reached a terminal state will never publish another event, so opening a stream for it would block
+    // until the user interrupts. Answering "already cancelled" is both faster and the truth.
+    let task: TaskRecord;
+    try {
+      task = (await connection.client.getTask(watchId)).body as TaskRecord;
+    } catch (error) {
+      return reportFailure(renderer, error);
+    }
+    if (isTerminal(task.state)) {
+      const absorbing =
+        `${watchId} is ${task.state}, which is terminal and absorbing (AGENT_RUNTIME.md §4.1), so no further event will ` +
+        "arrive — `crabby task show` prints what it left behind";
+      renderer.line("state", task.state);
+      renderer.fix(absorbing);
+      if (renderer.json) {
+        // One line, because §7.1 promises this verb NDJSON and `done()` renders its document with two-space indentation:
+        // a pretty-printed answer would arrive as dozens of lines that no script parsing one-document-per-line can read.
+        // The same refusal is therefore a paragraph for a human and a single JSON object for a machine, with `streamed:
+        // false` and `events: 0` saying plainly that no stream was ever opened rather than leaving a reader to infer it
+        // from an absence.
+        renderer.raw(
+          JSON.stringify({ ok: true, ...task, events: 0, streamed: false, fixes: [absorbing] }),
+        );
+        return EXIT.success;
+      }
+      return renderer.done({ ...task, events: 0, streamed: false });
+    }
+
+    // A raw fetch rather than a client method, because `GatewayClient` is buffered by design: every other route answers
+    // with one document, and giving it a streaming member would mean two lifecycles behind one interface. The token comes
+    // from the same credentials `connect` paired with, and the URL from the Gateway's own published one, so an ephemeral
+    // port is honoured exactly as it is everywhere else.
+    const credentials = readCredentials(layout);
+    if (credentials === undefined) return reportNoGateway(renderer, "unpaired");
+    let response: globalThis.Response;
+    try {
+      response = await fetch(
+        `${connection.url}/api/v1/events?taskId=${encodeURIComponent(watchId)}`,
+        {
+          headers: {
+            authorization: `Bearer ${credentials.token}`,
+            accept: "text/event-stream",
+          },
+        },
+      );
+    } catch (error) {
+      return reportFailure(renderer, error);
+    }
+    if (!response.ok || response.body === null) {
+      renderer.line(
+        "stream refused",
+        `the Gateway answered ${response.status} to GET /api/v1/events`,
+      );
+      renderer.fix("crabby gateway status — is the Gateway still running?");
+      return EXIT.failure;
+    }
+
+    renderer.line("watching", `${watchId} · ${task.state} · waiting for events`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let lastEventId: string | undefined;
+    let seen = 0;
+    let finalState: TaskRecord["state"] = task.state;
+    let ended: string | undefined;
+    // Frames are separated by a blank line, and a chunk boundary can fall inside one, so the buffer is only ever consumed
+    // up to the last complete separator. Dropping the tail would lose an event; parsing it early would invent one.
+    outer: for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      for (;;) {
+        const separator = buffer.indexOf("\n\n");
+        if (separator === -1) break;
+        const rawFrame = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        let name: string | undefined;
+        let idLine: string | undefined;
+        const dataLines: string[] = [];
+        for (const line of rawFrame.split("\n")) {
+          // A line starting with a colon is a comment, which is what the 15-second heartbeat sends. Skipping it is what
+          // keeps an idle stream from printing noise, and §5.1's heartbeat exists to be ignored.
+          if (line.startsWith(":")) continue;
+          if (line.startsWith("id:")) idLine = line.slice(3).trim();
+          else if (line.startsWith("event:")) name = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+        }
+        if (dataLines.length === 0) continue;
+        const parsed = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+
+        // §5.4's two control frames are facts, not noise: a gap means the cursor asked for events outside the window and
+        // the answer is to reconcile from `stateAt`, and an end frame means the stream itself is closing for a reason the
+        // client did not choose. Printing neither would turn an outage into a silent EOF.
+        if (name === "gap" || parsed.gap === true) {
+          const gapLine = JSON.stringify({ gap: true, stateAt: parsed.stateAt, taskId: watchId });
+          if (renderer.json) renderer.raw(gapLine);
+          else {
+            renderer.line(
+              "gap",
+              "the stream's window no longer holds the cursor; reconcile from the task's state",
+            );
+            renderer.fix(`crabby task show ${watchId}`);
+          }
+          continue;
+        }
+        if (parsed.end === true) {
+          ended = String(parsed.reason ?? "unknown");
+          if (renderer.json) renderer.raw(JSON.stringify({ end: true, reason: ended }));
+          else renderer.line("stream ended", String(ended));
+          break outer;
+        }
+
+        const event = parsed as unknown as Event;
+        if (idLine !== undefined) lastEventId = idLine;
+        seen += 1;
+        if (renderer.json) renderer.raw(JSON.stringify(event));
+        else renderer.line(String(event.seq).padStart(4), `${event.type}  ${event.ts}`);
+
+        // Two ways to recognise the end, because a terminal state arrives either as the state change itself or as the
+        // event named for it, and watching past either one would leave the user staring at a prompt that will never
+        // print. `interrupted` is deliberately not one of them: it is not terminal (§4.1), and a run may resume.
+        const state = typeof event.payload?.state === "string" ? event.payload.state : undefined;
+        if (
+          (state !== undefined && isTerminal(state as TaskRecord["state"])) ||
+          event.type === "task.completed" ||
+          event.type === "task.failed" ||
+          event.type === "task.cancelled"
+        ) {
+          finalState = (state ?? finalState) as TaskRecord["state"];
+          await reader.cancel();
+          break outer;
+        }
+      }
+    }
+
+    // The last id is printed rather than acted on. §5.1 gives a reconnecting client `Last-Event-ID` and the Gateway
+    // honours it, but a command that reconnected silently would hide the outage that made it reconnect — so the cursor is
+    // handed to whoever is driving, and the exit code says the stream is over.
+    if (lastEventId !== undefined && !renderer.json)
+      renderer.fix(
+        `last event id ${lastEventId} — reconnect with Last-Event-ID to resume without a gap`,
+      );
+    if (renderer.json) {
+      // NDJSON is the contract §7.1 names for this verb, and a trailing summary document would be a line a script
+      // parsing one-event-per-line did not ask for. The document form is what a snapshot command returns, not a stream.
+      return ended === undefined ? EXIT.success : EXIT.failure;
+    }
+    return renderer.done({
+      task: watchId,
+      state: finalState,
+      events: seen,
+      streamed: true,
+      ...(lastEventId === undefined ? {} : { lastEventId }),
+      ...(ended === undefined ? {} : { ended }),
+    });
+  }
+
+  renderer.line("task", "which verb? `ls`, `show`, `cancel` or `watch`");
   return EXIT.usage;
 }
 

@@ -168,12 +168,16 @@ export const COMMANDS: readonly CommandSpec[] = [
     milestone: "M2 (the runtime that answers a prompt)",
   },
   {
+    // `ready` for the reason `task cancel` is: the rule is whether a route stands behind the verb, and `GET /events` has
+    // stood behind this one since D-048 — filtered by `taskId`, replaying from `Last-Event-ID`, and answering a cursor
+    // outside its window with §5.4's `gap` frame rather than silence. The milestone this entry carried named "event
+    // delivery and gap handling", and both halves were already delivered server-side, so what was missing was the command
+    // that reads them.
     noun: "task",
     verb: "watch",
     summary: "follow one task's events, NDJSON per line with `--json`",
     flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (event delivery and gap handling)",
+    status: "ready",
   },
 
   {

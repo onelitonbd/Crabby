@@ -1238,6 +1238,209 @@ describe("a spawned gateway and a spawned cli (P-003)", () => {
       "`crabby status` prints the queue a user acts on, so a settled task must leave it",
     );
 
+    // Watching a task that already settled. This assertion is safe to make through the blocking `runCli` precisely
+    // because of the verb's first move: `task watch` reads the task once before opening a stream, and a terminal state
+    // will never publish another event, so the command answers and exits instead of blocking until somebody interrupts.
+    // The alternative — opening the stream first — would have made this line hang the whole file.
+    const watched = runCli(dir, ["task", "watch", createdTask.id]);
+    assert.equal(watched.code, 0, watched.stdout);
+    assert.ok(
+      /cancelled/.test(watched.stdout),
+      "the verb must say which terminal state it refused to wait on, not merely that it stopped",
+    );
+    assert.ok(
+      !watched.stdout.includes("watching"),
+      "printing `watching` for a task that can never publish again would promise a stream that cannot arrive — the " +
+        "hang §7.1's exit-code contract cannot describe, because the command would never exit to return one",
+    );
+    assert.ok(
+      /§4\.1|terminal/.test(watched.stdout),
+      "the fix line names the rule that makes the refusal correct rather than a bug: a terminal state is absorbing",
+    );
+
+    // The same refusal in the mode a script reads. This is the assertion that would have caught a real bug: the house
+    // renderer prints its document with two-space indentation, which is right for a snapshot and wrong for a verb whose
+    // §7.1 contract is NDJSON — one document per line. A pretty-printed answer arrives as dozens of lines, and no reader
+    // parsing one-event-per-line can tell a refusal from a malformed event.
+    const watchedJson = runCli(dir, ["task", "watch", createdTask.id, "--json"]);
+    assert.equal(watchedJson.code, 0, watchedJson.stdout);
+    const jsonLines = watchedJson.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    assert.equal(
+      jsonLines.length,
+      1,
+      `§7.1 promises this verb NDJSON, so the already-terminal answer must be one line, got ${JSON.stringify(watchedJson.stdout)}`,
+    );
+    const refusal = JSON.parse(jsonLines[0] ?? "{}") as {
+      state?: string;
+      streamed?: boolean;
+      events?: number;
+      fixes?: string[];
+    };
+    assert.equal(refusal.state, "cancelled");
+    assert.equal(
+      refusal.streamed,
+      false,
+      "no stream was opened, and the document must say so rather than imply it",
+    );
+    assert.equal(refusal.events, 0);
+    assert.ok(
+      (refusal.fixes ?? []).some((fix) => fix.includes("§4.1")),
+      "the rule that makes the refusal correct travels in the document too, because a script has no ordering to read",
+    );
+
+    // Watching a task that is still alive, which is the verb's actual promise and the one thing a spawned *blocking*
+    // helper cannot test: `runCli` waits for exit, and a stream that has not been told to end never exits. So the child
+    // is started asynchronously, the task is cancelled from this process, and the watcher is then expected to notice the
+    // terminal event and end itself — no kill, no timeout standing in for the behaviour under test.
+    // Raw fetch, matching this describe's own idiom: P-003 spawns its Gateway rather than composing one in-process, so
+    // there is no harness client to borrow — the port comes from the file both processes read and the token from the
+    // credentials `crabby auth pair` wrote. A fresh idempotency key keeps this task from colliding with `spawned-1`.
+    const liveResponse = await fetch(`http://127.0.0.1:${info.port}/api/v1/tasks`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokenFromCli(dir)}`,
+        "content-type": "application/json",
+        "idempotency-key": "spawned-watch",
+      },
+      body: JSON.stringify({ objective: "watched live" }),
+    });
+    const liveTask = (await liveResponse.json()) as { id: string; state: string };
+    assert.equal(liveResponse.status, 201, JSON.stringify(liveTask));
+    const watcher = spawn(
+      process.execPath,
+      [
+        path.join(REPO, "apps/cli/crabby.ts"),
+        "--data-dir",
+        dir,
+        "task",
+        "watch",
+        liveTask.id,
+        "--json",
+      ],
+      { cwd: REPO, env: { ...process.env, HOME: path.dirname(dir) } },
+    );
+    try {
+      let streamed = "";
+      let stderrText = "";
+      watcher.stdout.setEncoding("utf8");
+      watcher.stdout.on("data", (chunk: string) => {
+        streamed += chunk;
+      });
+      watcher.stderr?.setEncoding("utf8");
+      watcher.stderr?.on("data", (chunk: string) => {
+        stderrText += chunk;
+      });
+      // Wait for the stream to be *attached* before cancelling, because the alternative is a race this test lost once
+      // already: `task watch` reads the task before it opens a stream, and cancelling a `queued` task with `immediate`
+      // settles inside the manager's own `request()` (§6.1 step 3, nothing in flight), so a cancel that lands before the
+      // child's pre-read produces a watcher that correctly answers "already cancelled" and never streams at all.
+      //
+      // Waiting for the first NDJSON line would never resolve, and the reason is in the Gateway rather than in the CLI:
+      // `registerEventStream` replays history only for a request that carries *both* a `taskId` filter and a non-empty
+      // `Last-Event-ID` header, so a subscriber with no cursor receives nothing until a new event is published — not even
+      // a `gap` frame. This task's `task.created` was published before the child attached, so the only honest signal that
+      // the stream exists is the Gateway's own count of its subscribers, which `GET /api/v1/diagnostics` reports.
+      const attached = await (async () => {
+        const deadline = Date.now() + 15_000;
+        for (;;) {
+          const response = await fetch(`http://127.0.0.1:${info.port}/api/v1/diagnostics`, {
+            headers: { authorization: `Bearer ${tokenFromCli(dir)}` },
+          });
+          const body = (await response.json()) as { streams?: { subscribers?: number } };
+          if ((body.streams?.subscribers ?? 0) >= 1) return true;
+          if (Date.now() > deadline) return false;
+          await wait(100);
+        }
+      })();
+      assert.ok(
+        attached,
+        `the watcher never became a subscriber within 15 s, so there was nothing to cancel into; stdout was ` +
+          `${JSON.stringify(streamed)} and stderr was ${JSON.stringify(stderrText)}`,
+      );
+
+      // Cancel from this process rather than through a second CLI, so the assertion is about the stream and not about two
+      // spawned commands racing to reach the same Gateway.
+      const cancelResponse = await fetch(
+        `http://127.0.0.1:${info.port}/api/v1/tasks/${liveTask.id}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${tokenFromCli(dir)}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ mode: "immediate" }),
+        },
+      );
+      const cancelBody = (await cancelResponse.json()) as { state?: string };
+      assert.equal(cancelResponse.status, 200, JSON.stringify(cancelBody));
+
+      // Bounded, because the whole point is that the watcher ends on its own: waiting on `exit` with a deadline turns a
+      // missing terminal-state check into a red test instead of a hung file.
+      const exited = await new Promise<number | null>((resolve) => {
+        const deadline = setTimeout(() => resolve(null), 15_000);
+        watcher.once("exit", (code) => {
+          clearTimeout(deadline);
+          resolve(code);
+        });
+      });
+      assert.notEqual(
+        exited,
+        null,
+        "the watcher never ended after the task reached a terminal state, so it would hold a stream open forever — " +
+          "`isTerminal` is what makes `task watch` a command that returns rather than a tail that only Ctrl-C ends",
+      );
+      assert.equal(exited, 0, streamed);
+
+      const lines = streamed
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      assert.ok(lines.length > 0, `expected NDJSON lines, got ${JSON.stringify(streamed)}`);
+      // Every line is parsed through a guard that names the offender, because "one document per line" is the contract
+      // §7.1 states and a pretty-printed document anywhere in the stream breaks it silently: `JSON.parse` on a fragment
+      // reports a position in an empty string rather than which line was not a document.
+      const events = lines.map((line) => {
+        try {
+          return JSON.parse(line) as Event;
+        } catch {
+          throw new Error(
+            `not one JSON document per line: ${JSON.stringify(line)} in ${JSON.stringify(streamed)}`,
+          );
+        }
+      });
+      assert.ok(
+        events.every((event) => Number.isInteger(event.seq) && event.seq >= 0),
+        "§7.1: each line carries the per-task `seq`, which is how a script notices a gap the way a browser does",
+      );
+      assert.ok(
+        events.every((event) => event.taskId === liveTask.id),
+        "`?taskId=` filtering is server-side (D-048), so another task's events must not appear in this stream",
+      );
+      const types = events.map((event) => event.type);
+      assert.ok(
+        types.includes("task.state.changed") || types.includes("task.cancelled"),
+        `the cancellation must arrive as an event, got ${types.join(", ")}`,
+      );
+      assert.ok(
+        types.includes("task.cancelled"),
+        "the watcher ends because a terminal event arrived, and that event is the one it should have printed last",
+      );
+      const seqs = events.map((event) => event.seq);
+      assert.deepEqual(
+        [...seqs].sort((a, b) => a - b),
+        seqs,
+        "one stream, one task: the sequence must be monotonic, because a non-monotonic NDJSON feed is a gap the reader " +
+          "cannot detect",
+      );
+    } finally {
+      // Defensive: an assertion that fails mid-stream must not leave the child holding an SSE connection open, which
+      // would keep this file alive past its own `after()` and look exactly like the known P-003 flake.
+      if (watcher.exitCode === null) watcher.kill("SIGTERM");
+    }
+
     // C10-04's row, end to end: a spawned CLI asking a spawned Gateway for the registry. `tools ls --json` is the
     // machine form of the same answer the Web's tools pane will render in M3, and this is the test that says the two
     // cannot drift — there is one route behind both.

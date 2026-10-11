@@ -390,6 +390,35 @@ tested claim for this verb rather than an aspiration.
 `Identity.capabilities`, so a run started from a route would hold no grants — and with `cancel` written, cancellation is the
 whole of §6 that four interfaces can reach today: request and report, never drive.
 
+**Eighteenth slice — `crabby task watch`, and the two bugs a streaming verb turned up.** The events were never the missing
+part: `GET /api/v1/events` has filtered by `taskId`, replayed from `Last-Event-ID` and answered an out-of-window cursor with
+§5.4's `gap` frame since D-048, and the registry entry this verb replaces carried a milestone naming "event delivery and gap
+handling" — both halves already delivered server-side. What was missing was a terminal that could follow them, so the entry is
+`ready` and the milestone is gone. The verb is also the first streaming command in the CLI, and it reaches for a raw `fetch`
+rather than a client method because `GatewayClient` is buffered by design: every other route answers with one document, and
+giving it a streaming member would mean two lifecycles behind one interface. It reads the task once *before* opening a stream,
+so an already-terminal task is answered at once instead of hanging on a stream that can never publish; it exits when a terminal
+state arrives rather than tailing until interrupted, and `interrupted` deliberately does not end a watch because §4.1 makes it
+non-terminal and resumable; it prints §5.4's `gap` frame and the stream's `end` frame as visible facts, because turning either
+into a silent EOF would convert an outage into a prompt that simply never returns; and it prints the last event id without ever
+reconnecting on it, handing `Last-Event-ID` to whoever is driving rather than hiding the outage that made a reconnect
+necessary.
+
+Two real bugs came out of writing it, and both are recorded because each is a fact about a component that outlives this verb.
+The first is in the CLI's own renderer: `done()` serialises with two-space indentation, which is right for a snapshot and wrong
+for a command whose §7.1 contract is NDJSON, so the legitimate "already terminal" answer arrived as dozens of lines that no
+script parsing one-document-per-line could read. §7.1's sentence "a `--json` snapshot stays one document" is what makes the fix
+a correction rather than a preference, and the verb now emits that refusal through `raw()` as a single line carrying
+`streamed: false` and `events: 0`, with the §4.1 rule travelling in `fixes[]` because a script has no ordering to read. The
+second is in the Gateway's stream: history is replayed only to a request carrying *both* a `taskId` filter *and* a non-empty
+`Last-Event-ID`, so a subscriber with no cursor receives nothing at all until a new event is published — not even a `gap` frame.
+That is defensible on the wire and decisive for a test, because a freshly created task publishes `task.created` before a watcher
+can attach, so waiting for the first line waits forever; the assertion therefore polls `GET /api/v1/diagnostics` until
+`streams.subscribers` reaches one, which is the Gateway's own account of the stream existing, and only then cancels the task so
+the watcher has something new to see. The end-to-end claim is the one that matters: the spawned watcher exits by itself, with
+status zero, having printed one parseable event per line in a monotonic per-task `seq`, because `isTerminal` is what makes
+`task watch` a command that returns rather than a tail that only Ctrl-C ends.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

@@ -539,3 +539,47 @@ test("`crabby task cancel` with no Gateway says so rather than reporting a cance
     "the one lie this verb must never print: that a task stopped when nothing was asked",
   );
 });
+
+// `task watch` is the verb that streams, so the unit-level promises are about the paths that *end*: help, a missing id,
+// and no Gateway. The live stream is asserted in tests/integration/gateway.test.ts, where a real Gateway exists to
+// stream from — and a spawn that never exits would hang this file, which is why none of these cases opens one.
+test("`crabby task watch` is listed once, as ready, and never as planned", () => {
+  const run = crabby(["--help"]);
+  assert.equal(run.code, 0, run.err);
+  const lines = run.out.split("\n").filter((line) => line.includes("task watch"));
+  assert.equal(lines.length, 1, "one verb, one help line");
+  const [line] = lines;
+  assert.ok(line !== undefined);
+  assert.ok(
+    !line.includes("planned"),
+    "`GET /events` has filtered by taskId and replayed from Last-Event-ID since D-048, so the milestone this entry " +
+      "carried was already delivered server-side",
+  );
+  assert.match(line, /NDJSON/, "the summary promises the format §7.1 names for this verb");
+});
+
+test("`crabby task watch` with no id asks which task instead of streaming nothing", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["task", "watch"], state);
+  assert.equal(run.code, 2, "a missing id is a usage question, and §7.1 gives it exit 2");
+  assert.match(run.out, /which task/);
+  assert.match(run.out, /crabby task ls/);
+});
+
+test("`crabby task watch` with no Gateway says so rather than opening a stream to nothing", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["task", "watch", "task_1"], state);
+  assert.equal(
+    run.code,
+    1,
+    "the command was well formed, so this is a failure and not a usage question",
+  );
+  assert.match(run.out, /gateway/i);
+  assert.ok(
+    !run.out.includes("watching"),
+    "the verb must not print its watching line when there is nothing to watch — a stream to no Gateway is a hang a user " +
+      "would have to interrupt",
+  );
+});

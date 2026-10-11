@@ -39,6 +39,7 @@ import {
   readEvents,
   redeemPairingCode,
   type SqliteDb,
+  setState,
 } from "@crabby/storage";
 
 const REPO = path.resolve(new URL("../../", import.meta.url).pathname);
@@ -1155,3 +1156,226 @@ async function waitGone(child: ChildProcess, timeoutMs: number): Promise<void> {
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+describe("cancellation over http (AGENT_RUNTIME.md §6.1, §6.2)", () => {
+  let h: Harness;
+  before(async () => {
+    h = await boot();
+  });
+  after(async () => {
+    await h.close();
+  });
+
+  async function create(objective: string, key: string): Promise<string> {
+    const created = await h.client.createTask({ objective }, key);
+    assert.equal(created.status, 201, "the harness has to be able to create a task to cancel one");
+    return (created.body as TaskRecord).id;
+  }
+
+  it("settles a queued task at once, because §6.1's step 6 applies the moment nothing is in flight", async () => {
+    const id = await create("a task nobody started", "cancel-1");
+
+    const response = await h.client.cancelTask(id);
+
+    assert.equal(response.status, 200);
+    const record = response.body as TaskRecord;
+    assert.ok(
+      validate(TaskRecord, record).ok,
+      "the answer is a task record, and the contract says so",
+    );
+    assert.equal(
+      record.state,
+      "cancelled",
+      "a `queued` task has no step to finish, so the request and the settle are one act — answering `cancelling` here " +
+        "would promise a second event that nothing will ever send",
+    );
+    // §6.2's evidence on the record and not only in the log (D-091), because the record is what a phone reads when it
+    // comes back from the background: `inFlight: "none"` is the fact that makes `effectsUncertain: false` trustworthy.
+    assert.deepEqual(
+      record.cancellation,
+      {
+        mode: "finish-step",
+        requestedAt: record.cancellation?.requestedAt,
+        settledAt: record.cancellation?.settledAt,
+        terminated: true,
+        effectsUncertain: false,
+        inFlight: "none",
+        by: record.cancellation?.by,
+      },
+      "the manager's default mode, and evidence that says nothing was running and nothing is uncertain",
+    );
+    assert.ok(
+      typeof record.cancellation?.by === "string" && record.cancellation.by.length > 0,
+      "§14's audit field travelled: the record names the identity that asked, which is what makes a cancellation " +
+        "reviewable after the fact rather than only observable while it happens",
+    );
+    assert.ok(
+      typeof record.cancellation?.settledAt === "string",
+      "a settled task says when it settled; §6.2's `settledAt` is what distinguishes this from a request still waiting",
+    );
+  });
+
+  it("publishes the request as a state change and the settle as `task.cancelled`, inventing no third event type", async () => {
+    const id = await create("a task with an audience", "cancel-2");
+    await h.client.cancelTask(id);
+
+    const page = (await h.client.taskEvents(id)).body as { items: Event[] };
+    const types = page.items.map((event) => event.type);
+
+    assert.deepEqual(
+      types,
+      ["task.created", "task.state.changed", "task.cancelled"],
+      "docs/INTERFACES_AND_API.md §5.2: a cancellation *request* needs no event type of its own, because it is a move " +
+        "into `cancelling` and travels as `task.state.changed`; `task.cancelled` is the settle",
+    );
+    const settle = page.items.find((event) => event.type === "task.cancelled");
+    assert.equal(
+      settle?.payload.inFlight,
+      "none",
+      "§6.2's evidence travels in the settle event too",
+    );
+    assert.equal(
+      settle?.payload.mode,
+      "finish-step",
+      "and so does the mode, because a client that reads only the stream still learns what was asked for",
+    );
+  });
+
+  it("answers a double-tap with the request it recorded, not with a conflict (§6.2)", async () => {
+    const id = await create("a task cancelled twice", "cancel-3");
+
+    const first = await h.client.cancelTask(id);
+    const second = await h.client.cancelTask(id);
+
+    assert.equal(first.status, 200);
+    assert.equal(
+      second.status,
+      200,
+      "a phone that taps stop twice is relaying one fact, and answering the second tap with 409 would read as a refusal " +
+        "of something that already happened",
+    );
+    assert.equal((second.body as TaskRecord).state, "cancelled");
+    const page = (await h.client.taskEvents(id)).body as { items: Event[] };
+    assert.equal(
+      page.items.filter((event) => event.type === "task.cancelled").length,
+      1,
+      "one settle, one event: the second request added no second opinion to the log",
+    );
+  });
+
+  it("accepts `immediate`, because §6.2's override has to be reachable over HTTP and not only in code", async () => {
+    const id = await create("a task stopped hard", "cancel-4");
+
+    const response = await h.client.cancelTask(id, {
+      mode: "immediate",
+      reason: "wrong directory",
+    });
+    const record = response.body as TaskRecord;
+
+    assert.equal(record.cancellation?.mode, "immediate");
+    assert.equal(
+      record.cancellation?.reason,
+      "wrong directory",
+      "the reason a user typed is the reason a reviewer reads a week later (§14)",
+    );
+  });
+
+  it("refuses a task that already finished, quoting §4.1's absorbing rule rather than rephrasing it", async () => {
+    const id = await create("a task that completed first", "cancel-5");
+    // Set in the database because nothing in this build can complete a task over HTTP: the runner exists but no route
+    // hands a task to it (F-52), so the fixture writes the state a completed run would have left.
+    assert.ok(setState(h.db, id, "completed"), "the fixture has to reach the state it is testing");
+
+    await assert.rejects(
+      async () => await h.client.cancelTask(id),
+      (error: unknown) => {
+        const failure = error as {
+          status: number;
+          envelope: { error: { class: string; code: string; message: string } };
+        };
+        assert.equal(
+          failure.status,
+          409,
+          "`conflict`: the request was well-formed and the world disagreed",
+        );
+        assert.equal(failure.envelope.error.code, "cancel_terminal");
+        assert.match(
+          failure.envelope.error.message,
+          /terminal and absorbing.*§4\.1/s,
+          "the manager's own sentence, verbatim — a route that rephrased it would be a second voice",
+        );
+        return true;
+      },
+    );
+    assert.equal(getTask(h.db, id)?.state, "completed", "and the outcome it recorded is untouched");
+  });
+
+  it("answers 404 for a task nobody created, without enumerating the routes that do exist", async () => {
+    await assert.rejects(
+      async () => await h.client.cancelTask("tsk_never_existed"),
+      (error: unknown) => {
+        const failure = error as {
+          status: number;
+          envelope: { error: { code: string; message: string } };
+        };
+        assert.equal(failure.status, 404);
+        assert.equal(failure.envelope.error.code, "cancel_not-found");
+        assert.ok(
+          !failure.envelope.error.message.includes("/api/v1"),
+          "§3.1: a refusal is not a map of the surface",
+        );
+        return true;
+      },
+    );
+  });
+
+  it("refuses a mode outside §6.1's vocabulary, because a typo must not be read as `immediate`", async () => {
+    const id = await create("a task with a mistyped stop", "cancel-6");
+
+    await assert.rejects(
+      async () =>
+        await h.client.request(`/api/v1/tasks/${id}/cancel`, {
+          method: "POST",
+          body: { mode: "now" },
+        }),
+      (error: unknown) => {
+        const failure = error as { status: number; envelope: { error: { class: string } } };
+        assert.equal(failure.status, 400);
+        assert.equal(
+          failure.envelope.error.class,
+          "validation",
+          "one schema, one validator (D-069)",
+        );
+        return true;
+      },
+    );
+    assert.equal(
+      getTask(h.db, id)?.state,
+      "queued",
+      "a refused body moves nothing: the task is still waiting for somebody to ask properly",
+    );
+  });
+
+  it("demands a token, like every other route, including the ones the security sweep cannot reach", async () => {
+    const id = await create("a task with no caller", "cancel-7");
+    // The sweep in `tests/security/policy-surface.test.ts` checks parameterless routes only, so a route with an `:id` in
+    // it is checked here instead. SECURITY.md §13 rejects *every* route, and an unauthenticated cancel is the one that
+    // would cost a user their work.
+    const bare = createClient({ url: h.url });
+
+    await assert.rejects(
+      async () => await bare.request(`/api/v1/tasks/${id}/cancel`, { method: "POST", body: {} }),
+      (error: unknown) => {
+        const failure = error as { status: number; envelope: { error: { class: string } } };
+        assert.equal(failure.status, 401);
+        assert.equal(failure.envelope.error.class, "auth");
+        return true;
+      },
+    );
+    assert.equal(
+      getTask(h.db, id)?.state,
+      "queued",
+      "and an unauthenticated request moved nothing",
+    );
+  });
+});

@@ -10,10 +10,16 @@
 // `packages/agent-runtime/loop.ts` calls `policy.evaluate` and hands the result to the arbiter (D-084, D-086) — and the
 // two things it needed are here now: an executor to run (`packages/tools`, D-098) and an adapter to call
 // (`packages/providers`, D-100), which `crabby gateway start` composes from `config.json`'s `provider.*` entries and
-// hands to this file as `deps.providers`. What is still absent is the runner that would start one, so a task created
-// over HTTP is still recorded and read back while nothing moves it, and `docs/ROADMAP.md` §4 names that as the one
-// remaining item. Wiring a route to the loop against the fake provider would be the demo this phase has refused to
-// ship: a composed adapter is reported here, and reported is all it is until something drives a task with it.
+// hands to this file as `deps.providers`. The runner exists now — `packages/agent-runtime/runner.ts` (M2n) owns the one
+// rule four clients make necessary, that a task has one run — so what is still absent is not the runner but the
+// *handoff*: no code in this build writes `Identity.capabilities`, so every paired client holds none, and a run started
+// from a route would carry no grants and be refused every tool it proposed (F-52). A task created over HTTP is therefore
+// still recorded and read back while nothing moves it, and that is reported rather than demoed: wiring this route to the
+// loop against the fake provider is exactly the shipment this phase has refused.
+//
+// §6's cancellation *is* wired, because stopping work is not the same act as doing it and needs no grants: `buildApp`
+// composes the process's one manager and `POST /api/v1/tasks/{id}/cancel` requests through it. A `queued` task has
+// nothing in flight, so that route settles at once and answers with §6.2's evidence already on the record.
 //
 // What this file *does* own at startup is §7's recovery, beside D-065's retention prune, and it is the reading side of
 // the checkpoint: `GET /api/v1/tasks/{id}/checkpoint` reports the boundary the run last committed and D-065's verdict on
@@ -26,8 +32,10 @@
 
 import {
   type Approvals,
+  type Cancellation,
   type Checkpoints,
   createApprovals,
+  createCancellation,
   createCheckpoints,
   createRecovery,
 } from "@crabby/agent-runtime";
@@ -36,6 +44,7 @@ import {
   APPROVAL_STATES,
   ApprovalDecisionBody,
   ApprovalListQuery,
+  CancelTaskBody,
   CreateTaskBody,
   type Event,
   errorEnvelope,
@@ -84,6 +93,7 @@ import { createEventBus } from "./bus.ts";
 import {
   APPROVAL_REFUSAL_CLASS,
   authError,
+  CANCEL_REFUSAL_CLASS,
   GatewayError,
   notFound,
   validationError,
@@ -150,6 +160,20 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
     store: createSqliteCheckpointStore(db),
     journal,
     eventsAfter: (taskId, afterSeq) => readEvents(db, taskId, { afterSeq, limit: 10_000 }),
+  });
+
+  // One cancellation manager for the whole process, composed here for the reason the arbiter, the journal and the
+  // checkpoint manager are: §6.1's step 2 ("stop scheduling new steps") and §6.2's evidence have to be about *one*
+  // request, and two managers would each hold half of it. `POST /api/v1/tasks/{id}/cancel` requests through it, a runner
+  // would pass its `signalFor` to the loop, and the settle writes the evidence the record carries — three parties, one
+  // request row. Note what this does *not* need: no provider, no executor and no grants, because stopping work is not
+  // the same act as doing it. That is why this route is real in a build where the task handoff is not (F-52).
+  const cancellation: Cancellation = createCancellation({
+    journal,
+    checkpoints,
+    // Published through the same bus every other writer uses, and the manager's own `phase` writer commits before it
+    // publishes — §9's pairing rule is the manager's to keep, not this file's to re-implement.
+    publish: (event) => bus.publish(event),
   });
 
   // §7.1's recovery, at the same place the retention prune runs: a restart is one operation, and both halves are about
@@ -248,7 +272,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   registerSystemRoutes(app, deps, bus);
   registerPolicyRoutes(app, deps);
   registerAuthRoutes(app, deps, bus);
-  registerTaskRoutes(app, deps, bus, checkpoints);
+  registerTaskRoutes(app, deps, bus, checkpoints, cancellation);
   registerApprovalRoutes(app, deps, bus, approvals);
   registerEventStream(app, deps, bus);
 
@@ -449,6 +473,7 @@ function registerTaskRoutes(
   deps: GatewayDeps,
   bus: ReturnType<typeof createEventBus>,
   checkpoints: Checkpoints,
+  cancellation: Cancellation,
 ): void {
   app.post<{ Body: { objective: string; sessionId?: string } }>(
     "/api/v1/tasks",
@@ -502,6 +527,61 @@ function registerTaskRoutes(
       remember(deps.db, { key, route: "POST /api/v1/tasks", requestHash: hash, response: record });
       bus.publish({ ...event, seq: appended.seq });
       return reply.code(201).header("location", `/api/v1/tasks/${created.id}`).send(record);
+    },
+  );
+
+  /** §6.1's request as a route. It delegates whole to the process's one manager, because the manager owns the request
+   *  row, the state move, the event and the abort — a route that re-implemented any of them would be a second writer of
+   *  one fact (§9).
+   *
+   *  What this can do today, and what it cannot, stated rather than implied: a task in `queued` or `awaiting_approval`
+   *  has nothing in flight, so the manager settles at once and this route answers with a task that is already
+   *  `cancelled`, carrying §6.2's evidence on the record (`inFlight: "none"`, `effectsUncertain: false`). A *moving*
+   *  task answers `cancelling` and settles when its run stops — which needs the task handoff, and the handoff waits on
+   *  F-52: no code in this build writes `Identity.capabilities`, so a run started from a route would hold no grants and
+   *  policy would refuse every tool in it.
+   *
+   *  §6.1 names `task.cancel` as the capability that decides who may stop a task, and that capability is enforceable by
+   *  nothing here — every paired client holds none. The control this route actually has is the token the guard demanded
+   *  before it ran, which is the same substitution `auth.manage` makes with the socket, and F-52 records it rather than
+   *  this comment pretending it is a check. */
+  app.post<{ Params: { id: string }; Body: CancelTaskBody | undefined }>(
+    "/api/v1/tasks/:id/cancel",
+    { schema: { body: CancelTaskBody } },
+    async (request, reply) => {
+      const client = request.crabbyClient;
+      if (client === undefined) throw authError("missing", request.crabbyRequestId);
+      const body = request.body;
+      const result = cancellation.request({
+        taskId: request.params.id,
+        // `mode` is the body's whole reason to exist: without it §6.2's override ("a safety-critical intervention MUST
+        // override finish-the-current-step") would be unreachable over HTTP, and a phone's stop button could only ever
+        // ask for the polite half of §6.1.
+        ...(body?.mode === undefined ? {} : { mode: body.mode }),
+        ...(body?.reason === undefined ? {} : { reason: body.reason }),
+        // §14's audit fields, which the manager puts in the event payload: who asked, from which interface, and the
+        // request id that ties the answer back to the log line a user reads.
+        byClientId: client.id,
+        via: client.interface,
+        at: Date.now(),
+        correlationId: request.crabbyRequestId,
+      });
+      if (!result.ok) {
+        throw new GatewayError({
+          code: `cancel_${result.code}`,
+          // The manager's own sentence, verbatim, for the reason the decision route gives: it already names the section
+          // that refused and what the caller can do about it, and a route that rephrased it would be a second voice
+          // telling a user why they were denied.
+          message: result.reason,
+          class: CANCEL_REFUSAL_CLASS[result.code],
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      // Read back rather than returned: §4.3 promises this route answers with the state — `cancelling` while a step
+      // finishes, the terminal state once it has — and the record is where §6.2's evidence lands (D-091). A fresh read is
+      // also what the invariant demands: never carry a `TaskRecord` across an `await`.
+      return reply.send(getTask(deps.db, request.params.id) ?? result.task);
     },
   );
 

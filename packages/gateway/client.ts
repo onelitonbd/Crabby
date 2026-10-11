@@ -9,6 +9,7 @@ import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "
 import path from "node:path";
 import process from "node:process";
 import {
+  type CancelTaskBody,
   type CreateTaskBody,
   ErrorEnvelope,
   errorEnvelope,
@@ -154,6 +155,11 @@ export interface GatewayClient {
    *  it. A task that never reached a step boundary answers `404` with the verdict's reason in `details`, so "no saved
    *  state" and "a task you may not see" are different responses. */
   taskCheckpoint(id: string): Promise<Response<unknown>>;
+  /** §6.1's cancellation request, and the one mutating route here that takes no idempotency key on purpose: the manager
+   *  already answers a second request for the same task with the request it recorded (`deduplicated`), and a second
+   *  request that escalates to `immediate` is §6.2's override rather than a replay. A key cache would have to choose
+   *  between those two readings and would get one of them wrong. */
+  cancelTask(id: string, body?: CancelTaskBody): Promise<Response<unknown>>;
   /** §4.3's queue. `state` defaults to the only value a client can act on, and is passed through as text so a typo is
    *  refused by the Gateway rather than answered with an empty list. */
   approvals(options?: { state?: string }): Promise<Response<unknown>>;
@@ -256,6 +262,14 @@ export function createClient(input: {
         `/api/v1/tasks/${encodeURIComponent(id)}/events${cursor === undefined ? "" : `?cursor=${cursor}`}`,
       ),
     taskCheckpoint: (id) => request(`/api/v1/tasks/${encodeURIComponent(id)}/checkpoint`),
+    cancelTask: (id, body) =>
+      request(`/api/v1/tasks/${encodeURIComponent(id)}/cancel`, {
+        method: "POST",
+        // An explicit `{}` rather than no body at all, so the wire shape is the same whether or not the caller has a mode
+        // to ask for: `CancelTaskBody`'s fields are optional but the schema is an object, and a client that sent nothing
+        // would be relying on the Gateway to guess what "nothing" means.
+        body: body ?? {},
+      }),
     approvals: (options = {}) =>
       request(
         `/api/v1/approvals${options.state === undefined ? "" : `?state=${encodeURIComponent(options.state)}`}`,

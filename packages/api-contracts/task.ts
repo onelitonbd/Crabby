@@ -110,6 +110,28 @@ export const CreateTaskBody = Type.Object(
 );
 export type CreateTaskBody = Static<typeof CreateTaskBody>;
 
+/** §6.1's request, as a body. Both fields are optional because the manager has a default for each — `finish-step` for
+ *  the mode, no reason at all — and a body that demanded a mode would make `POST /tasks/{id}/cancel` unwritable by the
+ *  one client that matters most: a phone's stop button. `mode` is here rather than invented per interface so that §6.2's
+ *  override is reachable over HTTP ("a safety-critical intervention MUST override finish-the-current-step"), which it
+ *  cannot be if the only way to ask is a mode the route hardcodes.
+ *
+ *  There is deliberately no `Idempotency-Key` requirement on this route, and the reason is that the manager is already
+ *  idempotent in a stronger sense than a key cache: a second request for the same task returns the request it recorded
+ *  (`deduplicated`), and a second request that *escalates* is the override §6.2 asks for rather than a conflict. A key
+ *  would have to choose between those two and would get one of them wrong. */
+export const CancelTaskBody = Type.Object(
+  {
+    mode: Type.Optional(Type.Union(CANCELLATION_MODES.map((name) => Type.Literal(name)))),
+    // 512 is a proposal recorded here rather than a documented number, in the same way `ListQuery`'s 200 is: long enough
+    // for a sentence a user would actually type ("it is touching the wrong directory"), short enough that a reason cannot
+    // become the payload-smuggling path §7 closes for events.
+    reason: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  },
+  { additionalProperties: false },
+);
+export type CancelTaskBody = Static<typeof CancelTaskBody>;
+
 /** §2's cursor pagination (`?cursor=&limit=`), ordered by stable id so a list does not shift while a task appends
  *  records. The 200 ceiling is a proposal recorded here, not a documented number — D-074's `limits.*` table is where
  *  a page size belongs, and no document names one yet. No default is applied, because a default is a policy and the

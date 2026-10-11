@@ -69,6 +69,29 @@ export const APPROVAL_REFUSAL_CLASS: Record<
   denied: "conflict",
 };
 
+/** Every code the §6 cancellation manager can refuse with, mapped to a class — exhaustive over the union for the same
+ *  reason `APPROVAL_REFUSAL_CLASS` is, so that adding a refusal in `packages/agent-runtime/cancellation.ts` makes this
+ *  file fail to compile until somebody classifies it. `POST /tasks/{id}/cancel` answers through this map rather than
+ *  through a 500, because §6's envelope is what a client branches on. */
+export const CANCEL_REFUSAL_CLASS: Record<
+  import("@crabby/agent-runtime").CancellationFailureCode,
+  ErrorBody["class"]
+> = {
+  // A task nobody has is not a malformed request, and it is not a policy answer either: the caller asked about
+  // something that does not exist. §3.1's "an unauthenticated caller must not learn which routes exist" is satisfied
+  // by the token guard, which runs before this route can be reached at all.
+  "not-found": "not-found",
+  // `conflict` and not `validation`, because the request was well-formed and the *world* disagreed: §4.1 makes the three
+  // terminal states absorbing, so a completed task's outcome is recorded and cancellation cannot rewrite it. Telling a
+  // client "fix what you sent" here would send it looking for a body that was never the problem.
+  terminal: "conflict",
+  // The settle half of §6 asked to end a task nobody requested a cancellation for, which is a disagreement between two
+  // callers about the same row rather than a bad request from either.
+  "not-cancelling": "conflict",
+  // A second settle of one task is the same fact again, and D-091 writes §6.2's evidence once.
+  "already-settled": "conflict",
+};
+
 export function notFound(what: string, requestId?: string): GatewayError {
   return new GatewayError({
     code: "not_found",

@@ -1004,6 +1004,8 @@ implied: a pairing-time grant decision — what `--restrict` means, who may set 
 whichever slice takes it. Until then §4.5's `auth.manage` sentences are a rule the documents state and the build can only
 approximate, and this row is where a reader learns that.
 
+**M2n widened this row instead of closing any of it.** `POST /api/v1/tasks/{id}/cancel` now exists, and §6.1's `task.cancel` is the capability that decides who may stop a task — enforced by nothing beyond the token the guard already demanded, for exactly the reason above: every paired identity holds `capabilities: []`, so a real check would refuse the owner's own CLI. That makes `task.cancel` a second capability routes cite and no code can enforce, and it makes the missing writer load-bearing for a second reason. The task *handoff* — `POST /tasks` passing a created task to the runner that now exists — is deliberately not written, and this row is why: `LoopSubject.grants` would come from `Identity.capabilities`, so a run started from a route would hold no grants and `packages/policy` would refuse every tool it proposed. A Gateway that started runs which could do nothing would be worse than one that says plainly it starts none, so the honest state is recorded here: the runner exists and nothing composes it, the cancellation half of §6 is wired because stopping work needs no grants, and the pairing-time grant decision now blocks three things — `POST /admin/*`, the handoff, and `crabby task run` — rather than one.
+
 ### F-54 — §4.4's first check is a *type* check, and a schema that arrives as data cannot be type-checked
 
 **Severity: low, open, and named in the code that skips it.** `PROVIDERS_AND_TOOLS.md` §4.4 fixes the order of checks —

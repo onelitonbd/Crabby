@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-50 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-53 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -226,6 +226,15 @@ that started a run, or one that cancelled a run nobody started, would be the dem
 named, and the next one closed it: schema version 3 is the `cancellation_json` column, `TaskRecord.cancellation` is the
 contract, `packages/storage/journal.ts` is the runtime's write seam over the real database, and `crabby task show` prints
 whether the operation stopped and whether an external effect is in doubt (D-091).
+The tenth closed a promise the Gateway had been logging around since M1b: `GET /events` binds each live subscriber to the
+identity that opened it, `closeFor` ends those streams in registration order and counts them, and a named `event: end`
+frame says `revoked` before the socket goes — the frame is not decoration, because §5.4 already tells a client that a
+stream which stopped is a stream to reconnect through (D-096, closing F-51). The same binding is what `crabby auth list`
+and the TUI's confirmation prompt were missing: `liveStreams` per identity, counted by the bus rather than by a second
+book of who is watching (F-53). The same slice put §3.1's "local only" on the
+two identity routes that lacked it, measured on the socket rather than on `auth.manage`, for the reason F-52 states: no
+code in this build assigns capabilities at pairing, so the capability the documents name has no writer — which is the same
+unanswered question `POST /admin/*` waits on, and is why it is recorded rather than quietly defaulted (D-097).
 
 ## 5. Phase M3 — Four interfaces in parallel
 

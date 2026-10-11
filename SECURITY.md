@@ -124,7 +124,20 @@ Pairing requirements:
 - The pairing artifact is short-lived, single-use, and carries a TTL; the long-lived credential is delivered once and never logged.
 - Every credential is bound to a client name and an interface type so audit records say *which* client acted.
 - Revocation takes effect on the next request and must also terminate live event streams.
+  **Implemented (M2j, D-096).** `GET /events` binds each live subscriber to the identity that opened it, `closeFor(clientId)`
+  ends those streams in registration order and returns how many it ended (the revoke route logs the number, because a
+  control nobody can count is a control that quietly stops working), and each closed stream gets a named `event: end` frame
+  carrying `reason: revoked` before its socket closes, and `GET /auth/clients` reports each identity's `liveStreams` from
+  the same registry — the count is a fact about the binding, so the list and the control read one source. The frame is the part with a security reason rather than a
+  politeness one: §5.4 of `docs/INTERFACES_AND_API.md` tells every client that a stream which stopped is a stream to
+  reconnect through, so silence after a revocation is an instruction to come back, and the client that obeys it pays a
+  `401` to learn what the Gateway could have said. Termination is not a replacement for the first half — the next request
+  is still refused on the deleted token, and the frame is a courtesy on top of a control, not instead of one.
 - Unauthenticated requests are rejected before routing, including `GET /health` and event subscriptions.
+  Listing and revoking identities are rejected before routing on a second condition as well — the request must come from
+  the machine the Gateway runs on (D-097). The capability this rule is supposed to rest on, `auth.manage`, cannot be the
+  check yet because no code in this build grants capabilities when an identity is created; `docs/CONSISTENCY_REVIEW.md`
+  F-52 names what has to be decided for the socket test to be replaced by the grant test.
 
 Token format and lifetime are fixed by D-051 (opaque token, no expiry; revocation is the control). **O-019** is closed by D-067:
 `crabby auth pair` prints the URL and an 8-character code **each on their own line**, because selection on a phone is a

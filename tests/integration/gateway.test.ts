@@ -501,7 +501,10 @@ describe("gateway over http", () => {
     );
   });
 
-  it("revokes an identity so the next request fails, which is §3.1's whole promise", async () => {
+  // The title used to end "which is §3.1's whole promise" while covering one of its two halves — the next request.
+  // §3.1 says revocation takes effect on the next request *and* terminates live event streams, and F-51 is the record
+  // of how a test name can be the only thing that reads as coverage.
+  it("revokes an identity so the next request fails, which is §3.1's first half", async () => {
     const minted = await h.client.request<{ code: string; clientId: string }>(
       "/api/v1/auth/pair-codes",
       {
@@ -515,7 +518,12 @@ describe("gateway over http", () => {
     });
     const throwaway = createClient({ url: h.url, token: own.body.token });
     assert.equal((await throwaway.health()).status, 200, "it worked a moment ago");
-    assert.equal((await h.client.authRevoke(minted.body.clientId)).status, 204);
+    const revocation = await h.client.authRevoke(minted.body.clientId);
+    // 200 with `{revoked, streamsEnded}` rather than the 204 this route used to send: C8-10 in `docs/review/CLI.md` asks
+    // the CLI to print how many streams a revocation ended, and a count that exists only in a server log is a count no
+    // operator sees (D-096). This identity never opened a stream, so the honest number is zero.
+    assert.equal(revocation.status, 200);
+    assert.deepEqual(revocation.body, { revoked: minted.body.clientId, streamsEnded: 0 });
     await assert.rejects(
       async () => await throwaway.health(),
       (error: unknown) => {
@@ -533,6 +541,129 @@ describe("gateway over http", () => {
         assert.equal((error as { status: number }).status, 404);
         return true;
       },
+    );
+  });
+
+  it("ends a revoked identity's live stream with a frame that says why, which is §3.1's other half", async () => {
+    const minted = await h.client.request<{ code: string; clientId: string }>(
+      "/api/v1/auth/pair-codes",
+      {
+        method: "POST",
+        body: { name: "phone tail", interface: "telegram" },
+      },
+    );
+    const own = await h.client.request<{ token: string }>("/api/v1/auth/pair", {
+      method: "POST",
+      body: { code: minted.body.code },
+    });
+    const revokedStream = await fetch(`${h.url}/api/v1/events`, {
+      headers: { authorization: `Bearer ${own.body.token}`, accept: "text/event-stream" },
+    });
+    assert.equal(revokedStream.status, 200, "the stream opens while the identity still exists");
+    const survivorStream = await fetch(`${h.url}/api/v1/events`, {
+      headers: { authorization: `Bearer ${h.token}`, accept: "text/event-stream" },
+    });
+    const reader = revokedStream.body?.getReader();
+    const survivor = survivorStream.body?.getReader();
+    assert.ok(reader && survivor);
+
+    // The same binding, read *before* the act: §3.1's "whether it is currently connected" and `docs/review/TUI.md`
+    // T14-03's "prints how many streams it will kill first" are both answered from the registry the revocation closes
+    // through, which is the reason the count lives on the bus and not in a second book of who is watching (D-096).
+    const listed = (await h.client.authList()).body as {
+      items: { id: string; liveStreams: number }[];
+    };
+    assert.equal(
+      listed.items.find((row) => row.id === minted.body.clientId)?.liveStreams,
+      1,
+      "the identity about to be revoked has exactly one live stream, and the count is on the record before it is acted on",
+    );
+    assert.equal(
+      listed.items.filter((row) => row.liveStreams > 0).length,
+      2,
+      "exactly two identities hold a stream — this one and the harness's — because revoking a client must not read as " +
+        "disconnecting the others, and an earlier test's dead identity is not in the list at all",
+    );
+
+    const revocation = await h.client.authRevoke(minted.body.clientId);
+    assert.equal(
+      revocation.status,
+      200,
+      "the count is the point of the response, so it cannot be a 204",
+    );
+    assert.deepEqual(revocation.body, {
+      revoked: minted.body.clientId,
+      streamsEnded: 1,
+    });
+
+    const text = await readFrame(reader);
+    assert.match(
+      text,
+      /^event: end\n/,
+      "the close is *named*: a client that only reads `data:` still learns this was decided rather than dropped",
+    );
+    assert.ok(
+      !text.startsWith("id:"),
+      "and it is not an event — a control frame with an id would be a cursor into a stream that has just told the client " +
+        "to stop coming back",
+    );
+    const payload = JSON.parse((text.split("data: ")[1] as string).trim()) as {
+      end: boolean;
+      reason: string;
+      at: string;
+    };
+    assert.deepEqual(
+      { end: payload.end, reason: payload.reason },
+      { end: true, reason: "revoked" },
+      "§3.1's termination has to be legible without prose, because the reason a client reconnects after a silence is the " +
+        "same reason it must not reconnect after this",
+    );
+    const gone = await reader.read();
+    assert.equal(
+      gone.done,
+      true,
+      "the socket ends after the frame, so a stream cannot be kept alive by a client that ignores what it was told",
+    );
+
+    // The other identity keeps its stream and keeps receiving, which is the "affects that client only" half.
+    await h.client.createTask({ objective: "after the revocation" }, "contract-10");
+    const next = await readFrame(survivor);
+    assert.match(next, /^id: evt_\S+\nevent: task\.created\n/);
+    assert.equal(
+      (next.split("data: ")[1] as string).includes("after the revocation"),
+      true,
+      "one revocation closes one identity's streams and disturbs nothing else on the bus",
+    );
+    await survivor.cancel().catch(() => undefined);
+
+    // And the two halves meet where they have to: the frame says do not reconnect, and the next request agrees.
+    await assert.rejects(
+      async () => await createClient({ url: h.url, token: own.body.token }).health(),
+      (error: unknown) => (error as { status: number }).status === 401,
+      "a revoked token is refused on the next request too, so the frame is a courtesy and not the control",
+    );
+  });
+
+  it("decides identity management on the socket, so no header can move it", async () => {
+    const listed = await fetch(`${h.url}/api/v1/auth/clients`, {
+      headers: { authorization: `Bearer ${h.token}`, "x-forwarded-for": "203.0.113.9" },
+    });
+    assert.equal(
+      listed.status,
+      200,
+      "a public address in a forwarded header does not lock a local caller out, because `trustProxy: false` means " +
+        "`request.ip` is the kernel's answer rather than a string a caller wrote — which is also why the same header " +
+        "cannot borrow local rights. The refusal of a genuinely remote socket is not reachable from this process and is " +
+        "asserted by predicate in `packages/gateway/wire.test.ts` instead of being faked here",
+    );
+    const body = (await listed.json()) as { items: { id: string; name: string }[] };
+    assert.ok(
+      body.items.length >= 1,
+      "and the list is what §3.1 promises `crabby auth list` — names and interfaces, never a token",
+    );
+    assert.ok(
+      !JSON.stringify(body).includes(h.token),
+      "the credential stays out of the record a list route returns, revoked or not",
     );
   });
 

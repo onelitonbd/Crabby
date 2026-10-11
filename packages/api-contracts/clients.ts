@@ -34,6 +34,12 @@ export type PairCodeRequestBody = Static<typeof PairCodeRequestBody>;
 
 /** What `GET /auth/clients` answers. No secret is in here by construction — the client record's only credential is a
  *  digest column that the storage layer never selects (`INTERFACES_AND_API.md` §3.1). */
+/** One paired identity, as `GET /auth/clients` answers it (§4.5) and as `crabby auth list`, the TUI's settings pane and
+ *  the Web's render it. `liveStreams` is how `docs/INTERFACES_AND_API.md` §3.1's "whether it is currently connected" is
+ *  carried, and it is one number rather than a number plus a boolean because a boolean derived from it in two
+ *  renderers is two places that can disagree about "connected" — the count is the fact, the wording is a UI choice.
+ *  It also serves the TUI's revocation confirmation, which must say how many streams it *will* end before it ends them
+ *  (`docs/review/TUI.md` T14-03), and that is only answerable because a live stream now knows whose it is (D-096). */
 export const ClientRecord = Type.Object(
   {
     id: Type.String({ minLength: 1 }),
@@ -42,6 +48,7 @@ export const ClientRecord = Type.Object(
     capabilities: Type.Array(Type.String()),
     createdAt: Type.String({ format: "date-time" }),
     lastUsedAt: Type.Optional(Type.String({ format: "date-time" })),
+    liveStreams: Type.Integer({ minimum: 0 }),
   },
   { additionalProperties: false },
 );

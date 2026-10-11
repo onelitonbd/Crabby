@@ -111,6 +111,9 @@ export interface BuiltApp {
 
 const REDEEM_PATH = "/api/v1/auth/pair";
 const MINT_PATH = "/api/v1/auth/pair-codes";
+// Listing and revoking identities share a path prefix and a rule, so the guard is one prefix test rather than two
+// entries a later route can forget to add itself to.
+const CLIENTS_PATH = "/api/v1/auth/clients";
 
 export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   const { db, log } = deps;
@@ -182,7 +185,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
     const route = request.url.split("?")[0] ?? request.url;
     if (route === REDEEM_PATH) return;
     if (route === MINT_PATH) {
-      requireLoopback(request);
+      requireLoopback(request, "pairing");
       requireToken(db, request);
       return;
     }
@@ -190,6 +193,16 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
     // `SECURITY.md` §13 states the rule as "without a valid token, the Gateway must reject every route, including
     // health and SSE". A local caller without credentials therefore gets `401`, which is also the honest answer to
     // "is a Gateway running here?" — it is, and you are not paired to it.
+    // §3.1's asymmetry, enforced the way the same section enforces it for minting: identity management is local, because
+    // a token stolen off a network-facing path must not be able to lock the owner out of their own device by revoking —
+    // and revoking is the irreversible half, since the row is deleted (O-071). The section names `auth.manage` as the
+    // capability that decides this, and no code in this build grants capabilities at pairing, so the check is the socket
+    // (F-52 records the gap and what closes it). `trustProxy: false` above is what makes it a control rather than a
+    // suggestion: a forwarded header cannot move `request.ip`, so a caller behind a tunnel cannot present itself as the
+    // machine the Gateway runs on.
+    if (route === CLIENTS_PATH || route.startsWith(`${CLIENTS_PATH}/`)) {
+      requireLoopback(request, "identity management");
+    }
     request.crabbyClient = requireToken(db, request);
   });
 
@@ -224,7 +237,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
 
   registerSystemRoutes(app, deps, bus);
   registerPolicyRoutes(app, deps);
-  registerAuthRoutes(app, deps);
+  registerAuthRoutes(app, deps, bus);
   registerTaskRoutes(app, deps, bus, checkpoints);
   registerApprovalRoutes(app, deps, bus, approvals);
   registerEventStream(app, deps, bus);
@@ -318,7 +331,11 @@ function registerPolicyRoutes(app: FastifyInstance, deps: GatewayDeps): void {
 
 // ------------------------------------------------------------------ auth (§3.1/§3.2)
 
-function registerAuthRoutes(app: FastifyInstance, deps: GatewayDeps): void {
+function registerAuthRoutes(
+  app: FastifyInstance,
+  deps: GatewayDeps,
+  bus: ReturnType<typeof createEventBus>,
+): void {
   app.post<{ Body: { code: string } }>(
     REDEEM_PATH,
     {
@@ -354,7 +371,16 @@ function registerAuthRoutes(app: FastifyInstance, deps: GatewayDeps): void {
   );
 
   app.get("/api/v1/auth/clients", async (_request, reply) =>
-    reply.send({ items: listIdentities(deps.db) }),
+    reply.send({
+      // §3.1 promises the list says "whether it is currently connected", and only the bus knows that — so the count is
+      // read from the same registry a revocation closes streams through, rather than from a second book of who is
+      // watching (D-096). Nothing here may leak a token: `listIdentities` does not select one, and the row shape is the
+      // contract's `ClientRecord`, `additionalProperties: false` and all.
+      items: listIdentities(deps.db).map((identity) => ({
+        ...identity,
+        liveStreams: bus.countFor(identity.id),
+      })),
+    }),
   );
 
   app.delete<{ Params: { id: string } }>("/api/v1/auth/clients/:id", async (request, reply) => {
@@ -363,10 +389,16 @@ function registerAuthRoutes(app: FastifyInstance, deps: GatewayDeps): void {
     // one in a migration is a schema change the documents have not asked for. The durable record of "this identity
     // was ended on this date" belongs in §14's audit table, which is M2's — O-071 keeps that from being forgotten.
     if (!revoke(deps.db, id)) throw notFound(`client ${id}`);
-    // §3.1 also demands that a revoked identity cannot keep acting on an open stream. Streams are not yet tied to
-    // identities, so this says so in the log the operator reads rather than implying a control that is not there.
-    deps.log.warn("identity revoked; live streams are not yet bound to identities", { id });
-    return reply.code(204).send();
+    // §3.1's second half, and the reason the stream route records which identity opened it: a revoked client must not
+    // keep watching a device it has just been told it may not touch. Each live stream gets an `end` frame naming the
+    // reason before its socket closes, because a stream that simply stops is what §5.4 tells a client to recover from by
+    // reconnecting — and a reconnect through a deleted identity is the one behaviour this rule exists to prevent.
+    const ended = bus.closeFor(id, "revoked");
+    deps.log.info("identity revoked; live streams ended", { id, streams: ended });
+    // 200 with the count rather than 204 with nothing, because `docs/review/CLI.md` C8-10 asks `crabby auth revoke` to
+    // print how many streams it terminated — and a number that exists only in the Gateway's log is a number no operator
+    // ever sees, which is how a control comes to be quietly unwired again (F-51's shape, one layer up).
+    return reply.send({ revoked: id, streamsEnded: ended });
   });
 }
 
@@ -734,6 +766,10 @@ function registerEventStream(
     }
 
     const unsubscribe = bus.subscribe({
+      // The binding §3.1 needs. `requireToken` already resolved the identity for every route including this one, so the
+      // only thing missing was a memory of it: without this line a revocation has no handle on a live stream at all,
+      // which is what F-51 records about the five slices this promise sat unimplemented through.
+      ...(request.crabbyClient === undefined ? {} : { clientId: request.crabbyClient.id }),
       matches,
       write(event) {
         write(frame(event));
@@ -744,8 +780,8 @@ function registerEventStream(
         state.closed = true;
         unsubscribe();
       },
-      close() {
-        close();
+      close(reason) {
+        close(reason);
       },
     });
 
@@ -779,12 +815,17 @@ declare module "fastify" {
   }
 }
 
-function requireLoopback(request: FastifyRequest): void {
+/** §3.1's "local only", measured on the socket rather than on a header. Two subjects share it — minting a pairing code
+ *  and managing the identities a code creates — because both are the same power: the ability to make or unmake a
+ *  credential. The code differs, because a client that is told "pairing is local" when it tried to revoke a client is
+ *  sent to fix the wrong thing. */
+function requireLoopback(request: FastifyRequest, what: "pairing" | "identity management"): void {
   if (!isLoopback(request.ip)) {
     throw new GatewayError({
-      code: "pairing_is_local",
+      code: what === "pairing" ? "pairing_is_local" : "auth_manage_is_local",
       message:
-        "pairing codes are minted on the machine the Gateway runs on (`docs/INTERFACES_AND_API.md` §3.1)",
+        `${what} happens on the machine the Gateway runs on (` +
+        "`docs/INTERFACES_AND_API.md` §3.1), and this request did not",
       class: "auth",
       retryable: false,
     });
@@ -811,7 +852,14 @@ function pairingFailure(reason: string | undefined): string {
   }
 }
 
-function isLoopback(ip: string): boolean {
+/** §3.1's "on the machine the Gateway runs on", as three literal addresses rather than the `127.0.0.0/8` range. That is
+ *  a decision and not laziness: the Gateway binds `127.0.0.1` and nothing else, so an address inside the range that is
+ *  not the bound one can only be reached by a client that went looking for it, and the fail-closed answer to "is this
+ *  the machine's own loopback?" costs nothing here while costing a lockout if it is ever wrong. `::1` and
+ *  `::ffff:127.0.0.1` are in because a dual-stack listener reports the IPv4 loopback in the mapped form — leaving that
+ *  out would refuse the owner's own CLI on the one platform the product runs on. Exported for `wire.test.ts`, because a
+ *  test in this process cannot produce a non-loopback socket to refuse. */
+export function isLoopback(ip: string): boolean {
   return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
 }
 

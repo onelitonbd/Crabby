@@ -8,13 +8,15 @@
 > this file), most recently on 2026-10-10 — findings F-13…F-31 are from the six 2026-10-10 passes (the (R) round,
 > the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from),
 > F-32…F-36 from M1c's implementation pass, the first pass where a *generator* rather than a reader compared the
-> documents with the code, and F-37…F-50 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38, sighted
+> documents with the code, and F-37…F-53 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38, sighted
 > twice), a rule enforced without a document to cite (F-39), the checker's own arithmetic (F-40), the three M2d's loop met
 > when it had to ask for numbers and vocabulary the plan had not priced (F-41…F-43), the three M2e's cancellation manager
 > met when it had to write down an outcome §6.2 requires and the plan had not defined (F-44…F-46), and the two M2g's
 > recovery met when it had to answer what a restart owes a prompt and a user (F-47, F-48), the one M2h's ladder met
-> when it went looking for the budget D-043 had already priced (F-49), and the one M2i's checkpoint met when it went to
-> hand the run back to a task the state machine had already ended (F-50). Every earlier finding has been re-checked against
+> when it went looking for the budget D-043 had already priced (F-49), the one M2i's checkpoint met when it went to
+> hand the run back to a task the state machine had already ended (F-50), and the two M2j's revocation met when it went to
+> find the second half of its own promise and the capability that was supposed to decide it (F-51, F-52, F-53).
+> Every earlier finding has been re-checked against
 > the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
@@ -917,6 +919,82 @@ What this slice did settle is the dependency D-044 named. `verdictFor` answers `
 carries both halves — the boundary is durable at step N, and `failed` is why nothing walks back to it — so a reader of
 `GET /tasks/{id}/checkpoint` learns the shape of the missing rung from the record itself rather than from a document. The
 row stays open until a slice either builds that pause or amends D-044 to say the ask happens before the task ends.
+
+### F-51 — §3.1's second half was a promise no code could keep, and a test name read as covering it
+**Severity: medium, fixed by D-096, and found by going to implement the sentence rather than by reading it.**
+`SECURITY.md` §3.1 says "revocation takes effect on the next request **and must also terminate live event streams**", and
+`docs/INTERFACES_AND_API.md` §3.1 repeats the demand as a duty on `crabby auth revoke`. Four slices of Gateway work went
+past it. The reason is structural rather than careless: `GET /events` resolved the caller's identity for the request that
+opened the stream and then forgot it — `requireToken` returns an `Identity`, the route discarded the value, and the bus
+keyed subscribers by nothing at all — so there was no handle a revocation could act *through*, and the delete route said so
+in a `log.warn` ("live streams are not yet bound to identities") instead of pretending. The route's own test was titled
+"revokes an identity so the next request fails, **which is §3.1's whole promise**".
+
+That title is the finding. A requirement with a mechanism missing has nowhere to be tested, so the test written next to it
+drifted into describing the half it could reach, and the drift was invisible because the sentence naming the coverage was
+written by the same hand that stopped there. Fixed in three parts: the event route binds its subscriber to the identity
+that opened it, `closeFor(clientId)` ends those streams in registration order and **returns how many** (a control whose
+effect nobody can observe is a control that rots), and each closed stream gets a named `event: end` frame carrying
+`{end: true, reason: "revoked"}` before the socket goes — because §5.4 already tells a client that a stream which stopped is
+a stream to reconnect through, and a silence is exactly what that rule was written for. The frame has no `id`, because a
+control frame is not an event and must not become a cursor.
+
+What was *not* fixed, because the transport does not have the thing to fix: §3.1's neighbouring sentence — "checked once at
+request start and again when a live event stream is upgraded to an action" — describes an upgrade that does not exist here.
+Every client action is a plain HTTP request (`docs/INTERFACES_AND_API.md` §5.1's reason for choosing SSE over WebSocket),
+so there is no moment at which a stream becomes an action; the sentence is now written against the mechanism that satisfies
+it, in §3.1 of both documents.
+
+### F-53 — §3.1 promised an identity list says "whether it is currently connected", and nothing carried it
+**Severity: low, closed by the same decision as F-51, and the kind of row only a code-aware read finds.**
+`docs/INTERFACES_AND_API.md` §3.1 says `crabby auth list` shows "name, interface, created, last used, granted
+capabilities, and whether it is currently connected", and §4.5's `GET /auth/clients` row repeats the list verbatim. The
+route returned `listIdentities` — id, name, interface, capabilities, created, last used — so the sixth promise had no
+field; `ClientRecord`, which `additionalProperties: false` makes a closed shape and which `tests/integration/gateway.test.ts`
+validates every row against, had no room for one; and `apps/cli/commands/auth.ts` printed `name · interface · paired ·
+caps`, silently one column short. A reader comparing the CLI's output with §3.1 would conclude the *document* had added a
+field out of kindness, which is the failure mode F-08, F-10 and F-11 were about, in a table nobody re-read.
+
+It could not have been fixed before M2j, and that is the useful part of the record: "currently connected" is a fact about a
+live stream belonging to an identity, and until D-096 bound the two together the question had no referent — the bus could
+count subscribers and nothing more. Fixed by one field, `ClientRecord.liveStreams`, computed by the route from
+`bus.countFor` — the same registry the revocation closes streams through, so the list and the control cannot disagree about
+who is watching — and rendered by the CLI as `connected, 2 live streams` or `idle`. Deliberately **one** field and not a
+boolean plus a count: `connected` derived from `liveStreams > 0` in two interfaces would be two definitions of the word,
+and the second consumer this row had been waiting for (`docs/review/TUI.md` T14-03, "prints how many streams it will kill
+first") needs the number anyway. `GET /status`'s `streams.subscribers` stays a process-wide count, because it answers "is
+this Gateway being watched at all" for `crabby status`, and collapsing the two questions into one field would lose whichever
+one the reader did not intend.
+
+### F-52 — `auth.manage` is cited by three routes and enforceable by none, and identity capabilities have no writer
+**Severity: high, open, and found by trying to write the check the documents name.** `docs/INTERFACES_AND_API.md` §4.5
+attaches `auth.manage` (`SECURITY.md` §6.1, "local-only by construction") to `POST /auth/pair-codes`; §3.1 says "managing
+identities requires `auth.manage` … minting or revoking identities from a network-facing interface would let a stolen
+remote token create a second one"; and the §3.1 row for `GET /auth/clients` promises a list that includes *granted
+capabilities*. The Gateway checks none of it: the mint route is guarded by `requireLoopback` plus a token, and listing and
+revoking were guarded by a token alone — so before M2j, a token stolen off any reachable path could enumerate every
+identity on the device and delete the one the owner would use to recover.
+
+The capability cannot simply be checked, and that is the half worth writing down. The plumbing is half-built and the
+decision is missing: `client_identity.capability_json` exists, `createIdentity` and `mintPairingCode` both accept a
+`capabilities` list, and **no caller in the build ever passes one** — the mint route's body is `{name, interface}` and
+nothing more, `crabby auth pair` has no flag that supplies grants, and the `[--restrict caps]` §3.1's usage line advertises
+is in no registry, so every identity this Gateway pairs is created with `capabilities: []`. There is no "restrict" to
+read, only a column to write. Meanwhile
+`packages/policy` asks each `PolicySubject` for `grants` and `removedGrants` — the restricted-client concept D-060 protects
+— so the durable fact and the runtime question have never been joined. A check for `auth.manage` written today would
+therefore refuse *everyone*, the owner's own CLI included: a gate that locks the owner out of the device is not a security
+improvement, it is an outage with better optics.
+
+What M2j did, in D-097, is enforce the property with the one mechanism that exists: `GET /auth/clients` and
+`DELETE /auth/clients/{id}` now require a loopback request, the same guard §4.5's mint row already uses, measured on the
+socket because `trustProxy: false` means a forwarded header cannot move it. That implements "local only" without inventing
+a grant model, and it is deliberately fail-closed about the address itself: the guard accepts the bound loopback addresses
+and not the whole `127/8` range. What remains open is the real control, and its closing condition is named rather than
+implied: a pairing-time grant decision — what `--restrict` means, who may set it, and how `capability_json` becomes
+`PolicySubject.grants` — which is the same unanswered question `POST /admin/*` waits on, so it should be answered once, in
+whichever slice takes it. Until then §4.5's `auth.manage` sentences are a rule the documents state and the build can only
+approximate, and this row is where a reader learns that.
 
 ## 3. Checks That Passed
 

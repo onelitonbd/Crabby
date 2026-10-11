@@ -220,8 +220,10 @@ conveniently and less safely:
   §7.3 forbids. `consumed` is a state of the row, so it carries an event of its own rather than reusing `answered`.
 - **Policy is asked again at the moment of execution instead of being trusted from the moment the prompt was built.**
   Two things can change while a prompt is open: the identity's grants — a `crabby auth revoke` landing mid-prompt has to
-  be honoured by *this* execution — and the tier, because §8's re-check after resolution means a path that resolves
-  outside the workspace is not the action that was signed. In both cases the signed row is left **unspent**: it expires
+  be honoured by *this* execution — and since M2j the *watching* half is answered too, outside this document, because a
+  revoked identity's live streams are ended by the route that owns delivery (`docs/INTERFACES_AND_API.md` §3.1, D-096) —
+  and the tier, because §8's re-check after resolution
+  means a path that resolves outside the workspace is not the action that was signed. In both cases the signed row is left **unspent**: it expires
   inside D-064's window, and per D-084 an approval the runtime never ran is not a refusal, so it does not count toward
   the ladder below.
 - **A transaction is synchronous, so no effect happens inside one.** Each write phase commits a state and its events

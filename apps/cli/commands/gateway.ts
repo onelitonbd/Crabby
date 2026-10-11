@@ -133,7 +133,9 @@ async function runStart(
   });
   // Order is registration order, and it matters: streams first so a client is disconnected while the server is still
   // answering, then the listener, then the file other processes read, then SQLite — WAL is only safe to drop last.
-  shutdown.onShutdown("streams", () => built.bus.closeAll());
+  // D-066's drain has to fit a live stream in it, so the bus ends them with the reason that makes a reconnect
+  // deliberate rather than reflexive (`docs/INTERFACES_AND_API.md` §5.4's `end` frame, D-096).
+  shutdown.onShutdown("streams", () => built.bus.closeAll("shutdown"));
   shutdown.onShutdown("listener", async () => {
     await built.app.close();
   });

@@ -57,13 +57,22 @@ Requirements:
   network caller. Redeeming a stolen code is therefore bounded by the TTL and the single-use rule.
 - Token storage: owner-only permissions in the client's config location; secrets follow `SECURITY.md` §7/D-031. A
   credential is checked once at request start and again when a live event stream is upgraded to an action, so a
-  revoked identity cannot keep acting on an open stream.
+  revoked identity cannot keep acting on an open stream. **Both halves are mechanisms now (D-096).** The upgrade clause is
+  satisfied by the transport's own rule — §5.1 makes every client action a plain HTTP request, so a stream is never
+  anything but a read and there is no privileged moment left to re-check — and the open-stream clause is satisfied by
+  termination: each `GET /events` subscriber records which identity opened it, and revoking that identity ends the stream
+  with an `event: end` frame naming the reason before the socket goes.
 - Managing identities requires `auth.manage` (`SECURITY.md` §6.1), which exists only on a local paired client. This
   is the single legitimate asymmetry in the parity matrix: minting or revoking identities from a network-facing
   interface would let a stolen remote token create a second one. It is recorded in §8 rather than hidden.
 - `crabby auth list` shows name, interface, created, last used, granted capabilities, and whether it is currently
   connected. `crabby auth revoke <clientId>` must be effective on the next request **and** must terminate live event
-  streams for that client.
+  streams for that client — asserted over a real socket in `tests/integration/gateway.test.ts`, which is the slice where
+  the second half stopped being a `log.warn` (F-51). The "currently connected" column is the same binding read the other
+  way: `GET /auth/clients` answers `liveStreams` per identity, counted by the live registry a revocation closes streams
+  through, so the list and the control cannot disagree about who is watching (F-53). It is one number and not a number
+  plus a boolean because `connected` computed from `liveStreams > 0` in two renderers is two definitions of the word — one
+  fact, one place, which is the F-08 family of defect in a response shape.
 - A Web UI session uses the same identity model: `crabby web open` obtains a short-lived pairing artifact for the
   browser rather than introducing a second, browser-specific trust mechanism.
 - Remote (tunnel) clients use the same tokens. Enabling a tunnel lists which identities become reachable
@@ -151,10 +160,10 @@ coverage does not shrink.
 
 | Method + path | Purpose |
 | --- | --- |
-| `POST /auth/pair-codes` | Mint a one-time pairing code for a named identity (`{ name, interface }`, optional `--restrict`). Requires a token *and* a loopback request: §3.2 forbids taking a code from an unauthenticated network caller, so the route that creates one is where both conditions apply, and it needs `auth.manage` (`SECURITY.md` §6.1). |
+| `POST /auth/pair-codes` | Mint a one-time pairing code for a named identity (`{ name, interface }`). Requires a token *and* a loopback request: §3.2 forbids taking a code from an unauthenticated network caller, so the route that creates one is where both conditions apply. `auth.manage` (`SECURITY.md` §6.1) is the grant this rule is written against and is not checked yet, because no code assigns capabilities when an identity is created; `[--restrict caps]` in the usage line above is the same gap from the other side — the flag is in no registry and this body accepts no such field — `capability_json` has a writer in `mintPairingCode` and no caller that uses it — so a caller who types the flag is told it is unknown. F-52 records the decision that has to be made (what a restriction means, who may set one, and how it reaches `PolicySubject.grants`) instead of a sentence being deleted to make the table tidy. |
 | `POST /auth/pair` | Redeem a code for `{ clientId, token }`. The only route that answers without a token — it is how a client with no credential yet gets one — bounded by the code's 120 s TTL and single use (D-079). Failure text names the next action, never a bare "invalid code" (§3.1). |
-| `GET /auth/clients` | Paired identities: name, interface, created, last used, granted capabilities, and whether one is currently connected (§3.1). |
-| `DELETE /auth/clients/{id}` | Revoke by deleting the identity. `DATA_AND_MEMORY.md` §4's client table has no revocation column, and the durable "ended on this date" record belongs in §14's audit table — O-071 keeps that from being forgotten. Local only, because `auth.manage` is a local capability. |
+| `GET /auth/clients` | Paired identities: name, interface, created, last used, granted capabilities, and `liveStreams` — how many open event subscriptions that identity holds, which is how "whether one is currently connected" is carried (§3.1, F-53) and how a client can name what a revocation will end before it ends it (`docs/review/TUI.md` T14-03). Token *and* loopback since M2j (D-097): this list is the map of what a stolen token could revoke, so it is not a read a network-facing caller gets for free. |
+| `DELETE /auth/clients/{id}` | Revoke by deleting the identity. `DATA_AND_MEMORY.md` §4's client table has no revocation column, and the durable "ended on this date" record belongs in §14's audit table — O-071 keeps that from being forgotten. Local only, because `auth.manage` is a local capability: the guard is `requireLoopback` (D-097) until the grant model exists (F-52), and a revocation ends that identity's live streams before it answers, replying 200 with `{revoked, streamsEnded}` — the count rather than an empty 204, because C8-10 in `docs/review/CLI.md` asks the command to print it (§3.1, D-096). |
 
 ## 5. Events and Streaming
 
@@ -249,6 +258,13 @@ stream drops
 - The window is **200 events per task** (D-079), which is exactly one maximum-size page: a client reconnecting after
   any list fetch it could have made can be caught up in a single round trip, and a gap is therefore a statement about
   the tail rather than about how long the client was away.
+- Two named control frames share the channel with events and carry no `id:`, because neither is an event and neither is
+  replayable — a `Last-Event-ID` pointing at one would be a cursor into an instruction to go and fetch the truth. `gap` is
+  §5.4's outside-the-window marker (`{gap: true, stateAt}`); `end` is the Gateway's last word before a socket *it* chose to
+  close goes away, carrying `end`, a `reason` of `revoked` or `shutdown`, an `at`, and the schema version. The frame exists
+  because the rule two lines above this one is a client rule — a stream that stopped is a stream to reconnect — and
+  silence after a revocation would be that rule working as designed against the person it is meant to protect (D-096). A
+  stream the client hung up on receives nothing.
 - The client-visible contract is: **events for display, GET for truth.**
 
 ## 6. Error Envelope

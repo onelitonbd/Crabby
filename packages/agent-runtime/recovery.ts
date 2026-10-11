@@ -1,4 +1,5 @@
-// M2g: §7's recovery, and the honest limit of what "full auto-resume" can mean in a build with no runner.
+// M2g: §7's recovery, and the honest limit of what "full auto-resume" can mean in a build where nothing composes the
+// runner that would perform one.
 // `AGENT_RUNTIME.md` §7.1 says Crabby MUST attempt to resume interrupted tasks automatically, and §7.2 says
 // the attempt may only succeed for work that is *both* safe and covered by a still-valid approval — "automatic
 // orchestration of recovery, not automatic authorization". This module does the orchestration and reports, task by task,
@@ -16,10 +17,13 @@
 //      operation stopped or what it was doing. Turning that task into `interrupted` instead would resurrect work the user
 //      asked to stop, which is the one recovery outcome §6 exists to prevent.
 //   3. **Nothing resumes automatically in this build, and the report says so per task.** Since M2i the saved state exists
-//      — the loop commits D-065's boundary and this module reads the verdict on it — and what is still missing is the party
-//      that would use it: no runner drives a task and there is no product provider adapter, so §7.1's "attempt to resume"
-//      is orchestration without a party to orchestrate. `ARCHITECTURE.md` §18's `packages/tools` has existed since M2k,
-//      which is what makes the missing piece precise rather than merely absent: an executor nothing composes into a run. What recovery does is
+//      — the loop commits D-065's boundary and this module reads the verdict on it — and since M2n the party that would use
+//      it exists too: `runner.ts` composes an executor, calls `loop.resume`, and holds the one-run-per-task rule. What is
+//      missing is that *nothing composes the runner into a Gateway*, because no code in this build writes
+//      `Identity.capabilities` and a run started from a route would hold no grants and be refused every tool it proposed
+//      (F-52). `ARCHITECTURE.md` §18's `packages/tools` has existed since M2k and `packages/providers`' adapter since M2l,
+//      which is what makes the missing piece precise rather than merely absent: not an executor or an adapter or a runner,
+//      but the handoff from an HTTP request to one. What recovery does is
 //      leave the task paused with a clear, user-visible reason (§7.2's last bullet), name the still-valid approval a runner
 //      would be allowed to use, and report D-065's verdict — `resume`, `pass`, `re-ask` or `none` — so the fact is on the
 //      record instead of in a reviewer's memory.
@@ -56,7 +60,8 @@ export interface RecoveredTask {
   };
   /** D-065's answer about the boundary the run left behind, when a checkpoint manager is wired. Reported, not acted on,
    *  for the same reason: a verdict of `resume` is a fact about the saved state and not a permission — §7.2's
-   *  "automatic orchestration of recovery, not automatic authorization" — and there is no runner to hand it to. */
+   *  "automatic orchestration of recovery, not automatic authorization" — and nothing in this build composes the runner
+   *  (`packages/agent-runtime/runner.ts`, M2n) that would be handed it (F-52). */
   readonly checkpoint?: {
     readonly verdict: ResumeVerdict;
     readonly verdictReason: string;
@@ -258,15 +263,17 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
       return (
         `the process that was running task ${task.id} ended, and no approval covers the step it was on, so \u00a77.2 forbids ` +
         `resuming it automatically: a pending or absent approval is not an approved one. ${boundary}, and nothing in this ` +
-        "build drives a task in any case — no runner to compose an executor, no product provider adapter to ask — so the " +
+        "build composes the runner that would drive a task in any case, so the " +
         "task is left paused for a new run or a cancellation"
       );
     }
     return (
       `the process that was running task ${task.id} ended. Approval ${approval.id} is still valid and \u00a77.2 would permit ` +
-      `resuming work covered by it, and ${boundary} — but nothing in this build drives a task: there is no runner to call ` +
-      "`loop.resume`, nothing composes an executor into a Gateway (`packages/tools` has existed since M2k), and there is " +
-      "no product provider adapter to ask, so \u00a77.1's orchestration reports what a resume would need instead of " +
+      `resuming work covered by it, and ${boundary}. A runner could call ` +
+      "`loop.resume` (M2n), an executor exists to compose (`packages/tools`, M2k) and an adapter exists to ask " +
+      "(`packages/providers`, M2l) - but nothing in this build composes that runner into a Gateway, because no code " +
+      "writes `Identity.capabilities` and a run started from a route would hold no grants (F-52), so \u00a77.1's " +
+      "orchestration reports what a resume would need instead of " +
       "performing one. The task is left paused with this reason " +
       "rather than re-run"
     );

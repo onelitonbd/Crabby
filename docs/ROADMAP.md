@@ -351,6 +351,22 @@ The fourteenth slice is the runner, and it landed in `packages/agent-runtime` ra
 
 The fifteenth slice is the half of §6 a Gateway can honour without a run. `buildApp` now composes the process's one cancellation manager beside its arbiter, journal and checkpoint manager, because §6.1's step 2 and §6.2's evidence have to be about *one* request and two managers would each hold half of it, and `POST /api/v1/tasks/{id}/cancel` requests through it. The route needs no provider, no executor and no grants — stopping work is not the same act as doing it — so it is real in a build where the task handoff is not: a `queued` task has nothing in flight, so the manager settles at once and the answer is already `cancelled`, with §6.2's evidence on the record (`inFlight: "none"`, `effectsUncertain: false`) beside §14's `by`, and a double-tap returns the request it recorded rather than a `409`, because a phone that taps stop twice is relaying one fact and not asking twice. `CancelTaskBody` carries an optional `mode` for the reason §6.2 gives, and there is no `Idempotency-Key` on this route by decision rather than oversight: deduplication and escalation are two different readings of a second request, and a key cache would have to pick one and get the other wrong. **The handoff is still absent, and F-52 is why** — `LoopSubject.grants` would come from `Identity.capabilities`, which no code in the build writes, so a run started from a route would hold no grants and policy would refuse every tool it proposed. The runner therefore exists and nothing composes it; `crabby task run` stays `planned` because nothing can drive a run, and `crabby task cancel` stays `planned` only because the command is unwritten — the route it would call now exists, which is M2o's work.
 
+The sixteenth slice narrows F-55 rather than closing it, and the honest account is in the finding's amendment:
+`crabby gateway start` composes `createFileTools` from `config.json`'s `workspace.roots` and hands its `declares` to
+`buildApp`, so `GET /tools` answers §4.1's runtime fields for the seven registry rows an executor implements and prints
+`runtime: {implemented: 7, described: 0, pending: 38}` beside them. `PENDING_RECORD_FIELDS` did not shrink — each row's own
+list did, to `["outputSchema"]` on the seven and all five on the rest — and `described` is 0 because no declaration carries
+an output schema. An install with no configured workspace composes no executor at all, since `WorkspaceConfig` forbids
+inventing a root the user never chose, and the Gateway prints that once at startup instead of leaving a route to explain it
+later. The same slice paid a debt the runner created: five claims in `packages/agent-runtime/recovery.ts` and the Gateway's
+provider `note` still said "there is no runner", which stopped being true in M2n, so each now names the party that *is*
+missing — nothing composes the runner into a Gateway, because no code writes `Identity.capabilities` (F-52).
+
+**Still absent: the handoff.** `POST /api/v1/tasks` records a task and nothing drives it, and the reason is F-52 rather than
+a missing file: a run started from a route would take its grants from `Identity.capabilities`, no code in this build writes
+that column, and a run holding no grants would be refused every tool it proposed. `crabby task run` and `crabby task cancel`
+are therefore not `ready` in §8 even though the cancellation route they would call is real and tested.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

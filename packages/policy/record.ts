@@ -12,6 +12,7 @@
 // tool runtime owns are reported as missing, which is a fact a UI can render and a test can assert disappears in M2.
 
 import { createHash } from "node:crypto";
+import type { ToolDeclaration } from "@crabby/api-contracts";
 import type { PlatformFactsLike } from "./availability.ts";
 import {
   type Availability,
@@ -47,6 +48,19 @@ export interface ToolRecord {
   readonly availability: Availability;
   readonly deferred?: boolean;
   readonly deferralReason?: string;
+  /** §4.1's five runtime fields, present exactly when a composed executor declares this tool (D-098). Absent rather than
+   *  defaulted, for the reason this file's header gives: `sideEffects: "none"` on `file.delete` would let a recovery path
+   *  retry an irreversible action, and `inputSchema: {}` would read as "takes no arguments". A merge fills a field in or
+   *  leaves it out; it never guesses. */
+  readonly inputSchema?: Readonly<Record<string, unknown>>;
+  readonly outputSchema?: Readonly<Record<string, unknown>>;
+  readonly limits?: ToolDeclaration["limits"];
+  readonly idempotent?: boolean;
+  readonly sideEffects?: ToolDeclaration["sideEffects"];
+  /** The §4.1 fields still unanswered *for this row*. Until an executor existed this was the same five names on all
+   *  forty-five rows, which is what F-55 recorded; now it shrinks per row, so a client reads which half of the record is
+   *  policy's and which half a runtime answered. An empty list is a claim that this row is fully described, and only a
+   *  declaration can earn it. */
   readonly pendingRecordFields: readonly string[];
 }
 
@@ -67,6 +81,7 @@ export function toolRecord(
   spec: ToolSpec,
   facts: PlatformFactsLike,
   source: ToolRecord["source"] = "builtin",
+  declares?: (tool: string) => ToolDeclaration | undefined,
 ): ToolRecord {
   const availability = availabilityFor(spec, facts);
   const enabled = enabledFor(spec);
@@ -78,6 +93,23 @@ export function toolRecord(
   const enabledReason = enabled.reason === undefined ? {} : { enabledReason: enabled.reason };
   const deferred =
     deferral === undefined ? {} : { deferred: true, deferralReason: deferral.reason };
+  /** §4.1's other half, merged on the id the registry and the executor already share: `ToolDeclaration.name` is
+   *  documented as "the key a merge happens on", so a declaration for a tool the registry never classified matches no row
+   *  rather than inventing one, and `assertRegistrable` is the rule that keeps the two lists honest about each other.
+   *  `outputSchema` stays absent when the executor omits it, because an empty schema is a check that always passes — its
+   *  absence is the honest answer and the loop's own header makes the same argument. */
+  const declared = declares?.(spec.tool);
+  const merged =
+    declared === undefined
+      ? {}
+      : {
+          inputSchema: declared.inputSchema,
+          ...(declared.outputSchema === undefined ? {} : { outputSchema: declared.outputSchema }),
+          limits: declared.limits,
+          idempotent: declared.idempotent,
+          sideEffects: declared.sideEffects,
+        };
+  const answered = new Set(Object.keys(merged));
   return {
     id: spec.tool,
     ...qualifier,
@@ -94,7 +126,10 @@ export function toolRecord(
     ...enabledReason,
     availability,
     ...deferred,
-    pendingRecordFields: PENDING_RECORD_FIELDS,
+    ...merged,
+    // Per row rather than per registry, which is the whole of F-55's closing condition: a row an executor implements
+    // answers what it can and names only what it still cannot, and a row nothing implements keeps naming all five.
+    pendingRecordFields: PENDING_RECORD_FIELDS.filter((field) => !answered.has(field)),
   };
 }
 
@@ -102,16 +137,23 @@ export function toolRecords(
   specs: readonly ToolSpec[],
   facts: PlatformFactsLike,
   source: ToolRecord["source"] = "builtin",
+  declares?: (tool: string) => ToolDeclaration | undefined,
 ): ToolRecord[] {
-  return specs.map((spec) => toolRecord(spec, facts, source));
+  return specs.map((spec) => toolRecord(spec, facts, source, declares));
 }
 
 /** The whole list a client sees: the checked-in rows, then whatever an extension registered. Built in this order so a
- *  tool list reads the same on every interface and a terminal can diff it against another device's without sorting. */
-export function allToolRecords(facts: PlatformFactsLike): ToolRecord[] {
+ *  tool list reads the same on every interface and a terminal can diff it against another device's without sorting.
+ *  `declares` is the composed executor's half of §4.1's record, handed in rather than imported: this package answers
+ *  "what tier is this and who may do it", and which executor a process happens to have is a fact about the composition
+ *  root that ran, not about policy. Passing nothing is the honest default and leaves every row naming all five fields. */
+export function allToolRecords(
+  facts: PlatformFactsLike,
+  declares?: (tool: string) => ToolDeclaration | undefined,
+): ToolRecord[] {
   return [
-    ...toolRecords(TOOL_REGISTRY, facts, "builtin"),
-    ...toolRecords(listExtensionTools(), facts, "extension"),
+    ...toolRecords(TOOL_REGISTRY, facts, "builtin", declares),
+    ...toolRecords(listExtensionTools(), facts, "extension", declares),
   ];
 }
 

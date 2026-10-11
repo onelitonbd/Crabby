@@ -14,9 +14,10 @@ import {
   readGatewayInfo,
   writeGatewayInfo,
 } from "@crabby/gateway";
-import type { DataLayout } from "@crabby/platform";
+import { type DataLayout, homeDirectory } from "@crabby/platform";
 import { composeProviders, selectDefaultModel } from "@crabby/providers";
-import { DB_FILE_NAME, migrate, openDatabase, schemaVersion } from "@crabby/storage";
+import { DB_FILE_NAME, migrate, openDatabase, schemaVersion, taskScratch } from "@crabby/storage";
+import { createFileTools } from "@crabby/tools";
 import { parseTail, unknownFlagMessage } from "../args.ts";
 import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
@@ -81,6 +82,26 @@ async function runStart(
   // rather than inside the Gateway, because the party that starts the process is also the party that can print a
   // refusal and its fix once, at startup, instead of leaving it to a route to explain later.
   const providers = composeProviders(loaded.config.provider, loaded.limits);
+  /** §4.1's other half — the executor's declarations, so `GET /api/v1/tools` can answer the five fields
+   *  `PENDING_RECORD_FIELDS` names from the party that executes them instead of printing them as pending (F-55, D-098).
+   *  Composed here rather than inside the Gateway for the reason the providers are: the party that starts the process is
+   *  also the party that can print a refusal and its fix once, at startup, instead of leaving a route to explain later.
+   *  No configured roots means no executor, and that is a decision rather than a gap: `WorkspaceConfig`'s own rule is that
+   *  a root invented by a default "would be a path the agent may write to that the user never chose", and §8's deny-list is
+   *  measured against `PathContext.home` and `dataDir` with those roots as the inside. An install that has chosen no
+   *  workspace therefore describes its tools as pending and says so on the screen that started it, which is a truer answer
+   *  than an executor whose every write would be refused anyway. */
+  const roots = loaded.config.workspace?.roots ?? [];
+  const executor =
+    roots.length === 0
+      ? undefined
+      : createFileTools({
+          paths: { home: homeDirectory(), dataDir: layout.stateDir, roots },
+          // D-064's over-cap output and §8's trash-or-rename land in the task's scratch directory, and
+          // `packages/storage/scratch.ts` owns that layout — so the executor is handed the rule rather than deriving it.
+          scratchDirFor: (taskId) => taskScratch(layout, taskId),
+          limits: loaded.limits,
+        });
   const startedAt = new Date();
   const built = await buildApp({
     db: handle.db,
@@ -90,6 +111,7 @@ async function runStart(
     startedAt,
     listenerMode: "local",
     providers,
+    ...(executor === undefined ? {} : { declares: executor.declares }),
   });
 
   try {
@@ -153,9 +175,29 @@ async function runStart(
       ? `${selected.providerId}/${selected.modelId}`
       : `not selected — ${selected.reason}`,
   );
+  // Printed because it is the difference between a Gateway that can describe its tools and one that can only classify
+  // them, and `GET /api/v1/tools` answers it too — this line just answers it once, at startup, where a user can act on it.
+  if (executor === undefined) {
+    renderer.line(
+      "tools",
+      "no executor composed: no workspace roots are configured, so every row reports §4.1's runtime fields as pending",
+    );
+    renderer.fix(
+      "`crabby init` creates a workspace and records the root it created, or " +
+        "`crabby config set workspace.roots '[\"/path/to/work\"]'` names one; until then no tool has an executor (F-55)",
+    );
+  } else {
+    renderer.line(
+      "tools",
+      `${executor.declarations().length} declared by the file executor over ${roots.length} root(s); ` +
+        "the rows nothing implements still name their runtime fields as pending (F-55)",
+    );
+  }
   renderer.line(
     "tasks",
-    "recorded, not driven: this build has no runner, so a task created over HTTP stays `queued` (docs/ROADMAP.md §4)",
+    "recorded, not driven: the runner exists (M2n) and `POST /api/v1/tasks/{id}/cancel` stops a task, but nothing " +
+      "composes the runner into `POST /api/v1/tasks`, because no code in this build writes `Identity.capabilities` and a " +
+      "run started from a route would hold no grants and be refused every tool it proposed (F-52)",
   );
   if (built.bootstrap) {
     renderer.line("", "");

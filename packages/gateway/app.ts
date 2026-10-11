@@ -39,7 +39,7 @@ import {
   createCheckpoints,
   createRecovery,
 } from "@crabby/agent-runtime";
-import type { ApprovalState, ClientInterface } from "@crabby/api-contracts";
+import type { ApprovalState, ClientInterface, ToolDeclaration } from "@crabby/api-contracts";
 import {
   APPROVAL_STATES,
   ApprovalDecisionBody,
@@ -118,6 +118,13 @@ export interface GatewayDeps {
    *  from, and a Gateway that loaded its own could not be tested against a second configuration. Refusals travel with the
    *  list, because `GET /api/v1/status` owes a caller the reason an entry did not compose and not only its absence. */
   readonly providers?: readonly ProviderComposition[] | undefined;
+  /** The composed executor's half of §4.1's record, so `GET /api/v1/tools` can answer the five fields
+   *  `PENDING_RECORD_FIELDS` names from the party that executes them instead of printing them as pending (F-55). Handed
+   *  in for the reason `providers` is: `packages/gateway` has no dependency on `packages/tools` and should not grow one,
+   *  because which executor a process has is a fact about the composition root that ran. Absent means no executor was
+   *  composed, and then every row keeps naming all five — which is a true statement about this process rather than a
+   *  default invented to fill a response. */
+  readonly declares?: ((tool: string) => ToolDeclaration | undefined) | undefined;
 }
 
 export interface BuiltApp {
@@ -313,9 +320,15 @@ function providersRow(composed: readonly ProviderComposition[] | undefined) {
     state: "ready",
     entries,
     ...(refused.length === 0 ? {} : { refused }),
-    // What `ready` does not imply, stated because a client that infers it will POST a task and then watch it sit: the
-    // adapter composes and answers `describe()`/`listModels()`, and nothing in this build drives a task with it yet.
-    note: "no runner drives a task here yet, so a task created over HTTP is recorded and stays `queued` (docs/ROADMAP.md §4)",
+    // What `ready` does not imply, stated because a client that infers it will POST a task and then watch it sit. The
+    // adapter composes and answers `describe()`/`listModels()`, and a runner exists that could drive a task with it
+    // (`packages/agent-runtime/runner.ts`, M2n) — but nothing composes that runner into `POST /api/v1/tasks`, because no
+    // code in this build writes `Identity.capabilities` and a run started from a route would hold no grants and be
+    // refused every tool it proposed (F-52). Naming the missing party precisely is what keeps `ready` from reading as
+    // "a task will run".
+    note:
+      "the adapter is ready and a runner exists (M2n), but nothing composes it into a task route: no code writes " +
+      "`Identity.capabilities`, so a task created over HTTP is recorded and stays `queued` (F-52, docs/ROADMAP.md §4)",
   };
 }
 
@@ -373,7 +386,13 @@ function registerSystemRoutes(
 function registerPolicyRoutes(app: FastifyInstance, deps: GatewayDeps): void {
   app.get("/api/v1/tools", async (_request, reply) => {
     const facts = deps.platformFacts ?? detectProcess();
-    const records = allToolRecords(facts);
+    const records = allToolRecords(facts, deps.declares);
+    // Two counts rather than one, because they answer different questions and collapsing them would overstate the merge:
+    // `implemented` is how many rows a composed executor declares at all, `described` how many ended up with no §4.1 field
+    // left pending. An executor that declares a tool without an `outputSchema` raises the first and not the second, and
+    // that difference is the honest one — an absent output schema means no result check, not a completed record.
+    const implemented = records.filter((record) => deps.declares?.(record.id) !== undefined);
+    const described = records.filter((record) => record.pendingRecordFields.length === 0);
     return reply.send({
       items: records,
       count: records.length,
@@ -386,8 +405,18 @@ function registerPolicyRoutes(app: FastifyInstance, deps: GatewayDeps): void {
         source: "PROVIDERS_AND_TOOLS.md §4.2",
         rows: TOOL_REGISTRY.length,
         // The digest `crabby tools ls` prints beside the list, so two devices can confirm they agree without a human
-        // comparing 45 lines.
+        // comparing 45 lines. Computed from the registry's own fields and deliberately *not* from the merged declarations:
+        // the digest is an agreement about policy, and a device with a file executor composed and one without have the same
+        // policy and different runtimes. A digest that moved with the executor would report that as a disagreement about
+        // tiers, which is the one thing it exists to rule out.
         digest: registryDigest(records),
+      },
+      // §4.1's other half, reported rather than assumed. `pending` is the count F-55 asked to see shrink: the rows no
+      // executor implements, whose records still name all five runtime fields rather than inventing values for them.
+      runtime: {
+        implemented: implemented.length,
+        described: described.length,
+        pending: records.length - implemented.length,
       },
     });
   });

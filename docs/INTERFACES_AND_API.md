@@ -148,7 +148,7 @@ coverage does not shrink.
 | `GET /models?provider=` | Models with effective capability descriptors, `reported` vs `overrides` visible side by side (D-045). |
 | `PUT /models/{provider}/{model}/overrides` | Capability override; T3. |
 | `POST /models/{provider}/{model}/probe` | Run the conformance probe and report which claimed capabilities actually answered. |
-| `GET /tools` | Registry with tier, capability, and platform availability; drives the parity matrix in tests. |
+| `GET /tools` | Registry with tier, capability, and platform availability, merged with the composed executor's §4.1 fields; drives the parity matrix in tests. |
 | `GET /memory` · `POST /memory` · `PATCH /memory/{id}` · `DELETE /memory/{id}` | Review, correct, and delete long-term memory (D-019). |
 | `GET /memory/search?q=` | Text search only in the first release (D-021). |
 | `GET /extensions` · `POST /extensions/validate` · `POST /extensions/install` · `DELETE /extensions/{id}` | Extension management against `EXTENSIONS.md` §5–§6, including `dryRun` validation. |

@@ -5,7 +5,14 @@
 // because an in-process app cannot prove that `gateway.json`, the drain, and the exit code work from outside.
 import assert from "node:assert/strict";
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -16,6 +23,7 @@ import {
   type Event,
   newId,
   TaskRecord,
+  type ToolDeclaration,
   validate,
 } from "@crabby/api-contracts";
 import { createLogger } from "@crabby/core";
@@ -41,6 +49,7 @@ import {
   type SqliteDb,
   setState,
 } from "@crabby/storage";
+import { createFileTools, defaultRealpathOf } from "@crabby/tools";
 
 const REPO = path.resolve(new URL("../../", import.meta.url).pathname);
 
@@ -59,6 +68,10 @@ interface BootOptions {
   /** What `crabby gateway start` composes from `config.json`'s `provider.*` entries and hands in (§3.3's "or
    *  configuration"). A test that composed none is the honest default, and the reason `GET /status` reports `absent`. */
   readonly providers?: readonly ProviderComposition[];
+  /** What `crabby gateway start` composes from `config.json`'s `workspace.roots` and hands in, so `GET /api/v1/tools` can
+   *  merge §4.1's runtime fields instead of printing them as pending (F-55). A test that composes none is the honest
+   *  default and is also the assertion that matters: with nothing composed, every row must still name all five. */
+  readonly declares?: (tool: string) => ToolDeclaration | undefined;
 }
 
 function boot(options: BootOptions = {}): Promise<Harness> {
@@ -80,6 +93,7 @@ async function bootWith(options: BootOptions): Promise<Harness> {
     listenerMode: "local",
     ...(options.platformFacts ? { platformFacts: options.platformFacts } : {}),
     ...(options.providers ? { providers: options.providers } : {}),
+    ...(options.declares ? { declares: options.declares } : {}),
   });
   await built.app.listen({ host: "127.0.0.1", port: 0 });
   const address = built.app.server.address();
@@ -268,8 +282,10 @@ describe("gateway over http", () => {
       );
       assert.match(
         providers?.note ?? "",
-        /no runner drives a task/,
-        "`ready` for the provider subsystem must not read as `a task will run`",
+        /nothing composes it into a task route/,
+        "`ready` for the provider subsystem must not read as `a task will run`, and the note has to name the party that " +
+          "is missing rather than a party that exists — a runner has existed since M2n, so `no runner` would be the lie " +
+          "this assertion is here to catch (F-52)",
       );
     } finally {
       await local.close();
@@ -797,12 +813,23 @@ describe("the tool registry over http (§4.4's GET /tools row)", () => {
       availability: { available: boolean; requires: string; reason?: string };
       deferred?: boolean;
       deferralReason?: string;
+      /** §4.1's runtime half, present exactly when a composed executor declared the row (F-55). Optional in this local
+       *  type for the reason they are optional in `ToolRecord`: a test must be able to assert a row has none. */
+      inputSchema?: Record<string, unknown>;
+      outputSchema?: Record<string, unknown>;
+      limits?: { timeoutMs: number; maxOutputBytes: number };
+      idempotent?: boolean;
+      sideEffects?: string;
       pendingRecordFields: string[];
     }[];
     count: number;
     tiers: string[];
     capabilities: { name: string; grants: string }[];
     registry: { source: string; rows: number; digest: string };
+    /** How much of the record a composed executor answered. Two counts rather than one: `implemented` is the rows an
+     *  executor declares, `described` the rows with no field left pending, and a declaration with no `outputSchema`
+     *  raises the first and not the second. */
+    runtime: { implemented: number; described: number; pending: number };
   }
 
   // A harness per platform, because `platformFacts` is a build-time input to the route and mutating `process.env`
@@ -931,6 +958,154 @@ describe("the tool registry over http (§4.4's GET /tools row)", () => {
       phone.registry.digest,
       "the digest covers availability, so a desktop and a phone must not look identical",
     );
+  });
+
+  /** The executor `crabby gateway start` composes from `config.json`'s `workspace.roots`, built here the same way: one
+   *  workspace, one home, one data directory, all three inside a `PathContext` because §8's deny-list is measured against
+   *  home and dataDir with the roots as the inside — and a partial context is the difference between "inside the
+   *  workspace" and "somewhere we did not check". `realpathOf` is the real resolver rather than an omission, because
+   *  `file.delete` fails closed at T3 without one and a test that quietly composed a stricter executor than the product
+   *  would be asserting about a build nobody runs. */
+  function composeFileExecutor(): { declares: (tool: string) => ToolDeclaration | undefined } {
+    const base = mkdtempSync(path.join(tmpdir(), "crabby-gateway-tools-"));
+    const root = path.join(base, "workspace");
+    const home = path.join(base, "home");
+    const dataDir = path.join(base, "state");
+    mkdirSync(root, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    const tools = createFileTools({
+      paths: { home, dataDir, roots: [root] },
+      scratchDirFor: (taskId) => {
+        const dir = path.join(dataDir, "scratch", taskId);
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+        return dir;
+      },
+      realpathOf: defaultRealpathOf,
+    });
+    return { declares: tools.declares };
+  }
+
+  it("answers §4.1's runtime fields from the composed executor and keeps naming them pending where nothing implements the row", async () => {
+    const { declares } = composeFileExecutor();
+    const harness = await boot({ platformFacts: { isTermux: false }, declares });
+    try {
+      const body = (await harness.client.tools()).body as ToolsBody;
+      // Counted by "answered something" rather than by "answered everything", because the second is not what an executor
+      // with no output schemas produces and asserting it would be asserting a build that does not exist.
+      const answered = body.items.filter(
+        (item) => item.pendingRecordFields.length < PENDING_RECORD_FIELDS.length,
+      );
+      const pending = body.items.filter(
+        (item) => item.pendingRecordFields.length === PENDING_RECORD_FIELDS.length,
+      );
+
+      // Seven, not forty-five and not eight. `createFileTools` declares eight tools, but `file.stat` has no row in §4.2's
+      // table, so seven registry rows can be answered — and reporting seven is the honest half of F-55's narrowing. A test
+      // that demanded all 45 would be demanding the mock this phase has refused; one that demanded 8 would be counting a
+      // declaration policy has never classified as though the registry agreed with it.
+      assert.equal(
+        answered.length,
+        7,
+        "exactly the registry rows the file executor declares may stop naming every runtime field as pending",
+      );
+      assert.equal(
+        body.runtime.implemented,
+        7,
+        "`runtime.implemented` is the rows an executor declares, which is the number F-55 asked to see shrink",
+      );
+      assert.equal(
+        body.runtime.pending,
+        body.count - 7,
+        "`runtime.pending` is the rows nothing implements, and it must not be a separate count that can drift",
+      );
+      // `described` stays 0, and that is why the route reports two counts instead of one: none of the file executor's
+      // declarations carries an `outputSchema`, so no row is fully described even though seven are partly answered. A
+      // client that read "implemented" as "complete" would render an empty output schema as a check that always passes.
+      assert.equal(
+        body.runtime.described,
+        0,
+        "a declaration with no `outputSchema` leaves that field pending, so no row may count as fully described",
+      );
+
+      for (const item of answered) {
+        assert.ok(
+          item.id.startsWith("file.") || item.id === "fs.search",
+          `${item.id} answered its runtime fields but no executor in this build declares it`,
+        );
+        assert.deepEqual(
+          [...item.pendingRecordFields],
+          ["outputSchema"],
+          `${item.id} must name exactly the field its executor does not answer, and nothing else — a row that named all ` +
+            "five would have merged nothing, and one that named none would be claiming an output schema it has",
+        );
+        assert.equal(
+          item.outputSchema,
+          undefined,
+          `${item.id} merged an output schema no declaration carries`,
+        );
+        assert.ok(
+          Object.keys(item.inputSchema ?? {}).length > 0,
+          `${item.id} merged an empty inputSchema, which reads as "takes no arguments" — the exact lie ` +
+            "`pendingRecordFields` exists to prevent",
+        );
+        assert.ok(
+          typeof item.idempotent === "boolean" && typeof item.sideEffects === "string",
+          `${item.id} merged a half-record: idempotency and side effects are what a recovery path retries on`,
+        );
+        assert.ok(
+          (item.limits?.timeoutMs ?? 0) > 0,
+          `${item.id} merged no deadline, and a tool with no deadline is a run that cannot be cancelled`,
+        );
+      }
+      for (const item of pending) {
+        assert.deepEqual(
+          [...item.pendingRecordFields],
+          [...PENDING_RECORD_FIELDS],
+          `${item.id} has no executor, so it must still name all five fields rather than carry defaults for them`,
+        );
+        assert.equal(
+          item.inputSchema,
+          undefined,
+          `${item.id} answered a field nothing implemented`,
+        );
+      }
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("keeps the registry digest policy-only, so composing an executor cannot look like a change of policy", async () => {
+    const { declares } = composeFileExecutor();
+    const merged = await boot({ platformFacts: { isTermux: false }, declares });
+    try {
+      const withExecutor = (await merged.client.tools()).body as ToolsBody;
+      const withoutExecutor = await fetchTools({ isTermux: false });
+      assert.equal(
+        withExecutor.registry.digest,
+        withoutExecutor.registry.digest,
+        "the digest is an agreement about tiers, capabilities and availability — a device with a file executor composed " +
+          "and one without have the same policy and different runtimes, and a digest that moved with the executor would " +
+          "report that as a disagreement about policy",
+      );
+      assert.equal(
+        withoutExecutor.runtime.implemented,
+        0,
+        "a Gateway with nothing composed must say so rather than imply its rows are described",
+      );
+      // Asserted over one body rather than by comparing two arrays of numbers, because the claim is about the Gateway that
+      // composed nothing: every row of it still names all five fields. That is the assertion the merge above has to be read
+      // against — without it, seven answered rows could hide the fact that the other thirty-eight are silent rather than
+      // described.
+      for (const item of withoutExecutor.items) {
+        assert.deepEqual(
+          [...item.pendingRecordFields],
+          [...PENDING_RECORD_FIELDS],
+          `${item.id} in a Gateway with no executor composed must name every runtime field it cannot answer`,
+        );
+      }
+    } finally {
+      await merged.close();
+    }
   });
 });
 

@@ -325,14 +325,17 @@ describe("recovery at startup (§7.1, §7.2)", () => {
       report.interrupted[0]?.resumed,
       false,
       "§7.2 permits a resume only for work that is *both* safe and covered; the cover exists, and what is missing is " +
-        "the party that would use it — no runner to compose an executor, and no product provider adapter to ask",
+        "the party that would use it — a runner exists (M2n) but nothing composes it, and no code writes `Identity.capabilities` (F-52)",
     );
     assert.match(
       report.interrupted[0]?.reason ?? "",
       /never reached a committed step boundary/,
       "this run was seeded with no checkpoint, so the sentence says there is no saved state rather than implying one",
     );
-    assert.match(report.interrupted[0]?.reason ?? "", /no runner to call `loop\.resume`/);
+    assert.match(
+      report.interrupted[0]?.reason ?? "",
+      /nothing in this build composes that runner into a Gateway/,
+    );
     assert.equal(
       report.interrupted[0]?.checkpoint?.verdict,
       "none",

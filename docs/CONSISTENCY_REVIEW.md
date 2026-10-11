@@ -1053,6 +1053,33 @@ tool stays out of the response entirely rather than appearing with empty fields,
 what the product will do and `GET /tools` is a statement of what this process can do, and F-20 is the finding about
 confusing two copies of one list.
 
+**Amendment (sixteenth slice): the party to merge them exists, and the finding narrows rather than closes.**
+`crabby gateway start` composes `createFileTools` from `config.json`'s `workspace.roots` and hands its `declares` to
+`buildApp`, so `GET /tools` now answers §4.1's runtime fields for the rows an executor implements and prints
+`runtime: {implemented: 7, described: 0, pending: 38}` beside them. Two of the three things the closing condition asked for
+happened; the third did not, and the difference is worth stating rather than rounding:
+
+1. **`PENDING_RECORD_FIELDS` did not shrink — each row's own list did.** The constant still names all five fields, because
+   it is the list of fields the *runtime* owns and that ownership has not changed. What changed is that
+   `toolRecord(spec, facts, source, declares?)` filters it per row, so the seven rows the file executor declares now name
+   `["outputSchema"]` alone and the other thirty-eight still name all five. A row's list is now a fact about that row
+   instead of a fact about the registry, which is the truth the condition was reaching for, arrived at from the other side.
+2. **`described` is 0 and stays 0.** No declaration in `packages/tools` carries an `outputSchema`, so no row is fully
+   described even though seven are partly answered. That is why the route reports two counts: `implemented` says an executor
+   declares the row, `described` says nothing about it is left unanswered, and a client that read the first as the second
+   would render an empty output schema as a check that always passes.
+3. **Eight declarations answer seven rows.** `createFileTools` declares `file.stat`, which has no row in §4.2's table, so
+   one declaration matches nothing and is not counted. That is the merge behaving correctly — it is keyed on the registry's
+   id and cannot invent a policy row for a tool policy never classified — but it is also a second copy of one list drifting,
+   which is F-20's shape, and the honest place to record the drift is here rather than in a count that hides it.
+4. **No configured workspace means no executor, by decision.** `WorkspaceConfig`'s own rule is that a root invented by a
+   default "would be a path the agent may write to that the user never chose", so an install that has chosen no workspace
+   composes nothing and every row keeps naming all five. The Gateway says so on the screen that started it, and `GET /tools`
+   says it as `implemented: 0`.
+
+Still open, therefore: `outputSchema` is answered by nothing, `file.stat` is declared but unclassified, and the thirty-eight
+rows no executor implements are as silent as they were. The remaining work is not a merge but an executor for them.
+
 ### F-56 — §3.7 gives an adapter a vault handle, and nothing in the build resolves one
 
 **Severity: medium, open, and the same shape as F-52.** §3.7 is specific: provider credentials "are supplied once, stored

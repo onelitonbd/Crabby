@@ -33,6 +33,16 @@ export function dataLayout(stateDir: string): DataLayout {
   };
 }
 
+/** Where "home" is for this process, in one place. `resolveDataDir` takes it as an argument, and `PathContext.home` —
+ *  the value §8's deny-list is measured against — needs the same one, so a second derivation would be a second opinion
+ *  about which directory is sensitive. The `?? process.cwd()` is not a guess at a user's home: it is the fallback for a
+ *  process with no `HOME` in its environment, where the working directory is the only path this process can honestly
+ *  call its own starting point, and naming it makes the deny-list measure against something real rather than against
+ *  `undefined` and therefore nothing. */
+export function homeDirectory(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
+  return env.HOME ?? cwd;
+}
+
 /** The resolution rule, as a pure function so a test can pass `{ home: "/tmp/x" }` and never touch a real `$HOME`. */
 export function resolveDataDir(options: { dataDir?: string; home: string; cwd?: string }): string {
   const explicit = options.dataDir;

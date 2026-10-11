@@ -9,7 +9,7 @@
 // command cannot exist in one interface only.
 import process from "node:process";
 import { EXIT, type ExitCode } from "@crabby/api-contracts";
-import { dataLayout, detectProcess, resolveDataDir } from "@crabby/platform";
+import { dataLayout, detectProcess, homeDirectory, resolveDataDir } from "@crabby/platform";
 import { createRenderer } from "./output.ts";
 
 /** §7.1: "Output must be pipeable." `crabby config get limits | head -4` closes the pipe while there is still output
@@ -139,7 +139,7 @@ export function parseArgs(argv: readonly string[]): Parsed {
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<ExitCode> {
   const parsed = parseArgs(argv);
   const facts = detectProcess();
-  const home = process.env.HOME ?? process.cwd();
+  const home = homeDirectory();
   const layout = dataLayout(
     resolveDataDir({
       home,

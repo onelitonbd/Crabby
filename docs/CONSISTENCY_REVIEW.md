@@ -8,12 +8,13 @@
 > this file), most recently on 2026-10-10 — findings F-13…F-31 are from the six 2026-10-10 passes (the (R) round,
 > the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from),
 > F-32…F-36 from M1c's implementation pass, the first pass where a *generator* rather than a reader compared the
-> documents with the code, and F-37…F-48 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38, sighted
+> documents with the code, and F-37…F-49 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38, sighted
 > twice), a rule enforced without a document to cite (F-39), the checker's own arithmetic (F-40), the three M2d's loop met
 > when it had to ask for numbers and vocabulary the plan had not priced (F-41…F-43), the three M2e's cancellation manager
 > met when it had to write down an outcome §6.2 requires and the plan had not defined (F-44…F-46), and the two M2g's
-> recovery met when it had to answer what a restart owes a prompt and a user (F-47, F-48). Every earlier finding has been
-> re-checked against the documents as they now stand.
+> recovery met when it had to answer what a restart owes a prompt and a user (F-47, F-48), and the one M2h's ladder met
+> when it went looking for the budget D-043 had already priced (F-49). Every earlier finding has been re-checked against
+> the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
 > a scratch pad: every finding below is either fixed with a decision ID, or explicitly listed as still open.
@@ -853,6 +854,29 @@ timer (D-093 records why: a timer needs an interval nobody decided, a lifecycle,
 The write inside a GET is deliberate and is the part a reviewer should push on, so it is argued in the decision row rather
 than left to the diff. `tests/integration/recovery.test.ts` asserts both halves over HTTP, including that a second read
 does not log the same expiry twice.
+
+### F-49 — D-043's attempt count was "configurable" and no config key reached it
+**Severity: low, fixed by D-094, and found by wiring the ladder rather than by reading it.** D-043 prices the first rung
+of the retry ladder as "at least 5 attempts per failing stage (configurable)", and D-064 prices the delays between the
+rungs (`1s, 2s, 4s, 8s, 16s`, ±25% jitter, a `Retry-After` hint overriding upward). `packages/providers/errors.ts` had
+held both since M1c — `RETRY_SCHEDULE_MS`, `retryDelayMs`, `shouldRetry`, `MAX_ATTEMPTS` — and nothing in the build called
+any of them, so the loop's own header told the truth when it said a provider error fails the task on the first error and
+the event says no retry was attempted. Two gaps sat inside that one and they are not the same size. The behavioural gap
+was one function call wide: `callProvider` had to ask `shouldRetry` and sleep what `retryDelayMs` returned. The
+*configurability* gap had no code at all: `MAX_ATTEMPTS` was a module constant, `limits` held no key that reached it, and
+a user reading D-043's "(configurable)" had nothing to configure. That is F-41's shape turned around — there, a rule was
+stated and a number unpriced; here, a number was priced and no rule existed that could carry it.
+
+Fixed by `limits.providerAttempts`, defaulting to `MAX_ATTEMPTS` (6 = one attempt plus the five delays D-064 priced) with
+`minimum: 5` in the TypeBox schema rather than in a comment, because a floor enforced by the same `validate()` every route
+uses is stronger than a documented one, and because the floor is the part of D-043's sentence that has to survive a user
+editing their own config: the configurable half may lengthen the ladder or shorten it to five, and may not configure it
+out of existence. `loop.test.ts` asserts `LOOP_LIMITS.providerAttempts === MAX_ATTEMPTS` and that `providerAttempts: 4`
+fails validation, so neither package has to remember the other's number — F-40's rule, two packages apart. What is *not*
+fixed is D-044's second rung, and F-47 is the reason it cannot be: ask-the-user-which-model-instead needs a checkpoint to
+resume from and a switch surface to ask on, and neither exists. An exhausted budget therefore fails the task, and the
+`task.failed` payload carries `attempts`, `retried` and a `ladder` sentence naming the rung that is not built, which is
+the honest version of the promise D-044 makes.
 
 ## 3. Checks That Passed
 

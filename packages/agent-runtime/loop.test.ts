@@ -1,12 +1,13 @@
 // The loop, asserted as the sentences it implements rather than as a state dump: what §5's six rules require of a run,
-// what §6.3 requires of a prompt, what D-087's edge makes reachable, and what the loop refuses to pretend it has (no
-// retry ladder, no cancellation settle, no executor). Every message names the rule it is arguing for, because the same
-// sentence is what a reviewer reads when one of these goes red in a year's time.
+// what §6.3 requires of a prompt, what D-087's edge makes reachable, what D-043's ladder climbs and refuses to climb, and
+// what the loop still refuses to pretend it has (no executor, no D-044 rung). Every message names the rule it is arguing
+// for, because the same sentence is what a reviewer reads when one of these goes red in a year's time.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { validate } from "@crabby/api-contracts";
 import { LIMITS_DEFAULTS, LimitsConfig } from "@crabby/core";
 import { type EvalContext, evaluate } from "@crabby/policy";
+import { MAX_ATTEMPTS } from "@crabby/providers";
 import {
   LOOP_LIMITS,
   type LoopOutcome,
@@ -670,27 +671,221 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
     );
   });
 
-  it("fails on the first provider error, and says out loud that no ladder ran", async () => {
+  it("fails at once on a class that is not retryable, and says the ladder never started", async () => {
+    const waits: number[] = [];
     const harness = createHarness({
-      rounds: [[{ kind: "fail", class: "rate-limit" }], doneRound],
+      rounds: [[{ kind: "fail", class: "auth" }], doneRound],
       tools: fileTools(),
+      wait: async (ms) => {
+        waits.push(ms);
+      },
     });
     const outcome = await harness.start();
 
     assert.equal(outcome.kind, "failed");
-    assert.equal(outcome.kind === "failed" ? outcome.code : "", "provider.rate-limit");
-    assert.equal(harness.task()?.state, "failed");
+    assert.equal(outcome.kind === "failed" ? outcome.code : "", "provider.auth");
     const payload = harness.payloadOf("task.failed");
-    assert.equal(
-      payload?.retried,
-      false,
-      "D-043's ladder is not in this build, and the event says so instead of implying five attempts",
+    assert.equal(payload?.attempts, 1);
+    assert.equal(payload?.retried, 0);
+    assert.match(
+      String(payload?.ladder),
+      /not retryable/,
+      "§9.2: invalid requests and denied permissions must not be retried, and the event says which of the two reasons the " +
+        "ladder did not climb — a budget spent and a class that never qualified read the same otherwise",
     );
-    assert.match(String(payload?.ladder), /D-043/);
-    const recorded = harness.task()?.error?.message;
-    assert.ok(
-      typeof recorded === "string" && recorded.length > 0,
+    assert.equal(waits.length, 0, "and it did not wait, because there was nothing to wait for");
+    assert.equal(harness.eventsOfType("provider.retry.scheduled").length, 0);
+    assert.equal(harness.task()?.state, "failed");
+    assert.equal(
+      harness.task()?.error?.code,
+      "provider.auth",
       "the reason is on the record, so a phone that missed the event still sees why (§5.2's polling rule)",
+    );
+  });
+
+  it("climbs D-043's ladder on D-064's schedule, logs every rung, and finishes when an attempt succeeds", async () => {
+    const harness = createHarness({
+      rounds: [
+        [{ kind: "fail", class: "rate-limit" }],
+        [{ kind: "fail", class: "overloaded" }],
+        doneRound,
+      ],
+      tools: fileTools(),
+      // `random()` at 0.5 puts the jitter at exactly zero drift: (0.5 × 2 − 1) × 0.25 × base. A schedule a test cannot
+      // pin is a schedule nobody verifies, which is why the source takes the generator at all.
+      random: () => 0.5,
+    });
+    const outcome = await harness.start();
+
+    assert.equal(
+      outcome.kind,
+      "completed",
+      "the third attempt answered, so the task is not a failure",
+    );
+    assert.deepEqual(
+      harness.waits,
+      [1_000, 2_000],
+      "D-064's schedule inside D-043's floor: 1s, 2s, 4s, 8s, 16s with ±25% jitter, pinned here at zero drift",
+    );
+    const scheduled = harness.eventsOfType("provider.retry.scheduled");
+    assert.equal(
+      scheduled.length,
+      2,
+      "one event per rung, because a retry nobody can see is a retry nobody can bound",
+    );
+    assert.equal(scheduled[0]?.payload.attempt, 1);
+    assert.equal(scheduled[0]?.payload.delayMs, 1_000);
+    assert.equal(scheduled[0]?.payload.source, "schedule");
+    assert.equal(scheduled[0]?.payload.class, "rate-limit");
+    assert.equal(scheduled[1]?.payload.attempt, 2);
+    assert.equal(scheduled[1]?.payload.delayMs, 2_000);
+    assert.equal(harness.eventsOfType("provider.retry.attempt").length, 2);
+    assert.deepEqual(
+      harness.provider.calls.map((call) => call.modelId),
+      ["fake-tools", "fake-tools", "fake-tools"],
+      "the same model and the same provider on every attempt: never a silent switch (D-043)",
+    );
+  });
+
+  it("lets a provider's Retry-After override the schedule upward, and ignores a shorter one", async () => {
+    const longer = createHarness({
+      rounds: [[{ kind: "raw", status: 429, body: "slow down", retryAfterMs: 30_000 }], doneRound],
+      tools: fileTools(),
+      random: () => 0.5,
+    });
+    await longer.start();
+    assert.deepEqual(
+      longer.waits,
+      [30_000],
+      "D-064: a `Retry-After` value always overrides the schedule upward — the provider asked for a window, and a client " +
+        "that shaves it down is a client that keeps getting 429s",
+    );
+    assert.equal(
+      longer.eventsOfType("provider.retry.scheduled")[0]?.payload.source,
+      "provider-hint",
+    );
+    assert.equal(longer.eventsOfType("provider.retry.scheduled")[0]?.payload.retryAfterMs, 30_000);
+
+    const shorter = createHarness({
+      rounds: [[{ kind: "raw", status: 429, body: "slow down", retryAfterMs: 50 }], doneRound],
+      tools: fileTools(),
+      random: () => 0.5,
+    });
+    await shorter.start();
+    assert.deepEqual(
+      shorter.waits,
+      [1_000],
+      "and a hint shorter than the schedule is ignored rather than honoured",
+    );
+    assert.equal(shorter.eventsOfType("provider.retry.scheduled")[0]?.payload.source, "schedule");
+  });
+
+  it("spends exactly the configured budget, and D-043's floor is a schema minimum rather than a comment", async () => {
+    const harness = createHarness({
+      rounds: [[{ kind: "fail", class: "overloaded" }]],
+      tools: fileTools(),
+      limits: { providerAttempts: 5 },
+      random: () => 0.5,
+    });
+    const outcome = await harness.start();
+
+    assert.equal(outcome.kind, "failed");
+    const payload = harness.payloadOf("task.failed");
+    assert.equal(payload?.attempts, 5, "five attempts and no sixth: the budget is the caller's");
+    assert.deepEqual(
+      harness.waits,
+      [1_000, 2_000, 4_000, 8_000],
+      "four waits between five attempts",
+    );
+    assert.match(
+      String(payload?.ladder),
+      /D-044/,
+      "the event names the rung that is not built — ask the user which model to use instead — so a reader knows the ladder " +
+        "ended rather than broke",
+    );
+    assert.equal(LOOP_LIMITS.providerAttempts, LIMITS_DEFAULTS.providerAttempts);
+    assert.equal(
+      LOOP_LIMITS.providerAttempts,
+      MAX_ATTEMPTS,
+      "the loop's default is the provider package's, not a copy",
+    );
+    assert.equal(
+      validate(LimitsConfig, { providerAttempts: 4 }).ok,
+      false,
+      "D-043 says *at least* five attempts, so the configurable half may lengthen the ladder or shorten it to the floor and " +
+        "no further — a knob that could turn the ladder off would be a knob against the decision",
+    );
+    assert.equal(validate(LimitsConfig, { providerAttempts: 5 }).ok, true);
+  });
+
+  it("stops climbing when a cancellation arrives during the backoff, and ends cancelled rather than failed", async () => {
+    const harness = createHarness({
+      rounds: [[{ kind: "fail", class: "rate-limit" }], doneRound],
+      tools: fileTools(),
+      random: () => 0.5,
+      wait: async () => {
+        // The user stops the task while the loop waits out a rung, which is the moment a 16 s backoff is most obviously a
+        // step the runtime should not schedule.
+        harness.cancel({ mode: "finish-step", reason: "stop retrying" });
+      },
+    });
+    const outcome = await harness.start();
+
+    assert.equal(
+      outcome.kind,
+      "cancelled",
+      "§6.1's step 2 applies to a retry, because a retry is scheduled work",
+    );
+    assert.equal(harness.task()?.state, "cancelled");
+    assert.equal(harness.provider.calls.length, 1, "and the second attempt was never made");
+    assert.equal(harness.eventsOfType("provider.retry.attempt").length, 0);
+    const evidence = outcome.kind === "cancelled" ? outcome.evidence : undefined;
+    assert.equal(
+      evidence?.inFlight,
+      "none",
+      "nothing was in flight: the ladder was between attempts",
+    );
+    assert.equal(evidence?.effectsUncertain, false);
+  });
+
+  it("never retries a tool step, because no tool declares itself idempotent", async () => {
+    const harness = createHarness({
+      rounds: [readRound, doneRound],
+      tools: [
+        {
+          name: "file.read",
+          parameters: PATH_ARGS,
+          ok: false,
+          output: "the read failed",
+          code: "io",
+        },
+      ],
+    });
+    const outcome = await harness.start();
+
+    assert.equal(
+      outcome.kind,
+      "completed",
+      "the tool failed, the model was told, and the task finished",
+    );
+    assert.equal(
+      harness.executions.length,
+      1,
+      "§7.3: a step whose effect is unknown is re-asked, never blindly repeated — and with `idempotent` in " +
+        "`PENDING_RECORD_FIELDS` the answer is always re-ask",
+    );
+    assert.equal(
+      harness.eventsOfType("provider.retry.scheduled").length,
+      0,
+      "the ladder is for provider calls",
+    );
+    assert.equal(harness.payloadOf("tool.execution.failed")?.code, "io");
+    const secondRound = harness.provider.calls[1]?.messages as { role: string; content: string }[];
+    assert.ok(
+      secondRound.some(
+        (message) => message.role === "tool" && message.content === "the read failed",
+      ),
+      "the failure is the tool's answer to the model, which is how a plan gets revised around it (§3.2)",
     );
   });
 

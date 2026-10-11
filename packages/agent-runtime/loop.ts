@@ -29,9 +29,11 @@
 //
 //   - **No tools.** `ToolSurface` is the seam `ARCHITECTURE.md` §18's `packages/tools` will implement; nothing in this
 //     build can execute a `file.write`, so the loop offers the model only what an executor declares it can run.
-//   - **No retry ladder.** A provider error fails the task on the first error, and the event says that no retry was
-//     attempted. D-043's five attempts inside D-064's schedule and jitter, and the `provider.retry.*` events, are their
-//     own slice.
+//   - **No second ladder rung.** D-043's stage 1 is here — the same model and provider, transient classes only, on D-064's
+//     schedule with its jitter, `Retry-After` overriding upward, and a `provider.retry.*` event per rung. D-044's stage 2
+//     (ask the user which model to use instead, then resume from the checkpoint) is not, because it needs a checkpoint and
+//     a switch surface; a budget exhausted therefore fails the task and says how many attempts it took. Tool steps are
+//     never retried at all — see `callProvider` for why that is §7.3's answer and not an omission.
 //   - **No cancellation policy of its own** — that is `cancellation.ts`, added in the next slice (M2e). This loop supplies
 //     what only the party running a step can know: what was in flight, and whether the step reported back or was walked
 //     away from. It stops scheduling steps the moment a request is recorded (§6.1's step 2, and the MUST NOT that follows
@@ -74,6 +76,8 @@ import {
   type ProviderMessage,
   type ProviderToolCall,
   type ProviderToolSpec,
+  retryDelayMs,
+  shouldRetry,
 } from "@crabby/providers";
 import type { ApprovalRecord, Approvals } from "./approvals.ts";
 import type { CancellationEvidence, CancellationGate } from "./cancellation.ts";
@@ -101,6 +105,10 @@ export interface LoopLimits {
   /** D-090: how long an `immediate` cancellation waits for a step that will not stop, before it stops waiting and records
    *  §6.2's uncertainty instead. `finish-step` gets no second clock. */
   readonly cancellationSettleMs: number;
+  /** D-043's attempt budget, as `limits.providerAttempts` in `config.json` — whose schema floors it at 5, because D-043's
+   *  sentence is "at least 5 attempts per failing stage (configurable)" and the configurable half may not be used to
+   *  configure the ladder out of existence. */
+  readonly providerAttempts: number;
   /** Per-tool deadlines in milliseconds, keyed by tool name — the `limits.*` overrides D-074 promises are editable in
    *  `config.json`. An override wins over the class default; a tool with neither runs under the caller's signal alone. */
   readonly toolDeadlines?: Readonly<Record<string, number>> | undefined;
@@ -118,6 +126,7 @@ export const LOOP_LIMITS: LoopLimits = {
   netFetchTimeoutMs: LIMITS_DEFAULTS.netFetchTimeoutMs,
   shellRunTimeoutMs: LIMITS_DEFAULTS.shellRunTimeoutMs,
   cancellationSettleMs: LIMITS_DEFAULTS.cancellationSettleMs,
+  providerAttempts: LIMITS_DEFAULTS.providerAttempts,
   refusalsBeforePause: 2,
 };
 
@@ -260,6 +269,12 @@ export interface LoopDeps {
   readonly cancellation?: CancellationGate | undefined;
   readonly limits?: Partial<LoopLimits> | undefined;
   readonly now?: (() => number) | undefined;
+  /** D-064's jitter source, injected for the reason `now` is: a jittered schedule a test cannot pin is a schedule nobody
+   *  verifies, and "±25%" is a claim about bounds rather than a vibe. */
+  readonly random?: (() => number) | undefined;
+  /** The backoff wait, injected so a ladder test does not spend 31 real seconds proving five delays were computed. The
+   *  default is abortable, because a wait that ignores a cancellation is a wait the user cannot end. */
+  readonly wait?: ((ms: number, signal?: AbortSignal | undefined) => Promise<void>) | undefined;
 }
 
 export interface Loop {
@@ -285,6 +300,24 @@ interface ProviderTurn {
   readonly toolCalls: readonly ProviderToolCall[];
   readonly usage: { inputTokens: number; outputTokens: number };
   readonly finishReason: string;
+}
+
+/** The default backoff: a sleep that ends when the signal does, because a wait that ignores a cancellation is a wait the
+ *  user cannot end — and D-064's longest rung is 16 s, which is a long time to hold a task nobody can stop. */
+async function waitFor(ms: number, signal?: AbortSignal | undefined): Promise<void> {
+  if (ms <= 0) return;
+  if (signal?.aborted) return;
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort(): void {
+      clearTimeout(timer);
+      resolve();
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /** §4.4's "an adapter receives only tools policy has already cleared", applied to the *offer* list and not only to the
@@ -328,6 +361,8 @@ export function withheldReason(
 export function createLoop(deps: LoopDeps): Loop {
   const limits: LoopLimits = { ...LOOP_LIMITS, ...(deps.limits ?? {}) };
   const now = deps.now ?? ((): number => Date.now());
+  const random = deps.random ?? Math.random;
+  const wait = deps.wait ?? waitFor;
   const { journal, approvals, provider, tools, publish } = deps;
 
   // ------------------------------------------------------------------ write phases
@@ -479,9 +514,87 @@ export function createLoop(deps: LoopDeps): Loop {
     }
   }
 
+  /** D-043's ladder stage 1: the same model, the same provider, up to `limits.providerAttempts` attempts, transient
+   *  classes only, on D-064's schedule with its jitter, and a provider's own `Retry-After` overriding the schedule
+   *  *upward*. Never a silent model switch — D-044's ask-the-user half is the next rung and is not built, so a budget
+   *  exhausted is a failure that says how many attempts it took.
+   *
+   *  Retrying a provider call needs no reconciliation, and that is a fact worth stating rather than assuming: §9.2 asks
+   *  the runtime to establish whether an operation succeeded before retrying a step that may have had an external side
+   *  effect, and a completion request has none on the user's device beyond the provider having seen a prompt it was
+   *  already sent (the same classification D-089 makes for cancellation). A *tool* step is the opposite case and this loop
+   *  never retries one: no tool declares `idempotent` (`PENDING_RECORD_FIELDS`), so §7.3's answer is always "re-ask rather
+   *  than repeat", and a failed tool result goes back to the model to plan around. */
   async function callProvider(
     state: RunState,
     offered: readonly ProviderToolSpec[],
+  ): Promise<
+    | { ok: true; turn: ProviderTurn; attempts: number }
+    | { ok: false; error: unknown; attempts: number }
+  > {
+    let attempt = 0;
+    for (;;) {
+      attempt += 1;
+      try {
+        return {
+          ok: true,
+          turn: await oneProviderCall(state, offered, attempt),
+          attempts: attempt,
+        };
+      } catch (error) {
+        const retryable =
+          error instanceof ProviderError &&
+          shouldRetry(error, attempt, limits.providerAttempts) &&
+          // §6.1's step 2 applies to a retry as much as to a step: a retry is scheduled work, and a cancellation asked for
+          // no more of it. Waiting out a 16 s backoff for a task the user has already stopped is the ladder doing exactly
+          // what §6.3 accuses a loop of doing.
+          deps.cancellation?.requested(state.input.taskId) === undefined &&
+          state.input.signal?.aborted !== true;
+        if (!retryable) return { ok: false, error, attempts: attempt };
+
+        const providerError = error as ProviderError;
+        const delay = retryDelayMs(attempt, providerError.retryAfterMs, random);
+        phase(state.input.taskId, state.input.correlationId, (emit) => {
+          emit(
+            "provider.retry.scheduled",
+            {
+              attempt,
+              maxAttempts: limits.providerAttempts,
+              delayMs: delay.ms,
+              source: delay.source,
+              class: providerError.class,
+              reason: providerError.message,
+              ...(providerError.retryAfterMs === undefined
+                ? {}
+                : { retryAfterMs: providerError.retryAfterMs }),
+            },
+            now(),
+          );
+        });
+        await wait(delay.ms, state.input.signal);
+        // A cancellation may have arrived during the backoff, and the wait returns early when it does; asking the provider
+        // again after that would be the step §6.1 forbids scheduling.
+        if (
+          deps.cancellation?.requested(state.input.taskId) !== undefined ||
+          state.input.signal?.aborted
+        ) {
+          return { ok: false, error, attempts: attempt };
+        }
+        phase(state.input.taskId, state.input.correlationId, (emit) => {
+          emit(
+            "provider.retry.attempt",
+            { attempt: attempt + 1, class: providerError.class, waitedMs: delay.ms },
+            now(),
+          );
+        });
+      }
+    }
+  }
+
+  async function oneProviderCall(
+    state: RunState,
+    offered: readonly ProviderToolSpec[],
+    attempt: number,
   ): Promise<ProviderTurn> {
     const { value } = await withDeadline(
       async (signal) => {
@@ -496,6 +609,7 @@ export function createLoop(deps: LoopDeps): Loop {
             requestId: newId("req"),
             timeoutMs: limits.providerCallMs,
             taskId: state.input.taskId,
+            attempt,
           },
         );
         return {
@@ -511,7 +625,7 @@ export function createLoop(deps: LoopDeps): Loop {
         throw new ProviderError(
           "timeout",
           `the provider call passed D-074's absolute ceiling of ${limits.providerCallMs} ms`,
-          {},
+          { attempt },
         );
       },
     );
@@ -855,12 +969,9 @@ export function createLoop(deps: LoopDeps): Loop {
       if (stopping !== undefined) return stopping;
 
       const offered = offeredTools(current.subject);
-      let turn: ProviderTurn;
-      try {
-        turn = await callProvider(current, offered);
-      } catch (error) {
-        return providerFailure(current, error);
-      }
+      const round = await callProvider(current, offered);
+      if (!round.ok) return providerFailure(current, round.error, round.attempts);
+      const turn = round.turn;
 
       if (turn.toolCalls.length === 0) return complete(current, turn);
       if (turn.toolCalls.length > limits.toolCallsPerResponse) {
@@ -932,7 +1043,7 @@ export function createLoop(deps: LoopDeps): Loop {
     return { kind: "completed", task: currentTask(taskId), steps: state.steps, text: turn.text };
   }
 
-  function providerFailure(state: RunState, error: unknown): LoopOutcome {
+  function providerFailure(state: RunState, error: unknown, attempts: number): LoopOutcome {
     const at = now();
     const taskId = state.input.taskId;
     const providerError = error instanceof ProviderError ? error : undefined;
@@ -956,6 +1067,15 @@ export function createLoop(deps: LoopDeps): Loop {
       });
       return { kind: "cancelling", task: currentTask(taskId), reason };
     }
+    // A cancellation recorded while the ladder was waiting, or between attempts, means the user stopped this task: the
+    // provider's error is why the ladder was climbing, and reporting `failed` would tell the user the wrong thing
+    // happened. Nothing was in flight at this point, so the evidence is the easy case.
+    const stopping = cancelledWith(state, {
+      terminated: true,
+      effectsUncertain: false,
+      inFlight: "none",
+    });
+    if (stopping !== undefined) return stopping;
     const code = providerError === undefined ? "provider.error" : `provider.${providerError.class}`;
     const reason =
       providerError === undefined
@@ -968,11 +1088,16 @@ export function createLoop(deps: LoopDeps): Loop {
       providerError === undefined ? "internal" : "provider",
       state.input.correlationId,
       {
-        // Naming the absence is the point: a reader of this event knows the task failed on the first error and that
-        // D-043's ladder is not wired yet, rather than wondering whether five attempts happened somewhere.
-        retried: false,
+        // How many attempts the ladder actually made, so a reader does not have to guess whether the budget was spent or
+        // the class was never retryable. D-044's half — ask the user which model to use instead, then resume from the
+        // checkpoint — is the rung after this one, and saying so is the difference between "we gave up" and "we ran out of
+        // ladder and the next rung is not built".
+        attempts,
+        retried: attempts - 1,
         ladder:
-          "D-043's retry ladder is not in this build; the task failed on the first provider error",
+          attempts > 1
+            ? `D-043's ladder spent ${attempts} attempts; D-044's ask-which-model-instead is not in this build, and there is no checkpoint to resume from`
+            : "the class is not retryable, so D-043's ladder did not start (§9.2: invalid requests and denied permissions must not be retried)",
         ...(providerError === undefined ? {} : { retryable: providerError.retryable }),
       },
     );

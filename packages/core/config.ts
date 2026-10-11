@@ -35,6 +35,11 @@ export const LimitsConfig = Type.Object(
     // and `additionalProperties: false` is what would make it false.
     stepsPerTask: Type.Optional(Type.Integer({ minimum: 1 })),
     cancellationSettleMs: Type.Optional(Type.Integer({ minimum: 1 })),
+    // D-043's "at least 5 attempts per failing stage (configurable)": the floor is in the schema, so the configurable
+    // half of that sentence cannot be used to configure the ladder out of existence. The default is `MAX_ATTEMPTS` from
+    // `packages/providers`' schedule (6 = one attempt plus the five delays D-064 priced), and a test asserts the two
+    // agree rather than letting this file remember the number.
+    providerAttempts: Type.Optional(Type.Integer({ minimum: 5, maximum: 32 })),
   },
   { additionalProperties: false },
 );
@@ -65,6 +70,7 @@ export const LIMITS_DEFAULTS = {
   queuedTasksBeforeRefusal: 5,
   stepsPerTask: 25,
   cancellationSettleMs: 5_000,
+  providerAttempts: 6,
 } as const satisfies LimitsConfig;
 
 export const DEFAULT_CONFIG: ConfigFile = { limits: { ...LIMITS_DEFAULTS } };

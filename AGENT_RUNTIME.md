@@ -448,6 +448,33 @@ Repeated failures SHOULD trigger an alternative strategy only when that strategy
 
 The Agent MUST NOT bypass security restrictions merely to make a failed task succeed.
 
+**Implemented in M2 (D-094).** The ladder is `packages/agent-runtime/loop.ts`'s provider path, and every number in it was
+already decided: D-043's floor of five attempts per failing stage, D-064's `1s, 2s, 4s, 8s, 16s` with ±25% jitter, a
+`Retry-After` value overriding the schedule *upward* and never downward, and `packages/providers`' `shouldRetry` deciding
+which classes are transient — the loop calls that function rather than restating it, so there is one opinion in the codebase
+about what is retryable. Three things about the wiring are decisions rather than details.
+
+- **The ladder retries provider calls and never tool steps.** The sentence above about establishing whether an operation
+  succeeded applies to a step that may have had an external side effect; a completion request has none on the user's device
+  beyond the provider having seen a prompt it was already sent (the same classification D-089 makes for cancellation). A
+  tool step is the opposite case, and no tool declares `idempotent` (`PENDING_RECORD_FIELDS`), so §7.3's answer is always
+  "re-ask rather than repeat": a failed tool result goes back to the model as that tool's answer, which is how §3.2's plan
+  revision happens rather than how a retry loop starts.
+- **A retry is scheduled work, so §6.1 stops it.** A cancellation recorded during a backoff ends the ladder at once and the
+  task settles as `cancelled` rather than `failed`, because waiting out a 16 s rung for a task the user has already stopped
+  is exactly the behaviour §6.3 accuses a loop of.
+- **The budget is a `limits.*` key with D-043's floor in the schema.** `limits.providerAttempts` defaults to `MAX_ATTEMPTS`
+  (6 — one attempt plus the five delays D-064 priced) and cannot be set below 5, because "at least 5 attempts
+  (configurable)" states a floor and not a suggestion; a knob that could turn the ladder off would be a knob against the
+  decision.
+
+What is **not** here is D-044's rung: after the budget is spent, Crabby asks the user which model to use instead and resumes
+from the checkpoint. There is no checkpoint (D-065's committed step boundary is not implemented) and no switch surface, so an
+exhausted budget fails the task — and the `task.failed` event says how many attempts it took and names the missing rung,
+which is the difference between "we gave up" and "we ran out of ladder". Every rung is logged, `provider.retry.scheduled`
+then `provider.retry.attempt`, because a retry a client cannot see is a retry nobody can bound, and §5.2's `provider.*`
+family exists for exactly that.
+
 ## 10. Task Progress and Observability
 
 ### 10.1 Progress tracking

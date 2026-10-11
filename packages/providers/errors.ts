@@ -121,10 +121,18 @@ export function retryDelayMs(
   return { ms: scheduled, source: "schedule" };
 }
 
-export function shouldRetry(error: ProviderError, attempt: number): boolean {
+/** Whether another attempt is allowed. `maxAttempts` is the caller's budget, defaulting to `MAX_ATTEMPTS` so the
+ *  conformance suite and every adapter agree on one number; D-043's "at least 5 attempts per failing stage (configurable)"
+ *  is what makes it a parameter at all, and `packages/core`'s schema floors the configurable version at 5 so a user can
+ *  lengthen the ladder or shorten it to the documented floor, but not below it. */
+export function shouldRetry(
+  error: ProviderError,
+  attempt: number,
+  maxAttempts: number = MAX_ATTEMPTS,
+): boolean {
   if (error.class === "cancelled") return false;
   if (!error.retryable) return false;
-  return attempt < MAX_ATTEMPTS;
+  return attempt < maxAttempts;
 }
 
 /** The HTTP/status mapping every family shares. Kept as a table, because an adapter's `if (status === 429)` chain is

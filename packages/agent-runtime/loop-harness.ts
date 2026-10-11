@@ -96,6 +96,10 @@ export interface HarnessOptions {
   readonly isTermux?: boolean;
   readonly ctx?: EvalContext;
   readonly limits?: Partial<LoopLimits>;
+  /** D-064's jitter source and the backoff wait, both injected so a ladder test asserts the *schedule* instead of
+   *  sleeping through it: five rungs cost 31 real seconds, and a test that slow is a test nobody runs twice. */
+  readonly random?: () => number;
+  readonly wait?: (ms: number, signal?: AbortSignal | undefined) => Promise<void>;
   readonly modelId?: string;
   readonly models?: readonly string[];
   /** The clock the loop, the arbiter and the events all read. Injectable because D-064's TTLs are the rule under test. */
@@ -133,6 +137,8 @@ export interface Harness {
   readonly published: Event[];
   /** Every state the task record held, in order, so a test asserts the path and not just the destination. */
   readonly states: TaskState[];
+  /** Every backoff the loop asked for, in order. Empty unless a `wait` was injected that records. */
+  readonly waits: number[];
   readonly executions: Execution[];
   readonly provider: Provider & { readonly calls: FakeCall[] };
   /** The §6 manager, wired to the same journal and subscriber as the loop, so a test can request a cancellation from
@@ -162,6 +168,10 @@ export interface Harness {
    *  writes in the same transaction — so a trace from this harness has the same shape as one from the Gateway. */
   answer(approvalId: string, decision: ApprovalDecision, input?: AnswerInput): ApprovalResult;
 }
+
+/** The wait a ladder test does not inject: no sleep at all, so five rungs cost nothing. A test that wants real time
+ *  passes its own. */
+async function defaultWait(_ms: number, _signal?: AbortSignal): Promise<void> {}
 
 /** The fake replays its entire script on every request, which is what makes it a fixture rather than a conversation:
  *  one round of a multi-round task needs one script. So each round gets its own `FakeProvider` and the wrapper supplies
@@ -194,9 +204,13 @@ export function createScriptedProvider(
       // A missing script is an empty round, which the fake answers with its own default text step rather than with an
       // invented reply: the harness never has to guess what a model would have said.
       const one = new FakeProvider({ script: rounds[index] ?? [], models, ...id });
-      const result = await one.generate(request, ctx);
-      calls.push(...one.calls);
-      return result;
+      try {
+        return await one.generate(request, ctx);
+      } finally {
+        // In a `finally`, because a failed attempt is still an attempt: the ladder's whole claim is that it made N calls to
+        // the same model, and a record that only kept the ones that succeeded would prove nothing.
+        calls.push(...one.calls);
+      }
     },
   };
 }
@@ -434,6 +448,11 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.models === undefined ? {} : { models: options.models }),
   });
   const published: Event[] = [];
+  const waits: number[] = [];
+  const recordWait = async (ms: number, signal?: AbortSignal): Promise<void> => {
+    waits.push(ms);
+    await (options.wait ?? defaultWait)(ms, signal);
+  };
   /** One subscriber for both writers — the loop and this harness's `answer()` — so the ordering rule is checked on the
    *  path a real Gateway takes (`POST /api/v1/approvals/{id}/decision` publishes after its transaction commits) and not
    *  only on the loop's. */
@@ -462,6 +481,8 @@ export function createHarness(options: HarnessOptions): Harness {
     // client that has to be told the opposite.
     publish: publishEvent,
     ...(options.limits === undefined ? {} : { limits: options.limits }),
+    ...(options.random === undefined ? {} : { random: options.random }),
+    wait: recordWait,
     now: clock.now,
   });
 
@@ -493,6 +514,7 @@ export function createHarness(options: HarnessOptions): Harness {
     clock,
     events: memory.events,
     published,
+    waits,
     states: memory.states,
     executions: tools.executions,
     provider,

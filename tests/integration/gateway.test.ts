@@ -1173,7 +1173,15 @@ describe("a spawned gateway and a spawned cli (P-003)", () => {
       },
       body: JSON.stringify({ objective: "from a spawned client" }),
     });
-    assert.equal(created.status, 201, await created.text());
+    // The body is read exactly once: `Response.text()` and `Response.json()` both consume it, so a status assertion that
+    // printed the text would leave nothing for the id, and the second read throws "Body is unusable". The parsed object is
+    // what the failure message is built from instead.
+    const createdTask = (await created.json()) as { id: string; state: string };
+    assert.equal(
+      created.status,
+      201,
+      `the Gateway refused the task it was asked to record: ${JSON.stringify(createdTask)}`,
+    );
 
     const shown = runCli(dir, ["task", "ls"]);
     assert.match(
@@ -1186,6 +1194,49 @@ describe("a spawned gateway and a spawned cli (P-003)", () => {
     assert.equal(status.code, 0, status.stdout);
     assert.match(status.stdout, new RegExp(`http://127\\.0\\.0\\.1:${info.port}`));
     assert.match(status.stdout, /tasks +queued 1/);
+
+    // §6.1's stop button, end to end through two spawned processes: the CLI asks, the route records, the manager settles.
+    // A `queued` task has nothing in flight, so the request settles inside `request()` and the answer is already
+    // `cancelled` — which is why this needs no polling, and why the assertion is about the printed evidence rather than
+    // about waiting. The three facts a user has to judge are on one line because §6.2 asks for them together: whether the
+    // operation stopped, and whether an external effect is in doubt.
+    const cancel = runCli(dir, ["task", "cancel", createdTask.id]);
+    assert.equal(cancel.code, 0, cancel.stdout);
+    assert.match(
+      cancel.stdout,
+      /^state +cancelled$/m,
+      "a queued task settles at once (§6.1 step 3)",
+    );
+    assert.match(
+      cancel.stdout,
+      /finish-step · confirmed stopped · no external effect in doubt/,
+      "§6.2's evidence has to reach the screen that asked, not only the record",
+    );
+    assert.ok(
+      !cancel.stdout.includes("may still be running"),
+      "the line that means work might continue must not appear when the manager confirmed it stopped",
+    );
+
+    const afterCancel = runCli(dir, ["task", "ls", "--json"]);
+    assert.equal(afterCancel.code, 0, afterCancel.stdout);
+    const listedAfter = JSON.parse(afterCancel.stdout) as {
+      items: { id: string; state: string; cancellation?: { settledAt?: string } }[];
+    };
+    const settledTask = listedAfter.items.find((item) => item.id === createdTask.id);
+    assert.equal(
+      settledTask?.state,
+      "cancelled",
+      "a cancellation requested through the CLI must be readable through the CLI, by every interface alike",
+    );
+    assert.ok(
+      typeof settledTask?.cancellation?.settledAt === "string",
+      "D-091: present without `settledAt` means requested-not-settled, and this one settled",
+    );
+    const statusAfter = runCli(dir, ["status"]);
+    assert.ok(
+      !/tasks +queued 1/.test(statusAfter.stdout),
+      "`crabby status` prints the queue a user acts on, so a settled task must leave it",
+    );
 
     // C10-04's row, end to end: a spawned CLI asking a spawned Gateway for the registry. `tools ls --json` is the
     // machine form of the same answer the Web's tools pane will render in M3, and this is the test that says the two

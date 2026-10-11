@@ -1,7 +1,16 @@
-// `crabby task ls|show` — reads over the same HTTP surface a phone uses, never into SQLite (`ARCHITECTURE.md` §19).
+// `crabby task ls|show|cancel` — reads and writes over the same HTTP surface a phone uses, never into SQLite
+// (`ARCHITECTURE.md` §19). `cancel` is here because §6 has a route behind it and a stop button that only three of four
+// interfaces had would be the "one behaviour, four surfaces" rule broken where it matters most.
 // `task run` is not here: creating a task that no runtime will move is the placeholder work the owner asked me not to
 // do, so the verb stays `planned` in the registry until the milestone that gives it an executor.
-import { EXIT, type ExitCode, type TaskCheckpoint, type TaskRecord } from "@crabby/api-contracts";
+import {
+  CANCELLATION_MODES,
+  type CancellationMode,
+  EXIT,
+  type ExitCode,
+  type TaskCheckpoint,
+  type TaskRecord,
+} from "@crabby/api-contracts";
 import { GatewayFailure } from "@crabby/gateway";
 import type { DataLayout } from "@crabby/platform";
 import { parseTail } from "../args.ts";
@@ -9,7 +18,7 @@ import { connect, reportFailure, reportNoGateway } from "../connect.ts";
 import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
 
-export type TaskVerb = "ls" | "show";
+export type TaskVerb = "ls" | "show" | "cancel";
 
 export async function runTask(
   verb: TaskVerb | undefined,
@@ -22,6 +31,21 @@ export async function runTask(
   if (tail.unknown.length > 0) {
     renderer.line("unknown flag(s)", tail.unknown.join(" "));
     renderer.fix(`${(spec?.flags ?? []).join(" ")} are what this verb accepts`);
+    return EXIT.usage;
+  }
+  // Answered before the Gateway is asked about, because §7.1's exit-code contract is about the command and not about the
+  // process it would have talked to: a malformed `task cancel` is a usage question (exit 2) whether or not a Gateway is
+  // running, and answering it afterwards would make the same typo exit 1 on a machine whose Gateway is down. The checks
+  // read `tail`, which `parseTail` already produced, so nothing here needs a connection.
+  const cancelId = verb === "cancel" ? tail.positionals[0] : undefined;
+  if (verb === "cancel" && cancelId === undefined) {
+    renderer.line("task cancel", "which task? `crabby task ls` prints the ids");
+    return EXIT.usage;
+  }
+  const cancelMode = verb === "cancel" ? tail.values.mode : undefined;
+  if (cancelMode !== undefined && !CANCELLATION_MODES.includes(cancelMode as CancellationMode)) {
+    renderer.line("bad --mode", `"${cancelMode}" is not a cancellation mode`);
+    renderer.fix(`${CANCELLATION_MODES.join(" | ")} — leaving it off asks for §6.1's finish-step`);
     return EXIT.usage;
   }
   const connection = await connect(layout);
@@ -133,7 +157,61 @@ export async function runTask(
     }
   }
 
-  renderer.line("task", "which verb? `ls` or `show`");
+  if (verb === "cancel" && cancelId !== undefined) {
+    // `cancelId` and `cancelMode` are read from the checks above `connect`, which already refused an absent id and an
+    // unknown mode at the usage exit code. Re-deriving them here would be a second copy of one rule, and the two copies
+    // would eventually disagree about which of them answers first.
+    const id = cancelId;
+    const mode = cancelMode;
+    const reason = tail.values.reason;
+    try {
+      const response = await connection.client.cancelTask(id, {
+        ...(mode === undefined ? {} : { mode: mode as CancellationMode }),
+        ...(reason === undefined ? {} : { reason }),
+      });
+      const task = response.body as TaskRecord;
+      renderer.line("id", task.id);
+      renderer.line("state", task.state);
+      // §6.2's two facts, printed the way `task show` prints them so one screen does not contradict the other. The
+      // distinction that has to survive is `cancelling` from `cancelled`: a request recorded but not settled is D-090's
+      // present-without-`settledAt`, and a user who reads it as stopped would walk away from work still running.
+      const cancellation = task.cancellation;
+      if (cancellation === undefined) {
+        renderer.line("cancellation", "none recorded — the task is not stopping");
+      } else if (cancellation.settledAt === undefined) {
+        renderer.line(
+          "cancellation",
+          `${cancellation.mode} requested, not settled — a step is still finishing; ` +
+            "`crabby task show` prints the evidence when it lands",
+        );
+      } else {
+        renderer.line(
+          "cancellation",
+          `${cancellation.mode} · ${
+            cancellation.terminated ? "confirmed stopped" : "may still be running"
+          } · ${
+            cancellation.effectsUncertain
+              ? "external effects uncertain"
+              : "no external effect in doubt"
+          }`,
+        );
+      }
+      if (cancellation?.inFlight !== undefined && cancellation.inFlight !== "none")
+        renderer.line(
+          "in flight",
+          `${cancellation.inFlight} — which is why the answer about effects is the one above (D-089)`,
+        );
+      if (task.state === "cancelling")
+        renderer.fix(
+          "`--mode immediate` is §6.2's override if finishing the step is not acceptable",
+        );
+      return renderer.done({ ...task });
+    } catch (error) {
+      return reportFailure(renderer, error);
+    }
+  }
+
+  renderer.line("task", "which verb? `ls`, `show` or `cancel`");
   return EXIT.usage;
 }
 

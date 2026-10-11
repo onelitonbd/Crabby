@@ -367,6 +367,29 @@ a missing file: a run started from a route would take its grants from `Identity.
 that column, and a run holding no grants would be refused every tool it proposed. `crabby task run` and `crabby task cancel`
 are therefore not `ready` in §8 even though the cancellation route they would call is real and tested.
 
+The seventeenth slice writes the command the previous two slices made possible: `crabby task cancel <id>`, with `--mode`
+and `--reason`, `ready` in the registry because the rule that decides that word is whether a route stands behind the verb
+and `POST /api/v1/tasks/{id}/cancel` has stood behind it since the fifteenth slice. It closes the two claims above it —
+`crabby task cancel` was `planned` at the fifteenth slice only because the command was unwritten, and the sixteenth's "still
+absent" paragraph named it alongside `task run`; only `task run` is still absent now, and for F-52's reason rather than for
+want of typing. Three things the slice turned up are recorded because they were bugs rather than details. **The registry held
+two entries for one verb** — the new `ready` one and a `planned` one left from M1b whose milestone, "cancellation manager",
+had been delivered two slices earlier — so `--help` printed `task cancel` twice, once as ready and once as planned, and
+whichever `findCommand` reached first decided which flags the verb accepted. **Argument validation ran after the Gateway was
+contacted**, so a malformed cancel on a machine whose Gateway was down exited `1` (failure) instead of `2` (usage); §7.1's
+exit codes are a contract about the command, not about the process it would have talked to, and the checks now run before
+`connect`. **`task show` still has that ordering flaw**, and is left with it named rather than quietly fixed in a slice about
+cancellation. The command prints §6.2's evidence on one line — mode, whether the operation stopped, whether an external
+effect is in doubt — because those three facts are what a user judges a cancellation by, and `cancelling` prints as
+*requested, not settled* rather than as a stop, since D-090/D-091 make present-without-`settledAt` mean the former.
+`tests/integration/gateway.test.ts`'s spawned-gateway-and-CLI test now cancels a real task across two real processes and
+reads the settled record back through `task ls --json`, which is the assertion that makes "four interfaces, one behaviour" a
+tested claim for this verb rather than an aspiration.
+
+**Still absent: the handoff, and now only the handoff.** `crabby task run` stays `planned` for F-52's reason — nothing writes
+`Identity.capabilities`, so a run started from a route would hold no grants — and with `cancel` written, cancellation is the
+whole of §6 that four interfaces can reach today: request and report, never drive.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

@@ -122,6 +122,18 @@ export const COMMANDS: readonly CommandSpec[] = [
     status: "ready",
   },
   {
+    // `ready` because the rule this registry states is that a verb is listed only when it has a route behind it, and
+    // `POST /api/v1/tasks/{id}/cancel` has one, tested end to end. The flags are §6.1's two phases and §6.2's override:
+    // `--mode immediate` is the override that must beat finish-the-current-step, and `--reason` is the sentence that goes
+    // on the record with the request. Leaving `--mode` off is the common case and the safe one, which is why the route
+    // defaults it rather than demanding a choice at a moment a user is trying to stop something.
+    noun: "task",
+    verb: "cancel",
+    summary: "ask a task to stop (§6.1), and print whether it did and what is in doubt (§6.2)",
+    flags: ["--mode M", "--reason R", "--json"],
+    status: "ready",
+  },
+  {
     noun: "diagnostics",
     summary: "write the sanitized report the Web's Export button produces, and print where it went",
     flags: ["--json"],
@@ -140,8 +152,13 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: "create a task and follow it (blocks; `--detach` for scripts)",
     flags: ["--json", "--detach"],
     status: "planned",
+    // The milestone moved, and saying so precisely is the point of the field: the loop, a runner (M2n), an executor
+    // (M2k) and a provider adapter (M2l) all exist now, so the missing piece is no longer any of them. What is missing is
+    // that nothing composes the runner into `POST /api/v1/tasks`, because no code writes `Identity.capabilities` and a run
+    // started from a route would hold no grants and be refused every tool it proposed (F-52). A `crabby task run` built
+    // before that is decided would print a task id and then watch it sit in `queued`.
     milestone:
-      "M2 (the loop is in packages/agent-runtime; a runner, tools and a provider adapter are not)",
+      "M2 (the runner exists; nothing composes it, because capabilities are not assigned at pairing — F-52)",
   },
   {
     noun: "chat",
@@ -158,14 +175,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     status: "planned",
     milestone: "M2 (event delivery and gap handling)",
   },
-  {
-    noun: "task",
-    verb: "cancel",
-    summary: "ask for cancellation and report the settled state",
-    flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (cancellation manager)",
-  },
+
   {
     noun: "task",
     verb: "resume",

@@ -345,6 +345,7 @@ terminal:
 | --- | --- |
 | `task run "…"` | **Blocks**, printing `task <id>` and the `task resume <id>` line first, so a dropped SSH session loses nothing. `--detach` is the script path. |
 | `task watch <id> --json` | **NDJSON**: one event per line, each carrying the per-task `seq` (§5.4) so a script notices a gap the way a browser does. A `--json` snapshot stays one document. |
+| `task cancel <id>` | **Asks, then reports** — it never claims a stop it did not see. Default mode is §6.1's finish-the-current-step; `--mode immediate` is §6.2's override and `--reason R` goes on the record with the request. `cancelling` prints as *requested, not settled* and `cancelled` prints §6.2's two facts (stopped, and whether an external effect is in doubt), because D-090/D-091 make present-without-`settledAt` mean requested and a user who reads that as stopped walks away from work still running. **Exit `2`** for a bad mode or a missing id, answered without consulting the Gateway; **exit `1`** for a refusal, carrying the manager's own reason verbatim. A second cancel of one task returns the request already recorded rather than an error. |
 | Approval needed, no answer reachable | **Exit `3`** immediately. `--wait-approval <n>` is the opt-in to keep waiting, and only that; a command that silently blocks inside a cron job is an outage that waits to be discovered. |
 
 ### 7.2 TUI

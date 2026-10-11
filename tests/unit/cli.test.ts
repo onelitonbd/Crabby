@@ -479,3 +479,63 @@ test("`doctor` names the model an install selected, and the provider that compos
   assert.equal(checkIn(payload, "model")?.status, "ok");
   assert.equal(checkIn(payload, "model")?.summary, "local/qwen2.5:3b");
 });
+
+// `task cancel` is the first verb this file asserts *writes* rather than reads, so the assertions are about the two
+// ways a stop button can lie: claiming a mode it does not understand, and claiming a Gateway that is not there. The
+// end-to-end half — a real cancel reaching a real route — lives in tests/integration/gateway.test.ts's spawned-CLI
+// test, because §7.1's promises are about the process and this file is how the process gets tested.
+test("`crabby task cancel` is listed once, as ready, and never as planned", () => {
+  const run = crabby(["--help"]);
+  assert.equal(run.code, 0, run.err);
+  const lines = run.out.split("\n").filter((line) => line.includes("task cancel"));
+  assert.equal(
+    lines.length,
+    1,
+    "two entries for one verb is help that contradicts itself, and `findCommand` would resolve to whichever came first",
+  );
+  const [line] = lines;
+  assert.ok(line !== undefined, "the count above already established one line exists");
+  assert.ok(
+    !line.includes("planned"),
+    "`POST /api/v1/tasks/{id}/cancel` is a real, tested route, so the verb must not advertise a milestone that already delivered it",
+  );
+  assert.match(line, /§6\.1/, "the summary names the section the behaviour comes from");
+});
+
+test("`crabby task cancel` refuses a mode it does not know, at the usage exit code", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["task", "cancel", "task_1", "--mode", "now"], state);
+  assert.equal(run.code, 2, "§7.1 makes 2 the usage code, and a bad mode is a usage question");
+  assert.match(run.out, /bad --mode/);
+  assert.match(
+    run.out,
+    /finish-step \| immediate/,
+    "the fix names both modes §6.2 defines, so the answer is not a second round trip to discover them",
+  );
+});
+
+test("`crabby task cancel` with no id asks which task instead of guessing", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["task", "cancel"], state);
+  assert.equal(run.code, 2);
+  assert.match(run.out, /which task/);
+  assert.match(run.out, /crabby task ls/, "the fix points at the verb that prints the ids");
+});
+
+test("`crabby task cancel` with no Gateway says so rather than reporting a cancellation", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["task", "cancel", "task_1"], state);
+  assert.equal(
+    run.code,
+    1,
+    "a missing Gateway is a failure, not a usage question — the command was well formed",
+  );
+  assert.match(run.out, /gateway/i);
+  assert.ok(
+    !run.out.includes("cancelled"),
+    "the one lie this verb must never print: that a task stopped when nothing was asked",
+  );
+});

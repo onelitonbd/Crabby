@@ -39,6 +39,22 @@ Checkpointing does not guarantee that every external operation can be resumed au
 
 **Decided (D-065).** A checkpoint is written at committed step boundaries, which the task model already defines, so "checkpoint frequency" is not a tuning knob. The resume policy is one conservative rule: resume may pass a step only if that step's tool declares itself idempotent or the step recorded its external effect; anything else re-asks rather than repeating. That is the whole of O-013, and it is what makes "resumes mid-way, never restarts" (D-044) safe to promise.
 
+**Implemented (M2i, D-095).** One row per task, at schema version 4: `packages/storage/checkpoints.ts` owns the table and
+`packages/agent-runtime/checkpoint.ts` owns the rule, and the write happens *inside* the transaction that records the step —
+which is what makes "committed" in that phrase a property rather than an intention, and why there is no checkpoint for a
+step that only started. The record holds the run's working context (redacted on the way in, like every other payload that
+reaches this file), the step count, the model the boundary was written against, and the sequence number the event store had
+reached when it committed; it holds **no grants and no action arguments**, because a record that could restore authority
+would turn §7.2's "automatic orchestration of recovery, not automatic authorization" into a sentence about a field, and a
+second copy of an approved action would be an action the arbiter never saw. D-065's rule above is computed when somebody
+reads it — from the boundary, the task's state and the log tail after the boundary's sequence number — and its four answers
+are `RESUME_VERDICTS` in the contract. That reading is also what makes a lagging boundary safe: a step that started and
+never reported needs no second record, because the missing outcome *is* the evidence. What a client sees is
+`GET /tasks/{id}/checkpoint`, which reports the boundary, its size and the verdict and not the transcript; what a runner
+would use is the record itself, read in its own process. The row leaves with the task by `ON DELETE CASCADE`, which is §7's
+deletion rule applied to a category §8.2 lists separately — in a build with no conversation store, a checkpoint that
+outlived its task would quietly *become* one.
+
 ### 2.3 Long-Term Memory
 
 Crabby uses a hybrid memory approach (D-019):
@@ -101,7 +117,7 @@ neither: those rows are accepted specifications.
 | Conversations and messages | Conversation continuity | Persistent by default |
 | Tool calls and results | Explain execution and preserve context | Persistent where needed for history and recovery |
 | Tasks | Track execution lifecycle | Persistent for recoverable tasks |
-| Checkpoints | Resume work safely | Persistent for supported resumable tasks |
+| Checkpoints | Resume work safely | Persistent for supported resumable tasks — one row per task, replaced at each committed step boundary, redacted on write, and deleted with the task (D-065, D-095) |
 | Events | Recovery, auditing, and debugging | Required records retained; policy open |
 | Approvals | Durable authorization decisions | Persistent while the linked action remains possible |
 | Long-term memories | Reusable context | Persistent, user-controllable |
@@ -137,7 +153,7 @@ The names are here because a name that lives only in code is a name an interface
 | File | Mode | What it is |
 | --- | --- | --- |
 | `config.json` | `0644` | Overrides only; the defaults stay in code (D-074). `AGENTS.md` names this file, so it is listed for completeness. |
-| `crabby.sqlite3` | `0600` dir-inherited | One database: tasks (including §6.2's cancellation evidence, schema version 3), events, client identities, pairing codes, idempotency records, and the approval queue (§6.3, schema version 2). `journal_mode = WAL`, `busy_timeout` from `limits.sqliteBusyTimeoutMs` (D-074). |
+| `crabby.sqlite3` | `0600` dir-inherited | One database: tasks (including §6.2's cancellation evidence, schema version 3), events, client identities, pairing codes, idempotency records, the approval queue (§6.3, schema version 2), and D-065's checkpoint — one row per task, replaced at each committed step boundary, redacted on write (schema version 4). `journal_mode = WAL`, `busy_timeout` from `limits.sqliteBusyTimeoutMs` (D-074). |
 | `crabby.sqlite3-wal`, `crabby.sqlite3-shm` | — | SQLite's own siblings, present while a writer is open. Online backup takes a checkpoint first. |
 | `scratch/<taskId>/` | `0700` | Overflow for a payload past D-064's 64 KiB inline cap, named `<eventId>.json`, pruned at startup past 24 h with the removal logged. One directory per task so a completed task's bytes leave as a unit. |
 | `vault/` | `0700` | D-066's secret store; the only directory whose contents may be referenced by name and never by value in a log line. |
@@ -155,8 +171,10 @@ Proposed repository boundaries:
 - Task and checkpoint repository — the task half is implemented twice over: `tasks.ts` for the record and
   `journal.ts` for the runtime's write seam, which is `TaskJournal` from `packages/agent-runtime` implemented the way
   §19 wants an adapter to implement an abstraction (`transact`/`setState`/`appendEvent` behind four synchronous methods,
-  so the runtime's write phases commit a state and its events together). The checkpoint half is still nobody's, and
-  `AGENT_RUNTIME.md` §6.1's settle event says so rather than implying one was written.
+  so the runtime's write phases commit a state and its events together). The checkpoint half arrived in M2i as
+  `checkpoints.ts` over the `checkpoint` table, with the rule it enforces owned by the runtime's `checkpoint.ts` — so the
+  repository boundary §5 proposed is now real for all three of these categories, and `AGENT_RUNTIME.md` §6.1's settle event
+  reports a boundary that exists instead of naming one that does not.
 - Event repository.
 - Approval repository — implemented as `packages/storage/approvals.ts`, which is `SECURITY.md` §6.3's row plus §17's
   restart property, and which *implements* `ApprovalStore` from `packages/agent-runtime` rather than defining it

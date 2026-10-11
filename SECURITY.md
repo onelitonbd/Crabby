@@ -234,7 +234,7 @@ Denials are recorded and respected; the agent must not rephrase a denied action 
 Requirements (mechanism **selected: D-031** — OS keychain with encrypted-file fallback):
 
 - Secrets live outside the conversation database and outside ordinary configuration files. Never interleave keys with session records that a user might export or share.
-- Redaction is applied at the logging and event-serialization layer, not only at the UI. If an error object can contain a header, the serializer must strip it (see `AGENT_RUNTIME.md` §9.3).
+- Redaction is applied at the logging and event-serialization layer, not only at the UI. If an error object can contain a header, the serializer must strip it (see `AGENT_RUNTIME.md` §9.3). The obligation covers durable payloads that are neither logs nor events: a checkpoint's saved working context is redacted on the way into the database (`docs/DATA_AND_MEMORY.md` §2.2, D-095), because a record a resume reads back is a second chance for a secret to reach a model — and it is why a checkpoint never holds the arguments of an approved action, since a redacted copy of an action is not the action and could not be executed faithfully anyway.
 - Provider keys, bot token, and tunnel credentials must not be sent into model context unless a tool genuinely requires it, and then only via the provider adapter path — the agent should be able to use a credential without reading it.
 - Files containing secrets: owner-only permissions (`0600`), excluded from backups by default, and never included in diagnostics bundles without explicit opt-in.
 - Rotation and revocation must be a documented, one-command user action.

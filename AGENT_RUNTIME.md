@@ -108,6 +108,18 @@ To keep responsibilities from overlapping across `ARCHITECTURE.md`, `SECURITY.md
 | **Cancellation** | A request plus its progression against a running task. | Proof that the underlying external operation actually stopped. |
 | **Checkpoint** | Saved state used to resume safely. | A guarantee that external side effects can be reversed or replayed. |
 
+**Decided in M2 (D-095) — where the checkpoint's owner sits, and what the row refuses to hold.** The owner is
+`packages/agent-runtime/checkpoint.ts`: it commits D-065's boundary at each step the run commits, it commits a second kind
+of boundary when a run suspends at an approval, and it computes the verdict a resume reads. The row holds the run's working
+context — the messages a continuation would be built from — plus the step count, the model, and the sequence number the
+boundary was written at; it holds **no grants and no action arguments**, and that absence is the second column of the table
+above made concrete. A record that could hand back a grant is a record that authorizes, which §7.2 forbids; a record that
+copied an approved action's arguments is an action the arbiter never saw, which §5's rule 4 forbids. The third column is
+honoured the same way: the checkpoint does not promise an effect can be undone, it reports whether the log shows one was
+*recorded*, and where the log is silent the answer is `re-ask`. Nothing in this table is enforced by prose: `verdictFor` is
+one function, its four answers are `RESUME_VERDICTS` in `@crabby/api-contracts`, and `checkpoint.test.ts` asserts each one
+against a sentence above.
+
 ### 4.2 Controlled parallelism
 
 Crabby MUST support controlled parallel execution of independent tasks or steps when dependencies and safety constraints permit it.
@@ -270,8 +282,12 @@ the step knows whether it finished, and the manager writes the outcome once the 
 carries who asked, when, in which mode, and why. Only the `AbortController` for the run in flight is process memory,
 because a signal is not a fact about the task and there is nothing to recover. A second request for one task is the same
 fact relayed again and produces no second event, except when it escalates the mode, which §6.2 requires and the log
-records. Step 5's checkpoint half is named as absent in the settle event rather than omitted: a payload that said nothing
-would read as "there was nothing to save".
+records. Step 5's checkpoint half is real since M2i, and the settle
+event reports it rather than promising it: the boundary was written by the loop inside the phase that recorded the step, so
+the manager's job at the settle is to say **where the run stood** — the step, the boundary kind, its sequence number — or to
+say plainly that no boundary was ever committed, which is the sentence that keeps a payload from reading as "there was
+nothing to save". Reading rather than writing is the point: a second writer of one row is how a resume point comes to
+disagree with the log, and §4.4 already gave the two halves different owners.
 
 **Two modes, because §6.2 requires both.** `finish-step` is this section's policy and the default: the step in flight
 keeps the deadline it was already given (D-074's per-tool number, or the provider's absolute ceiling) and gets no second
@@ -339,12 +355,14 @@ settled rather than resurrected**: the request is on the record (§6.1's step 1,
 settle — that is why D-091 was amended), so recovery moves the task `cancelling` → `cancelled` with §6.2's evidence set to
 the only truthful answer after a crash, `terminated: false`, `effectsUncertain: true` and `inFlight: "unknown"`. Routing it
 through `interrupted` instead would put a task the user asked to stop back in the state a runner resumes from, which is the
-one recovery outcome §6 exists to prevent. **Nothing resumes automatically in this build**, and the report says so per task:
-a run's conversation is process memory and D-065's committed step boundary is not implemented, so §7.3's "recovery may pass
-only a step that is idempotent or has its effect recorded" has nothing to pass. What recovery can do — and does — is leave
-the task paused with a clear, user-visible reason in the `task.interrupted` event, and name the still-valid approval a
-runner *would* be allowed to resume under, so §7.2's permission is a fact on the record instead of something a reviewer has
-to infer. The restart also sweeps the approval queue, because a deadline that passed while the process was dead is expired
+one recovery outcome §6 exists to prevent. **Nothing resumes automatically in this build**, and the report says so per task.
+The saved state is no longer the missing piece — M2i made D-065's boundary durable and recovery reads its verdict — and what
+is missing is the party that would use it: nothing in this Gateway drives a task, so §7.1's "attempt to resume" is
+orchestration without an executor, and `packages/tools` and a product provider adapter arrive with it. What recovery does —
+and does per task — is leave the task paused with a clear, user-visible reason in the `task.interrupted` event, name the
+still-valid approval a runner *would* be allowed to resume under, and carry D-065's verdict on the boundary (`resume`,
+`pass`, `re-ask` or `none`, with the reason beside it), so §7.2's permission, the saved state and the judgement on it are
+three facts on the record instead of inferences a reviewer has to draw. The restart also sweeps the approval queue, because a deadline that passed while the process was dead is expired
 by the clock and not by anybody's opinion.
 
 ### 7.2 Approval interaction (amended rule)
@@ -357,10 +375,14 @@ Automatic recovery MUST NOT bypass the approval system. Specifically:
 - Where the outcome of an external action is uncertain, blind retry is prohibited (see §7.3).
 - Recovery that cannot proceed safely MUST leave the task paused with a clear, user-visible reason.
 
-Full auto-resume therefore means *automatic orchestration of recovery*, not *automatic authorization*. In this build the orchestration is real and the authorization is empty, which is the honest state of it:
-`packages/agent-runtime/recovery.ts` reports, for each interrupted task, whether a still-valid approval covers it, and
-resumes none — a report whose `resumed` field is the literal `false` rather than a boolean, so no caller can read a
-resumption that did not happen.
+Full auto-resume therefore means *automatic orchestration of recovery*, not *automatic authorization*. In this build the orchestration is real, and what is empty is not the authorization alone:
+`packages/agent-runtime/recovery.ts` reports, for each interrupted task, whether a still-valid approval covers it, D-065's
+verdict on the boundary the run left behind (`resume`, `pass`, `re-ask` or `none`, in the `task.interrupted` payload as well
+as in the report), and resumes none — a report whose `resumed` field is the literal `false` rather than a boolean, so no
+caller can read a resumption that did not happen. Since M2i the saved state a resume would need exists; the party that would
+use it does not, and that is the difference this section's rule is about: even a `resume` verdict is not an authorization,
+and the two documents that could have confused them (§7.1's "MUST attempt to resume" and §3.6's stage 3) are kept apart by
+`verdictFor` being a *reading* of the record rather than an act on it.
 
 ### 7.3 Safe recovery
 
@@ -372,15 +394,31 @@ The runtime SHOULD use idempotency mechanisms, operation identifiers, or externa
 
 If the runtime cannot determine whether retrying an action would cause a duplicate or unsafe effect, it MUST use a defined safe fallback rather than blindly repeating the action. Depending on the action and available evidence, this may mean reconciling state, seeking approval, or pausing that step while automatically recovering other safe work.
 
+**Decided in M2 (D-065, D-095).** The reconciliation is one function — `verdictFor` in
+`packages/agent-runtime/checkpoint.ts` — and its four answers are the contract's `RESUME_VERDICTS`. It reads three things:
+the boundary the run last committed, the task's state now, and the log tail after the boundary's sequence number. Nothing
+after the boundary was left unanswered → `resume`. A `tool.execution.started` with no outcome beside it → `pass` if that
+tool's runtime declares it idempotent or its external effect is on the record (D-065's two permissions, both of which
+belong to `packages/tools`, which does not exist yet: `PENDING_RECORD_FIELDS` lists `idempotent` and `sideEffects` as
+fields the registry cannot answer, so the default declares neither), and `re-ask` otherwise. No boundary at all, or a task
+that has ended → `none`, because §4.1's terminal states are absorbing and a `re-ask` on a finished task would be an offer
+nothing can accept. Two properties of the reading matter more than the answers. **The verdict is computed at read time**,
+never stored: all three inputs can move after the boundary is written, and a stored verdict is a guess in the one field a
+recovery path acts on. **The log is the evidence, not a second record**: a step that started and died without reporting
+needs no checkpoint of its own, because *the missing outcome is the finding* — which is also what makes it safe that a
+provider call, an event-less round, is classified as nothing in flight (D-089's classification, the same one cancellation
+uses).
+
 ### 7.4 Recovery limitations
 
 Task recovery is separate from database transaction recovery. A successfully recovered database does not prove that an interrupted external operation was completed correctly.
 
 Crabby MUST NOT claim that every interrupted task can be resumed without information loss or duplicate side effects.
 
-Checkpoint frequency is not a knob: a checkpoint is written at each committed step boundary (D-065), recovery may
-pass only a step that is idempotent or has its effect recorded, and the retry ladder is D-043's floor with D-064's
-schedule inside it. Recovery verification is the `integrity_check` and the committed-state comparison in
+Checkpoint frequency is not a knob: a checkpoint is written at each committed step boundary (D-065), there is no
+`limits.*` key that makes it less frequent (D-095 writes one row per task and replaces it, because "the latest valid state"
+is what recovery restores), recovery may pass only a step that is idempotent or has its effect recorded, and the retry
+ladder is D-043's floor with D-064's schedule inside it. Recovery verification is the `integrity_check` and the committed-state comparison in
 `docs/DATA_AND_MEMORY.md` §2.2. The per-tool timeout numbers are decided as defaults (D-074, table in
 `PROVIDERS_AND_TOOLS.md` §5.2); what remains is re-measuring them on a device in M0, not choosing them, and none of it
 touches the ordering rules above.
@@ -469,9 +507,13 @@ about what is retryable. Three things about the wiring are decisions rather than
   decision.
 
 What is **not** here is D-044's rung: after the budget is spent, Crabby asks the user which model to use instead and resumes
-from the checkpoint. There is no checkpoint (D-065's committed step boundary is not implemented) and no switch surface, so an
-exhausted budget fails the task — and the `task.failed` event says how many attempts it took and names the missing rung,
-which is the difference between "we gave up" and "we ran out of ladder". Every rung is logged, `provider.retry.scheduled`
+from the checkpoint. The checkpoint is durable now (D-095, and `GET /tasks/{id}/checkpoint` reports the verdict on it), so
+what the rung still waits on is a switch surface to ask on and a runner to answer to — and one more thing the documents
+disagree about: an exhausted budget fails the task, `failed` is terminal and absorbing, and a resume would need an edge out
+of it that §4.1 does not have (F-50). The ordering that reconciles them is D-086's — the exhaustion *pauses* and asks, and
+only an ask that goes unanswered or is refused moves the task to `failed` — which is the runner's slice to implement, not
+this one's to assume. So an exhausted budget fails the task today, and the `task.failed` event says how many attempts it
+took and names the missing rung, which is the difference between "we gave up" and "we ran out of ladder". Every rung is logged, `provider.retry.scheduled`
 then `provider.retry.attempt`, because a retry a client cannot see is a retry nobody can bound, and §5.2's `provider.*`
 family exists for exactly that.
 
@@ -532,7 +574,7 @@ table below states each item's disposition instead of leaving a to-do list that 
 | Definition and granularity of an execution step | §7.3, D-065 | — |
 | Risk scoring, permission policy, approval workflow | §5, `SECURITY.md` §6, D-046 | a new tool's tier at review time, per the same table |
 | Cancellation timeouts and escalation | §6; D-074 | nothing structural; the numbers are `limits.*` keys |
-| Checkpoint format, frequency, persistence | §7.3, D-065 | write cost on device storage (M0 P3) |
+| Checkpoint format, frequency, persistence | §7.3, D-065, D-095 | write cost on device storage (M0 P3) |
 | Restart detection and automatic recovery | §7.1 | Android's process-kill semantics (M0 P7) |
 | Uncertain external side effects | §7.3, §7.4 | — |
 | Idempotency and operation reconciliation | §7.3, tool `idempotent` flag in `PROVIDERS_AND_TOOLS.md` §4 | — |

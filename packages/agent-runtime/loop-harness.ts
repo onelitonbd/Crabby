@@ -13,9 +13,10 @@
 //   - `transact` runs its body and returns. There is no rollback here, so a throw inside a write phase leaves this
 //     journal half-written; atomicity is a property of `packages/storage`'s SQLite transaction and is observable in
 //     `tests/integration`, not in a Map.
-//   - Events are not redacted. Redaction is a write-path concern of the SQLite journal (`SECURITY.md` §7, and
-//     `packages/storage/events.ts` does it on the way in), so a harness that redacted would be asserting a property of
-//     itself.
+//   - Events are not redacted, and neither is the checkpoint. Redaction is a write-path concern of the SQLite adapters
+//     (`SECURITY.md` §7; `packages/storage/events.ts` and `packages/storage/checkpoints.ts` both do it on the way in), so
+//     a harness that redacted would be asserting a property of itself. What the harness *does* assert is the checkpoint's
+//     transaction rule, through `guardCheckpoints`: a boundary written outside a phase throws.
 //   - The executor records. It runs no filesystem, no network and no shell, and it declares only the tools a test gives
 //     it — which is the point: the loop offers the model nothing an executor cannot run.
 //
@@ -56,6 +57,12 @@ import {
   createMemoryApprovalStore,
 } from "./approvals.ts";
 import { type Cancellation, type CancellationMode, createCancellation } from "./cancellation.ts";
+import {
+  type CheckpointRecord,
+  type Checkpoints,
+  createCheckpoints,
+  type StepFacts,
+} from "./checkpoint.ts";
 import type { TaskJournal } from "./journal.ts";
 import {
   createLoop,
@@ -100,6 +107,11 @@ export interface HarnessOptions {
    *  sleeping through it: five rungs cost 31 real seconds, and a test that slow is a test nobody runs twice. */
   readonly random?: () => number;
   readonly wait?: (ms: number, signal?: AbortSignal | undefined) => Promise<void>;
+  /** D-065's two permissions to pass a step that was in flight. Nothing in the build declares either —
+   *  `packages/policy`'s `PENDING_RECORD_FIELDS` lists `idempotent` and `sideEffects` as fields the registry cannot
+   *  answer — so a test that wants the `pass` branch has to supply the declaration and therefore has to say which tool it
+   *  is inventing it for. */
+  readonly stepFacts?: (tool: string) => StepFacts;
   readonly modelId?: string;
   readonly models?: readonly string[];
   /** The clock the loop, the arbiter and the events all read. Injectable because D-064's TTLs are the rule under test. */
@@ -139,12 +151,20 @@ export interface Harness {
   readonly states: TaskState[];
   /** Every backoff the loop asked for, in order. Empty unless a `wait` was injected that records. */
   readonly waits: number[];
+  /** D-065's manager, wired to the same journal and clock as the loop and to the same subscriber, so a test reads the
+   *  verdict the Gateway's route would read. */
+  readonly checkpoints: Checkpoints;
+  /** Every boundary the loop committed, in order. The count is the assertion: one write per committed step, and none for
+   *  a round that only produced text. */
+  readonly checkpointWrites: CheckpointRecord[];
   readonly executions: Execution[];
   readonly provider: Provider & { readonly calls: FakeCall[] };
   /** The §6 manager, wired to the same journal and subscriber as the loop, so a test can request a cancellation from
    *  the outside the way an interface would and watch the loop honour it. */
   readonly cancellation: Cancellation;
   task(): TaskRecord | undefined;
+  /** The latest boundary, or `undefined` when the run never committed one. */
+  checkpoint(): CheckpointRecord | undefined;
   eventsOfType(type: EventType): Event[];
   payloadOf(type: EventType): Record<string, unknown> | undefined;
   pending(): readonly ApprovalRecord[];
@@ -167,6 +187,50 @@ export interface Harness {
   /** Answers through the arbiter the way `POST /api/v1/approvals/{id}/decision` does, and writes the event that route
    *  writes in the same transaction — so a trace from this harness has the same shape as one from the Gateway. */
   answer(approvalId: string, decision: ApprovalDecision, input?: AnswerInput): ApprovalResult;
+}
+
+/** The checkpoint store, over one variable: D-095's first rule is one row per task replaced at each boundary, and a
+ *  harness run is one task, so the latest record *is* the table. `writes` keeps the history the table deliberately does
+ *  not, because a test has to be able to assert how many boundaries a run committed and in what order. */
+function createMemoryCheckpointStore(): {
+  readonly writes: CheckpointRecord[];
+  read(taskId: string): CheckpointRecord | undefined;
+  write(record: CheckpointRecord): void;
+} {
+  const writes: CheckpointRecord[] = [];
+  let current: CheckpointRecord | undefined;
+  return {
+    writes,
+    read: (taskId) => (current !== undefined && current.taskId === taskId ? current : undefined),
+    write: (record) => {
+      writes.push(record);
+      current = record;
+    },
+  };
+}
+
+/** The checkpoint's version of `guardApprovals`, and the reason the harness can assert D-095's second rule instead of
+ *  trusting it: a boundary is written *inside* the phase that commits the step, so a write outside a transaction is a
+ *  resume point that could exist for a step a rollback took back. */
+export function guardCheckpoints(
+  store: {
+    read(taskId: string): CheckpointRecord | undefined;
+    write(record: CheckpointRecord): void;
+  },
+  insideTransaction: () => boolean,
+): typeof store {
+  return {
+    read: (taskId) => store.read(taskId),
+    write: (record) => {
+      if (!insideTransaction()) {
+        throw new Error(
+          `the checkpoint at step ${record.step} was written outside a transaction, so it could survive a rollback of ` +
+            "the step it claims is committed (D-095's rule 2)",
+        );
+      }
+      store.write(record);
+    },
+  };
 }
 
 /** The wait a ladder test does not inject: no sleep at all, so five rungs cost nothing. A test that wants real time
@@ -464,15 +528,29 @@ export function createHarness(options: HarnessOptions): Harness {
     }
     published.push(event);
   };
+  const checkpointStore = createMemoryCheckpointStore();
+  const checkpoints = createCheckpoints({
+    // Guarded like the arbiter, so the harness fails a boundary written outside the phase that committed the step.
+    store: guardCheckpoints(checkpointStore, memory.insideTransaction),
+    journal: memory.journal,
+    // The verdict's question is "what does the log say happened after this boundary", and in the harness the log is an
+    // array: the same read `packages/storage`'s `readEvents(db, taskId, { afterSeq })` answers in the Gateway.
+    eventsAfter: (taskId, afterSeq) =>
+      memory.events.filter((event) => event.taskId === taskId && event.seq > afterSeq),
+    ...(options.stepFacts === undefined ? {} : { stepFacts: options.stepFacts }),
+    now: clock.now,
+  });
   const cancellation = createCancellation({
     journal: memory.journal,
     publish: publishEvent,
+    checkpoints,
     now: clock.now,
   });
   const loop = createLoop({
     journal: memory.journal,
     approvals: guardApprovals(approvals, memory.insideTransaction),
     cancellation,
+    checkpoints,
     provider,
     tools: tools.surface,
     platform: { isTermux: options.isTermux ?? false },
@@ -515,10 +593,13 @@ export function createHarness(options: HarnessOptions): Harness {
     events: memory.events,
     published,
     waits,
+    checkpoints,
+    checkpointWrites: checkpointStore.writes,
     states: memory.states,
     executions: tools.executions,
     provider,
     task: memory.task,
+    checkpoint: () => checkpointStore.read(taskId),
     eventsOfType: (type) => memory.events.filter((event) => event.type === type),
     payloadOf: (type) => memory.events.find((event) => event.type === type)?.payload,
     pending: () => approvals.pending(taskId),
@@ -634,6 +715,16 @@ async function main(): Promise<void> {
     `              expires ${new Date(prompt.request.expiresAt).toISOString()} (D-064's ${prompt.request.tier} window)`,
   );
 
+  // D-065's boundary, at the moment it exists: the run is suspended *at* a step rather than inside one, so the record
+  // names the approval that covers it and the verdict says a restart has something to continue from.
+  const suspended = harness.checkpoint();
+  console.log(
+    `checkpoint  → ${suspended?.boundary} at step ${suspended?.step} (seq ${suspended?.lastSeq}, ` +
+      `${suspended?.messages.length} messages) — verdict \`${String(
+        harness.checkpoints.view(harness.taskId)?.resume.verdict,
+      )}\` (D-065: nothing executed, so there is nothing to repeat)`,
+  );
+
   const answered = harness.answer(prompt.id, "approve", { via: "web", byClientId: "cln_demo" });
   console.log(`answer      → ${answered.ok ? answered.record.state : answered.code} (via web)`);
 
@@ -645,6 +736,14 @@ async function main(): Promise<void> {
   );
   const row = harness.approvals.list({ taskId: harness.taskId })[0];
   console.log(`approval    → ${row?.state ?? "absent"} (once means once, D-052)`);
+  const settled = harness.checkpoint();
+  console.log(
+    `checkpoint  → ${harness.checkpointWrites.length} boundaries written (${harness.checkpointWrites
+      .map((one) => `step ${one.step}/${one.boundary}`)
+      .join(", ")}); the last is seq ${settled?.lastSeq} and its verdict is \`${String(
+      harness.checkpoints.view(harness.taskId)?.resume.verdict,
+    )}\`, because the task is \`${harness.task()?.state}\` and §4.1 makes that terminal state absorbing`,
+  );
   console.log("");
   console.log("the stream a client saw:");
   for (const event of harness.events) {

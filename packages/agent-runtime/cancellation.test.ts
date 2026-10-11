@@ -75,8 +75,9 @@ describe("the cancellation manager (§6.1's request, §6.2's evidence)", () => {
     assert.equal(payload?.mode, "finish-step");
     assert.match(
       String(payload?.checkpoint),
-      /absent/,
-      "§6.1's step 5 asks for checkpoint information; naming the absence is honest, omitting it would read as 'nothing to save'",
+      /no checkpoint was committed/,
+      "§6.1's step 5 asks for checkpoint information, and this run never reached a committed step boundary: saying so is " +
+        "the honest version of the step, while omitting the field would read as 'there was nothing to save'",
     );
   });
 

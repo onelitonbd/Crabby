@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import type { Event, TaskCancellation, TaskRecord, TaskState } from "@crabby/api-contracts";
 import type { ApprovalRequest } from "@crabby/policy";
 import { type Approvals, createApprovals, createMemoryApprovalStore } from "./approvals.ts";
+import { type CheckpointRecord, type Checkpoints, createCheckpoints } from "./checkpoint.ts";
 import type { TaskJournal } from "./journal.ts";
 import { createRecovery, RECOVERABLE_STATES, type Recovery } from "./recovery.ts";
 
@@ -116,13 +117,43 @@ function fixture(seeded: { id: string; state: TaskState; cancellation?: TaskCanc
       };
     })(),
   });
+  // The real manager over one variable, wired to this fixture's journal and its event array: D-065's verdict is a
+  // function of the boundary, the task's state and the log tail, and a stub would let a test assert a verdict the code
+  // never computed.
+  const checkpointWrites: CheckpointRecord[] = [];
+  let checkpoint: CheckpointRecord | undefined;
+  const checkpoints: Checkpoints = createCheckpoints({
+    store: {
+      read: (taskId) => (checkpoint?.taskId === taskId ? checkpoint : undefined),
+      write: (record) => {
+        checkpointWrites.push(record);
+        checkpoint = record;
+      },
+    },
+    journal,
+    eventsAfter: (taskId, afterSeq) =>
+      events.filter((event) => event.taskId === taskId && event.seq > afterSeq),
+    now: clock.now,
+  });
   const recovery: Recovery = createRecovery({
     journal,
     approvals,
+    checkpoints,
     publish: (event) => published.push(event),
     now: clock.now,
   });
-  return { journal, approvals, recovery, events, published, states, clock, tasks };
+  return {
+    journal,
+    approvals,
+    checkpoints,
+    checkpointWrites,
+    recovery,
+    events,
+    published,
+    states,
+    clock,
+    tasks,
+  };
 }
 
 describe("recovery at startup (§7.1, §7.2)", () => {
@@ -293,11 +324,21 @@ describe("recovery at startup (§7.1, §7.2)", () => {
     assert.equal(
       report.interrupted[0]?.resumed,
       false,
-      "§7.2 permits a resume only for work that is *both* safe and covered; the cover exists and the safety does not, " +
-        "because there is no checkpoint and the run's conversation died with the process",
+      "§7.2 permits a resume only for work that is *both* safe and covered; the cover exists, and what is missing is " +
+        "the party that would use it — no runner, no `packages/tools`, no product provider adapter",
     );
-    assert.match(report.interrupted[0]?.reason ?? "", /no checkpoint/);
-    assert.match(report.interrupted[0]?.reason ?? "", /§7\.3/);
+    assert.match(
+      report.interrupted[0]?.reason ?? "",
+      /never reached a committed step boundary/,
+      "this run was seeded with no checkpoint, so the sentence says there is no saved state rather than implying one",
+    );
+    assert.match(report.interrupted[0]?.reason ?? "", /no runner to call `loop\.resume`/);
+    assert.equal(
+      report.interrupted[0]?.checkpoint?.verdict,
+      "none",
+      "D-065's verdict is reported beside the approval, because '§7.2 would permit it' is half an answer: a runner also " +
+        "has to know whether the saved state is safe to continue from",
+    );
     const event = f.events.find((entry) => entry.type === "task.interrupted");
     assert.equal(
       event?.payload.approvalId,
@@ -310,6 +351,113 @@ describe("recovery at startup (§7.1, §7.2)", () => {
       "approved",
       "and recovery does not spend, withdraw or expire an approval it has no authority over",
     );
+  });
+
+  it("reports D-065's verdict on the boundary a run left behind, and re-asks when a step was in flight", () => {
+    const f = fixture([{ id: "tsk_d", state: "running" }]);
+    // Two committed steps, then a third that started and never reported: the shape a process kill leaves, and the one
+    // §7.3 exists for.
+    f.journal.append({
+      taskId: "tsk_d",
+      type: "tool.execution.completed",
+      payload: { tool: "file.read", output: "notes.md" },
+      at: T0,
+    });
+    f.checkpoints.commit({
+      taskId: "tsk_d",
+      boundary: "step",
+      step: 2,
+      modelId: "fake/tool-model",
+      messages: [],
+    });
+    const started = f.journal.append({
+      taskId: "tsk_d",
+      type: "tool.execution.started",
+      payload: { tool: "file.delete", args: { path: "build/" } },
+      at: T0 + 1_000,
+    });
+
+    const report = f.recovery.recoverAtStartup(T0 + 2_000);
+
+    const saved = report.interrupted[0]?.checkpoint;
+    assert.equal(saved?.step, 2, "the boundary the run committed, not the step it died on");
+    assert.equal(saved?.boundary, "step");
+    assert.equal(
+      saved?.verdict,
+      "re-ask",
+      "`file.delete` was in flight and no tool in this build declares `idempotent` " +
+        "(`PENDING_RECORD_FIELDS`), so D-065's rule re-asks rather than repeating an action whose effect is unknown",
+    );
+    assert.match(saved?.verdictReason ?? "", /file\.delete/);
+    // The same fact in the log, because §5.2's rule runs in both directions: a client that only streams what a
+    // restart decided has to learn as much as one that only polls the report.
+    const payload = f.events.find((event) => event.type === "task.interrupted")?.payload
+      .checkpoint as Record<string, unknown>;
+    assert.equal(payload?.verdict, "re-ask");
+    assert.equal(payload?.committed, true);
+    assert.equal(
+      payload?.lastSeq,
+      started.seq - 1,
+      "the boundary is the event before the step that never reported",
+    );
+    assert.deepEqual(payload?.inFlight, { tool: "file.delete", startedSeq: started.seq });
+
+    // The same run with an outcome beside the start: nothing was in flight, so the answer flips to `resume` without
+    // anything else moving. That contrast is the whole of D-065's rule and it is one event wide.
+    f.journal.append({
+      taskId: "tsk_d",
+      type: "tool.execution.completed",
+      payload: { tool: "file.delete", output: "removed build/" },
+      at: T0 + 3_000,
+    });
+    assert.equal(
+      f.checkpoints.verdict("tsk_d").verdict,
+      "resume",
+      "§7.3's question is answered by the log, not by a guess: an outcome beside the start means the step committed",
+    );
+  });
+
+  it("passes an in-flight step only when its runtime says it may, which nothing in this build does", () => {
+    const f = fixture([{ id: "tsk_e", state: "running" }]);
+    f.checkpoints.commit({
+      taskId: "tsk_e",
+      boundary: "step",
+      step: 1,
+      modelId: "fake/tool-model",
+      messages: [],
+    });
+    f.journal.append({
+      taskId: "tsk_e",
+      type: "tool.execution.started",
+      payload: { tool: "memory.search" },
+      at: T0,
+    });
+
+    assert.equal(
+      f.checkpoints.verdict("tsk_e").verdict,
+      "re-ask",
+      "the default answers neither of D-065's permissions, because `sideEffects: none` for a tool nobody measured is the " +
+        "lie `packages/policy/record.ts`'s header refuses",
+    );
+
+    // The `pass` branch exists and is tested, and reaching it takes a declaration the tool runtime does not yet make:
+    // when `packages/tools` lands and a tool says it is idempotent, this is the branch that lets a resume continue
+    // instead of asking, and no recovery code has to change.
+    const declared = createCheckpoints({
+      store: {
+        read: () => f.checkpoints.latest("tsk_e"),
+        write: () => {},
+      },
+      journal: f.journal,
+      eventsAfter: (taskId, afterSeq) =>
+        f.events.filter((event) => event.taskId === taskId && event.seq > afterSeq),
+      stepFacts: (tool) => ({ idempotent: tool === "memory.search", effectRecorded: false }),
+      now: f.clock.now,
+    });
+    const answer = declared.verdict("tsk_e");
+    assert.equal(answer.verdict, "pass");
+    assert.match(answer.reason, /declares it idempotent/);
+    assert.deepEqual(answer.inFlight, { tool: "memory.search", startedSeq: 1 });
   });
 
   it("leaves a prompt inside its window pending, because a restart is not an answer", () => {

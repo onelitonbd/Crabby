@@ -1,5 +1,5 @@
-// M2g: §7's recovery, and the honest limit of what "full auto-resume" can mean in a build with no conversation store and
-// no checkpoint. `AGENT_RUNTIME.md` §7.1 says Crabby MUST attempt to resume interrupted tasks automatically, and §7.2 says
+// M2g: §7's recovery, and the honest limit of what "full auto-resume" can mean in a build with no runner.
+// `AGENT_RUNTIME.md` §7.1 says Crabby MUST attempt to resume interrupted tasks automatically, and §7.2 says
 // the attempt may only succeed for work that is *both* safe and covered by a still-valid approval — "automatic
 // orchestration of recovery, not automatic authorization". This module does the orchestration and reports, task by task,
 // why the authorization half has nothing to authorize yet.
@@ -15,18 +15,27 @@
 //      answer after a crash, `terminated: false` and `inFlight: "unknown"`, because a dead process cannot say whether the
 //      operation stopped or what it was doing. Turning that task into `interrupted` instead would resurrect work the user
 //      asked to stop, which is the one recovery outcome §6 exists to prevent.
-//   3. **Nothing resumes automatically in this build, and the report says so per task.** A run's conversation is process
-//      memory (M2d's header) and D-065's committed step boundary is not implemented, so §7.3's "recovery may pass only a
-//      step that is idempotent or has its effect recorded" has nothing to pass. What recovery can do is leave the task
-//      paused with a clear, user-visible reason (§7.2's last bullet) and name the still-valid approval that a runner would
-//      be allowed to use, so the fact is on the record instead of in a reviewer's memory.
+//   3. **Nothing resumes automatically in this build, and the report says so per task.** Since M2i the saved state exists
+//      — the loop commits D-065's boundary and this module reads the verdict on it — and what is still missing is the party
+//      that would use it: no runner drives a task, `ARCHITECTURE.md` §18's `packages/tools` does not exist, and there is no
+//      product provider adapter, so §7.1's "attempt to resume" is orchestration without an executor. What recovery does is
+//      leave the task paused with a clear, user-visible reason (§7.2's last bullet), name the still-valid approval a runner
+//      would be allowed to use, and report D-065's verdict — `resume`, `pass`, `re-ask` or `none` — so the fact is on the
+//      record instead of in a reviewer's memory.
 //
 // Also here, because a restart is the moment a stale queue becomes visible: the approval sweep. An approval whose deadline
 // passed while the process was dead is expired by the clock and not by anybody's opinion, and `GET /approvals` would
 // otherwise show it as `pending` — the queue lying to the second client, which is the failure `approvals.ts`'s header
 // names. D-093 puts the same sweep on the read path for the same reason.
-import type { Event, TaskRecord, TaskState } from "@crabby/api-contracts";
+import type {
+  CheckpointBoundary,
+  Event,
+  ResumeVerdict,
+  TaskRecord,
+  TaskState,
+} from "@crabby/api-contracts";
 import type { ApprovalRecord, ApprovalState, Approvals } from "./approvals.ts";
+import type { CheckpointReader } from "./checkpoint.ts";
 import { createPhaseWriter, forTask, type PhaseWriter, type TaskJournal } from "./journal.ts";
 import { recoveryTarget } from "./transitions.ts";
 
@@ -43,6 +52,15 @@ export interface RecoveredTask {
     readonly id: string;
     readonly state: ApprovalState;
     readonly expiresAt: number;
+  };
+  /** D-065's answer about the boundary the run left behind, when a checkpoint manager is wired. Reported, not acted on,
+   *  for the same reason: a verdict of `resume` is a fact about the saved state and not a permission — §7.2's
+   *  "automatic orchestration of recovery, not automatic authorization" — and there is no runner to hand it to. */
+  readonly checkpoint?: {
+    readonly verdict: ResumeVerdict;
+    readonly verdictReason: string;
+    readonly step?: number;
+    readonly boundary?: CheckpointBoundary;
   };
 }
 
@@ -63,6 +81,9 @@ export interface RecoveryDeps {
   readonly journal: TaskJournal;
   readonly approvals: Approvals;
   readonly publish: (event: Event) => void;
+  /** D-065's saved state, read to report what a restart left behind and whether a runner may continue from it. Optional
+   *  because recovery without it is still correct — it just has less to say, and says that. */
+  readonly checkpoints?: CheckpointReader | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -142,7 +163,8 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
 
           const target = recoveryTarget(task.state);
           if (target === undefined) continue;
-          const reason = resumeRefusal(task, stillValid);
+          const saved = checkpointFacts(task.id);
+          const reason = resumeRefusal(task, stillValid, saved.report);
           writer.move(task, target, {}, forTask(emit, task.id), at, {
             payload: {
               reason,
@@ -150,6 +172,10 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
               // §7.2's "clear, user-visible reason" is the event's job, and naming the approval a runner *would* be
               // allowed to use is what turns "paused" from a dead end into a fact somebody can act on.
               ...(stillValid === undefined ? {} : { approvalId: stillValid.id }),
+              // D-065's saved state, and the verdict §7.3 gives on it. In the event as well as in the report because
+              // §5.2's rule runs in both directions: a client that only streams learns what a client that only polls
+              // learns, and neither has to ask the other's surface.
+              ...(saved.payload === undefined ? {} : { checkpoint: saved.payload }),
               resumed: false,
             },
           });
@@ -159,6 +185,7 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
             to: target,
             resumed: false,
             reason,
+            ...(saved.report === undefined ? {} : { checkpoint: saved.report }),
             ...(stillValid === undefined
               ? {}
               : {
@@ -182,21 +209,64 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
     },
   };
 
+  /** What the run left behind, in the two shapes it is reported: the report's entry and the event's payload. Both are
+   *  built here rather than at the call site because they are one fact, and one fact assembled twice is how a log and a
+   *  report come to disagree about what a restart found. */
+  function checkpointFacts(taskId: string): {
+    readonly report?: RecoveredTask["checkpoint"];
+    readonly payload?: Record<string, unknown>;
+  } {
+    const reader = deps.checkpoints;
+    if (reader === undefined) return {};
+    const answer = reader.verdict(taskId);
+    const record = reader.latest(taskId);
+    return {
+      report: {
+        verdict: answer.verdict,
+        verdictReason: answer.reason,
+        ...(record === undefined ? {} : { step: record.step, boundary: record.boundary }),
+      },
+      payload: {
+        committed: record !== undefined,
+        verdict: answer.verdict,
+        reason: answer.reason,
+        ...(record === undefined
+          ? {}
+          : { step: record.step, boundary: record.boundary, lastSeq: record.lastSeq }),
+        ...(answer.inFlight === undefined ? {} : { inFlight: answer.inFlight }),
+      },
+    };
+  }
+
   /** §7.2's answer for one task, as a sentence a user can read. The two halves differ: with a still-valid approval the
-   *  rule *would* permit a resume and the missing piece is this build's, while without one the rule forbids it outright. */
-  function resumeRefusal(task: TaskRecord, approval: ApprovalRecord | undefined): string {
+   *  rule *would* permit a resume and the missing piece is this build's, while without one the rule forbids it outright.
+   *  Since M2i the sentence also says what the run left behind, because "nothing resumed" is a different fact when a
+   *  durable boundary exists than when it does not, and D-065's verdict is what tells a reader which one this was. */
+  function resumeRefusal(
+    task: TaskRecord,
+    approval: ApprovalRecord | undefined,
+    saved: RecoveredTask["checkpoint"],
+  ): string {
+    const boundary =
+      saved === undefined
+        ? "no checkpoint manager is wired to this Gateway, so there is no saved state to resume from"
+        : saved.step === undefined
+          ? "the run never reached a committed step boundary, so there is no saved state to resume from and nothing external to repeat"
+          : `the checkpoint at step ${saved.step} is durable and D-065's verdict on it is \`${saved.verdict}\``;
     if (approval === undefined) {
       return (
         `the process that was running task ${task.id} ended, and no approval covers the step it was on, so \u00a77.2 forbids ` +
-        "resuming it automatically: a pending or absent approval is not an approved one. The task is left paused for a " +
-        "new run or a cancellation"
+        `resuming it automatically: a pending or absent approval is not an approved one. ${boundary}, and nothing in this ` +
+        "build drives a task in any case — no runner, no `packages/tools`, no product provider adapter — so the task is " +
+        "left paused for a new run or a cancellation"
       );
     }
     return (
       `the process that was running task ${task.id} ended. Approval ${approval.id} is still valid and \u00a77.2 would permit ` +
-      "resuming work covered by it, but this build has no checkpoint (D-065's committed step boundary is not implemented) " +
-      "and the run's conversation was process memory, so there is nothing safe to resume from and \u00a77.3 forbids repeating a " +
-      "step whose effect is unknown. The task is left paused with this reason rather than re-run"
+      `resuming work covered by it, and ${boundary} — but nothing in this build drives a task: there is no runner to call ` +
+      "`loop.resume`, no `packages/tools` to execute a step and no product provider adapter to ask, so \u00a77.1's " +
+      "orchestration reports what a resume would need instead of performing one. The task is left paused with this reason " +
+      "rather than re-run"
     );
   }
 }

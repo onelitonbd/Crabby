@@ -4,25 +4,31 @@
 // through `GET /tasks/{id}` rather than only through an event it may have missed.
 //
 // The restarts here are real: the Fastify instance is closed, the SQLite handle is closed, and a second process-shaped
-// object is built over the same file. Nothing is stubbed except the cancellation request in the second test, which is
-// written through `setState` because no route can request one yet — `POST /api/v1/tasks/{id}/cancel` arrives with the
-// runner that would have something to stop (D-090).
+// object is built over the same file. Nothing is stubbed except the two facts a route cannot yet write: the cancellation
+// request in the second test, set through `setState` because `POST /api/v1/tasks/{id}/cancel` arrives with the runner that
+// would have something to stop (D-090), and the checkpoint in the last test, committed through the manager because the
+// *loop* writes boundaries and driving a whole run over HTTP is `packages/storage/journal.test.ts`'s job. What this file
+// proves is the part a unit test cannot: that the row survives the reopen, and that the restarted Gateway — not a fixture
+// — is the one answering for it.
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
-import { createApprovals } from "@crabby/agent-runtime";
-import { newId, type TaskRecord } from "@crabby/api-contracts";
+import { createApprovals, createCheckpoints } from "@crabby/agent-runtime";
+import { newId, type TaskCheckpoint, type TaskRecord } from "@crabby/api-contracts";
 import { createLogger } from "@crabby/core";
 import { buildApp, createClient, type GatewayClient } from "@crabby/gateway";
 import { type DataLayout, dataLayout } from "@crabby/platform";
 import type { ApprovalRequest } from "@crabby/policy";
 import {
   createSqliteApprovalStore,
+  createSqliteCheckpointStore,
+  createSqliteJournal,
   migrate,
   mintPairingCode,
   openDatabase,
+  readEvents,
   redeemPairingCode,
   type SqliteDb,
   setState,
@@ -314,5 +320,138 @@ describe("a restart, over http (§7.1, §7.2)", () => {
 
     await server.stop();
     instance.close();
+  });
+
+  it("reports the boundary a dead run left behind, and D-065's verdict on it (D-095)", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "crabby-recovery-"));
+    const first = openFile(dir);
+    // The two halves of a restart are released from a `finally` rather than at the end of the body, because a test that
+    // fails with a listener still bound and a file handle still open does not report a failure — it hangs for two and a
+    // half minutes on an undici socket and reports nothing. The other tests here clean up inline, and can afford to only
+    // as long as they pass.
+    let second: ReturnType<typeof openFile> | undefined;
+    let after: Instance | undefined;
+    const before = await start(first.layout, first.db);
+    try {
+      const created = await before.client.createTask({ objective: "delete target/" }, "rec-5");
+      const task = created.body as TaskRecord;
+
+      // A task with no saved state answers 404, and the verdict is in the envelope rather than guessed from an empty body.
+      let missing: { status: number; details?: Record<string, unknown> | undefined } | undefined;
+      try {
+        await before.client.taskCheckpoint(task.id);
+      } catch (error) {
+        const failure = error as {
+          status: number;
+          envelope: { error: { details?: Record<string, unknown> } };
+        };
+        missing = { status: failure.status, details: failure.envelope.error.details };
+      }
+      assert.equal(
+        missing?.status,
+        404,
+        '"no saved state" is its own answer and not an empty object, because a client that has to guess which of the two it ' +
+          "got is a client that will eventually resume from nothing",
+      );
+      assert.equal(missing?.details?.verdict, "none");
+      assert.match(String(missing?.details?.reason), /never reached a step boundary/);
+
+      // The run then commits one step and dies on the next — `running` first, because the loop moves the task in the same
+      // phase that records the step, and a boundary written against `queued` would be a boundary the state machine says is
+      // impossible. Written through the manager because the loop is what does this,
+      // and *inside* a transaction for the same reason: D-065's boundary is a property of the commit, not a note after it.
+      const journal = createSqliteJournal({ db: first.db, layout: first.layout });
+      const checkpoints = createCheckpoints({
+        store: createSqliteCheckpointStore(first.db),
+        journal,
+        eventsAfter: (taskId, afterSeq) =>
+          readEvents(first.db, taskId, { afterSeq, limit: 10_000 }),
+      });
+      setState(first.db, task.id, "running", { now: new Date().toISOString() });
+      const boundary = first.db.transaction(() => {
+        const completed = journal.append({
+          taskId: task.id,
+          type: "tool.execution.completed",
+          payload: { tool: "file.read", output: "target/ contains 412 files" },
+          at: Date.now(),
+        });
+        const committed = checkpoints.commit({
+          taskId: task.id,
+          boundary: "step",
+          step: 1,
+          modelId: "fake-tools",
+          messages: [
+            { role: "user", content: "delete target/" },
+            { role: "tool", content: "target/ contains 412 files", toolCallId: "call_1" },
+          ],
+        });
+        const started = journal.append({
+          taskId: task.id,
+          type: "tool.execution.started",
+          payload: { tool: "file.delete", args: { path: "target/" } },
+          at: Date.now(),
+        });
+        return { completed, committed, started };
+      })();
+      await before.stop();
+
+      second = openFile(dir);
+      after = await start(second.layout, second.db);
+      const view = (await after.client.taskCheckpoint(task.id)).body as TaskCheckpoint;
+
+      assert.equal(view.taskId, task.id);
+      assert.equal(
+        view.state,
+        "running",
+        "the state *at the boundary*, not the state now — `GET /tasks/{id}` answers that",
+      );
+      assert.equal(
+        ((await after.client.getTask(task.id)).body as TaskRecord).state,
+        "interrupted",
+        "the boundary is durable and §7.1 still interrupts the task: a saved state a runner *could* resume from is not a run " +
+          "that was resumed, and the two must not be confused by the client reading this screen",
+      );
+      assert.equal(view.boundary, "step");
+      assert.equal(view.step, 1);
+      assert.equal(
+        view.lastSeq,
+        boundary.completed.seq,
+        "the sequence number the event store assigned and not one supplied, which is the whole reason the manager is called " +
+          "from inside the phase: the boundary points at the event that made the step committed",
+      );
+      assert.equal(boundary.committed.lastSeq, boundary.completed.seq);
+      assert.equal(view.modelId, "fake-tools");
+      assert.equal(view.messages, 2, "a count of the working context, never the context itself");
+      assert.equal(
+        JSON.stringify(view).includes("412 files"),
+        false,
+        "the transcript stays in the store: §8.2 counts a checkpoint as a different category from the conversation record, " +
+          "and four interfaces holding a redacted copy of it would be four copies to keep in sync",
+      );
+      assert.equal(
+        view.resume.verdict,
+        "re-ask",
+        "the step that started and never reported is what the *log* says after the boundary, so the verdict moves without " +
+          "the row changing — which is why D-095 computes it at read time",
+      );
+      assert.deepEqual(view.resume.inFlight, {
+        tool: "file.delete",
+        startedSeq: boundary.started.seq,
+      });
+
+      const logged = await eventsOf(after.client, task.id);
+      const interrupted = logged.find((event) => event.type === "task.interrupted");
+      assert.equal(
+        (interrupted?.payload.checkpoint as { verdict?: string })?.verdict,
+        "re-ask",
+        "the same fact reaches a client that only streams what a client that polls would read (§5.2's rule, running in the " +
+          "direction the restart needs)",
+      );
+      assert.match(String(interrupted?.payload.reason), /verdict on it is `re-ask`/);
+    } finally {
+      await after?.stop();
+      second?.close();
+      first.close();
+    }
   });
 });

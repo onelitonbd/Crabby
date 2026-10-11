@@ -161,8 +161,9 @@ describe("gateway over http", () => {
     // on?" answerable by someone holding a phone and a backup.
     assert.equal(
       body.storage.schemaVersion,
-      3,
-      "M2's `approval` table advanced the ledger from 1 to 2, and §6.2's cancellation column (D-091) from 2 to 3",
+      4,
+      "M2's `approval` table advanced the ledger from 1 to 2, §6.2's cancellation column (D-091) from 2 to 3, and " +
+        "D-065's checkpoint table (D-095) from 3 to 4 — and this literal is why a migration cannot land quietly",
     );
   });
 

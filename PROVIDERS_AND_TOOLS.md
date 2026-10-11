@@ -226,6 +226,12 @@ Stage 3 rules:
   Crabby reconciles or asks, it does not blindly repeat.
 - The task record must show the switch: original model, chosen model, reason, stage reached, and whether any step
   was re-attempted.
+- **As far as M2 goes, the saved state this stage needs is real (D-095).** The loop commits a boundary at each committed
+  step, `GET /tasks/{id}/checkpoint` reports it beside the model that produced it — the "original model" of the sentence
+  above, written down before any switch exists to compare it with — and D-065's verdict answers whether a resume may pass
+  the step that failed. What is still unbuilt is the ask and the switch, and one ordering the documents disagree about:
+  stage 2 has to happen *before* the task is failed, because `AGENT_RUNTIME.md` §4.1 makes `failed` terminal and absorbing
+  and no resume travels backwards out of it (`docs/CONSISTENCY_REVIEW.md` F-50).
 - Where a conversation was generated partly on one model and continues on another, the context is re-budgeted for
   the new limits, and the user can see that happened.
 

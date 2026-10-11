@@ -1,7 +1,8 @@
 // `crabby task ls|show` — reads over the same HTTP surface a phone uses, never into SQLite (`ARCHITECTURE.md` §19).
 // `task run` is not here: creating a task that no runtime will move is the placeholder work the owner asked me not to
 // do, so the verb stays `planned` in the registry until the milestone that gives it an executor.
-import { EXIT, type ExitCode, type TaskRecord } from "@crabby/api-contracts";
+import { EXIT, type ExitCode, type TaskCheckpoint, type TaskRecord } from "@crabby/api-contracts";
+import { GatewayFailure } from "@crabby/gateway";
 import type { DataLayout } from "@crabby/platform";
 import { parseTail } from "../args.ts";
 import { connect, reportFailure, reportNoGateway } from "../connect.ts";
@@ -84,6 +85,38 @@ export async function runTask(
               : "no external effect in doubt"
           }`,
         );
+      // D-095's boundary, because §10.1 asks this screen for recovery status and `interrupted` alone is half an answer:
+      // the other half is whether a saved state exists at all and what D-065's rule says may be passed across it. The
+      // `404` is an expected answer for a task that never committed a step, so it is read here as what it means rather
+      // than allowed to escape into the catch below, which would turn a fact about the task into a failed command.
+      let checkpoint: TaskCheckpoint | undefined;
+      try {
+        checkpoint = (await connection.client.taskCheckpoint(id)).body as TaskCheckpoint;
+        renderer.line(
+          "checkpoint",
+          `${checkpoint.boundary} at step ${checkpoint.step} · ${checkpoint.resume.verdict} · ` +
+            `${checkpoint.messages} message(s), ${checkpoint.bytes} bytes, redacted`,
+        );
+        if (checkpoint.resume.verdict === "re-ask") {
+          const tool = checkpoint.resume.inFlight?.tool;
+          renderer.fix(
+            tool === undefined
+              ? "a step was in flight when the process ended and its effect cannot be established, so a resume re-asks " +
+                  "rather than repeating it (D-065, AGENT_RUNTIME.md §7.3)"
+              : `'${tool}' was in flight when the process ended and its effect cannot be established, so a resume re-asks ` +
+                  "rather than repeating it (D-065, AGENT_RUNTIME.md §7.3)",
+          );
+        }
+      } catch (error) {
+        if (error instanceof GatewayFailure && error.status === 404) {
+          renderer.line(
+            "checkpoint",
+            "none — the run never committed a step boundary, so there is nothing to resume from and nothing to repeat",
+          );
+        } else {
+          throw error;
+        }
+      }
       const events = await connection.client.taskEvents(id, Math.max(0, task.lastSeq - 9));
       const listed = (
         events.body as { items: { id: string; seq: number; type: string; ts: string }[] }
@@ -94,7 +127,7 @@ export async function runTask(
         for (const event of listed)
           renderer.line(`  ${String(event.seq).padStart(4)}`, `${event.type}  ${event.ts}`);
       }
-      return renderer.done({ ...task, tail: listed });
+      return renderer.done({ ...task, tail: listed, checkpoint: checkpoint ?? null });
     } catch (error) {
       return reportFailure(renderer, error);
     }

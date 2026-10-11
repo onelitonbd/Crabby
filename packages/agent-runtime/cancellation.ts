@@ -24,8 +24,9 @@
 //
 // What is deliberately NOT here: a cancellation *route*. Nothing in this build drives a task from the Gateway (M2d's
 // header says why), so `POST /tasks/{id}/cancel` would be a verb with no run to stop — the surface arrives with the
-// runner. And no checkpoint: §6.1's step 5 asks for task state and checkpoint information, and the settle event says
-// plainly that D-065's checkpoint boundary is not in this build rather than implying one was written.
+// runner. §6.1's step 5 is honoured by reading rather than by writing: the loop commits D-065's boundary inside the phase
+// that records each step (M2i), so this manager's job is to say in the settle event where the run stood when the user
+// stopped it — and to say plainly when no boundary was ever committed, rather than implying one was written.
 import {
   type CancellationInFlight,
   type ClientInterface,
@@ -34,6 +35,7 @@ import {
   type TaskCancellation,
   type TaskRecord,
 } from "@crabby/api-contracts";
+import type { CheckpointReader } from "./checkpoint.ts";
 import { createPhaseWriter, type PhaseWriter, type TaskJournal } from "./journal.ts";
 
 // The mode *names* are the contract's, because `TaskCancellation.mode` and the body a cancellation route will someday
@@ -122,6 +124,11 @@ export interface Cancellation extends CancellationGate {
 export interface CancellationDeps {
   readonly journal: TaskJournal;
   readonly publish: (event: Event) => void;
+  /** §6.1's step 5 asks the runtime to save "the relevant task state and checkpoint information". The saving is the
+   *  loop's — a boundary is committed inside the phase that records the step, and a second writer of that row is how a
+   *  resume point comes to disagree with the log — so this manager only *reads* it, to say in the settle event where the
+   *  run stood when the user stopped it. Optional because a settle with no manager wired still owes an honest sentence. */
+  readonly checkpoints?: CheckpointReader | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -135,6 +142,26 @@ export function createCancellation(deps: CancellationDeps): Cancellation {
 
   function controllerFor(taskId: string): AbortController | undefined {
     return controllers.get(taskId);
+  }
+
+  /** §6.1's step 5, as the sentence a user reads in the `task.cancelled` event. Three cases, and each is a different
+   *  fact rather than a different wording: no manager wired (nothing was ever going to be saved), a manager and no
+   *  boundary (the run never committed a step, so there is nothing to resume from and nothing external to repeat), and a
+   *  boundary (saved, at this step, and still not resumable — §4.1 makes `cancelled` terminal and absorbing, which is the
+   *  point of stopping work rather than an accident of it). */
+  function checkpointLine(taskId: string): string {
+    if (deps.checkpoints === undefined) {
+      return "no checkpoint manager is wired to this run, so no saved state exists: a restart re-asks rather than resumes (D-065)";
+    }
+    const record = deps.checkpoints.latest(taskId);
+    if (record === undefined) {
+      return "no checkpoint was committed — the run never reached a step boundary, so there is no saved state and nothing external to repeat";
+    }
+    return (
+      `saved at step ${record.step} (a \`${record.boundary}\` boundary, event seq ${record.lastSeq}, ` +
+      `${new Date(record.writtenAt).toISOString()}); the task is now \`cancelled\`, which is terminal and absorbing ` +
+      "(AGENT_RUNTIME.md §4.1), so nothing resumes from it"
+    );
   }
 
   function requestPayload(request: CancellationRequest): Record<string, unknown> {
@@ -319,10 +346,10 @@ export function createCancellation(deps: CancellationDeps): Cancellation {
           inFlight: evidence.inFlight,
           ...(evidence.step === undefined ? {} : { step: evidence.step }),
           ...(recorded === undefined ? {} : requestPayload(recorded)),
-          // §6.1's step 5 asks for checkpoint information. Naming the absence is the honest version of the step: a
-          // payload that omitted it would read as "there was nothing to save".
-          checkpoint:
-            "absent — D-065's committed step boundary is not in this build, so recovery re-asks rather than resumes",
+          // §6.1's step 5 asks for checkpoint information, and the honest answer differs by what the run reached: a
+          // boundary that was committed and is now terminal, or no boundary at all. Omitting the field would read as
+          // "there was nothing to save", which is a claim this manager is not entitled to make without looking.
+          checkpoint: checkpointLine(task.id),
         },
       });
     });

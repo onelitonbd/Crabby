@@ -227,14 +227,17 @@ describe("the SQLite journal", () => {
     // the column. `docs/DATA_AND_MEMORY.md` §2.6's alternative reading is "upgrade = re-install", and on a phone that
     // means losing the task history that outlives one cancellation.
     const { db, dir, close } = tempDb();
+    // Undoing v3 means undoing v4 as well, for the reason `approvals.test.ts` gives: a ledger that still records the later
+    // migration would leave `migrate` with nothing to apply, and the fixture would be testing an upgrade no file can be in.
     db.exec(
-      "DELETE FROM schema_migration WHERE version = 3; ALTER TABLE task DROP COLUMN cancellation_json",
+      "DELETE FROM schema_migration WHERE version >= 3; DROP TABLE checkpoint; " +
+        "ALTER TABLE task DROP COLUMN cancellation_json",
     );
     const task = createTask(db, { objective: "survives the upgrade" });
     // Nothing is read before `migrate` on purpose: v3's SELECT names the new column, so a v2 file is unreadable by v3
     // code until the migration runs. That is why every process migrates on startup rather than lazily, and why this test
     // asserts the upgrade instead of the state before it.
-    assert.deepEqual(migrate(db), { applied: [3], version: 3 });
+    assert.deepEqual(migrate(db), { applied: [3, 4], version: 4 });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,
       1,

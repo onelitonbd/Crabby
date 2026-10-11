@@ -12,14 +12,22 @@
 // recorded and read back while nothing moves it, and `docs/ROADMAP.md` §4 names the three. Wiring a route to the loop
 // against the fake provider would be the demo this phase has refused to ship.
 //
-// What this file *does* own at startup is §7's recovery, beside D-065's retention prune: `createRecovery` marks every
+// What this file *does* own at startup is §7's recovery, beside D-065's retention prune, and it is the reading side of
+// the checkpoint: `GET /api/v1/tasks/{id}/checkpoint` reports the boundary the run last committed and D-065's verdict on
+// it, while the *writing* side is the loop's and happens inside the phase that commits each step (D-095). `createRecovery` marks every
 // non-terminal task `interrupted`, settles a cancellation that was requested before the process died instead of
 // resurrecting it, and sweeps the prompts whose deadlines passed while nobody was watching (D-092). The sweep also runs on
 // `GET /approvals`, because the count that route returns is the number `crabby status` prints as "N waiting" and a stale
 // prompt in it is a lie a user acts on (D-093, F-48). And there is no second listener: §2's loopback default is what
 // `listen` is given, and `crabby gateway start` refuses a non-loopback host until pairing has something to protect.
 
-import { type Approvals, createApprovals, createRecovery } from "@crabby/agent-runtime";
+import {
+  type Approvals,
+  type Checkpoints,
+  createApprovals,
+  createCheckpoints,
+  createRecovery,
+} from "@crabby/agent-runtime";
 import type { ApprovalState, ClientInterface } from "@crabby/api-contracts";
 import {
   APPROVAL_STATES,
@@ -45,6 +53,7 @@ import {
   appendEvent,
   authenticate,
   createSqliteApprovalStore,
+  createSqliteCheckpointStore,
   createSqliteJournal,
   createTask,
   getTask,
@@ -117,14 +126,28 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
     newId: () => newId("apr"),
   });
 
+  // One journal and one checkpoint manager for the whole process, for the reason the arbiter is one: the route reads the
+  // view, recovery reads the verdict, and a runner would read the record — three readers, and three instances over one row
+  // would be three opinions about where a run stopped. Nothing in this file *writes* a boundary: that is the loop's, and
+  // the loop has no home in the Gateway yet (see the header). The log tail is the event store's own read, bounded
+  // generously because D-065's retention is 5 000 events per task and a verdict that saw half of it would answer for the
+  // half it saw.
+  const journal = createSqliteJournal({ db, layout: deps.layout });
+  const checkpoints: Checkpoints = createCheckpoints({
+    store: createSqliteCheckpointStore(db),
+    journal,
+    eventsAfter: (taskId, afterSeq) => readEvents(db, taskId, { afterSeq, limit: 10_000 }),
+  });
+
   // §7.1's recovery, at the same place the retention prune runs: a restart is one operation, and both halves are about
   // making the file match the world. Recovery marks every non-terminal task `interrupted`, settles a cancellation that
   // was requested before the process died rather than resurrecting it, expires the prompts whose deadline passed while
   // nobody was watching, and reports — per task — why nothing resumed (D-092). It resumes nothing, and the reason is in
   // the event a user reads rather than in this comment.
   const recovered = createRecovery({
-    journal: createSqliteJournal({ db, layout: deps.layout }),
+    journal,
     approvals,
+    checkpoints,
     publish: (event) => bus.publish(event),
   }).recoverAtStartup();
   if (recovered.scanned > 0 || recovered.expiredApprovals.length > 0) {
@@ -202,7 +225,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   registerSystemRoutes(app, deps, bus);
   registerPolicyRoutes(app, deps);
   registerAuthRoutes(app, deps);
-  registerTaskRoutes(app, deps, bus);
+  registerTaskRoutes(app, deps, bus, checkpoints);
   registerApprovalRoutes(app, deps, bus, approvals);
   registerEventStream(app, deps, bus);
 
@@ -353,6 +376,7 @@ function registerTaskRoutes(
   app: FastifyInstance,
   deps: GatewayDeps,
   bus: ReturnType<typeof createEventBus>,
+  checkpoints: Checkpoints,
 ): void {
   app.post<{ Body: { objective: string; sessionId?: string } }>(
     "/api/v1/tasks",
@@ -436,6 +460,34 @@ function registerTaskRoutes(
       return reply.send({ items: events, replayWindow: REPLAY_WINDOW_EVENTS });
     },
   );
+
+  // §4.3's "checkpoint view for recovery transparency" (D-065, D-095). A route of its own rather than a field on
+  // `GET /tasks/{id}` for two reasons: the record behind it holds a run's working context, which `AGENT_RUNTIME.md` §8.2
+  // counts as a different category from the task record, and the view is computed at read time — D-065's verdict depends on the task's
+  // state now and on the log tail after the boundary, so storing it would be storing a guess. What comes back is the
+  // boundary, its size and the verdict; what does not is the transcript, because a redacted working context handed to
+  // four interfaces would be a fourth copy of a conversation nobody owns (`packages/api-contracts/checkpoint.ts`).
+  app.get<{ Params: { id: string } }>("/api/v1/tasks/:id/checkpoint", async (request, reply) => {
+    const { id } = request.params;
+    if (!isTaskId(id) || !getTask(deps.db, id)) throw notFound(`task ${id}`);
+    const view = checkpoints.view(id);
+    if (view === undefined) {
+      // Not an empty object, and not the same 404 as a missing task. "No saved state" is an answer D-065 gives — the run
+      // never reached a committed step boundary — and the reason is the part a user can act on, so it rides in `details`
+      // while the message stays the uniform sentence §3.1 requires.
+      const answer = checkpoints.verdict(id);
+      throw new GatewayError({
+        code: "not_found",
+        message: `a checkpoint for task ${id} was not found. \`GET /api/v1/health\` answers for a live Gateway.`,
+        class: "not-found",
+        retryable: false,
+        details: { verdict: answer.verdict, reason: answer.reason },
+        taskId: id,
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+    }
+    return reply.send(view);
+  });
 }
 
 /** §6.3's expiry, applied on the read path (D-093). Rows and events commit together and are published after, which is the

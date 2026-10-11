@@ -1097,3 +1097,159 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
     assert.equal(stale.executions.length, 1, "and it was not executed twice by the second resume");
   });
 });
+
+describe("D-065's boundary, as the loop commits it (D-095)", () => {
+  it("writes one boundary per committed step and none for a round that only produced text", async () => {
+    const harness = createHarness({ rounds: [readRound, doneRound], tools: fileTools() });
+
+    const finished = await harness.start();
+    assert.equal(finished.kind, "completed");
+
+    assert.equal(
+      harness.checkpointWrites.length,
+      1,
+      "the run committed one tool step and the answering round committed nothing, because D-065's boundary is a *step* " +
+        "boundary and not a checkpoint per round \u2014 an event per round would be \u00a74.4's confusion of the checkpoint " +
+        "with the log, and at 5 000 events per task (D-065's own retention) it would be a storage decision wearing the " +
+        "name of a safety one",
+    );
+    const saved = harness.checkpoint();
+    assert.equal(saved?.boundary, "step");
+    assert.equal(saved?.step, 1);
+    assert.equal(saved?.state, "running", "the state the task was in when the step committed");
+    assert.equal(
+      saved?.messages.length,
+      3,
+      "the objective, the round that asked, and the step's result",
+    );
+    assert.equal(
+      harness.events.filter((event) => event.type.includes("checkpoint")).length,
+      0,
+      "and no event of any kind: `checkpoint` is not in the contract's `EventType` union at all, which is the assertion " +
+        "that matters — adding a `task.checkpointed` frame to keep a comment honest would be letting the implementation " +
+        "write the contract, and at one frame per step it would spend D-065's 5 000-event budget on saved state the log " +
+        "already implies (§4.4's two owners, kept separate)",
+    );
+  });
+
+  it("writes a prompt boundary for a gated step, and points at the approval instead of copying the action", async () => {
+    const harness = createHarness({ rounds: [deleteRound, doneRound], tools: fileTools() });
+
+    const outcome = await harness.start();
+    assert.equal(outcome.kind, "awaiting-approval");
+    const run = suspended(outcome);
+
+    const saved = harness.checkpoint();
+    assert.equal(
+      saved?.boundary,
+      "prompt",
+      "the run is suspended *at* a step, which is a boundary and not a step",
+    );
+    assert.equal(
+      saved?.step,
+      1,
+      "the gated step counts against D-088's budget, and the boundary says so",
+    );
+    assert.deepEqual(saved?.pending, {
+      tool: "file.delete",
+      toolCallId: run.toolCallId,
+      approvalId: run.approvalId,
+    });
+    assert.deepEqual(
+      Object.keys(saved?.pending ?? {}).sort(),
+      ["approvalId", "tool", "toolCallId"],
+      "three fields and no arguments: the record names the action and points at the row that authorises it, because " +
+        "the arguments live in exactly one place \u2014 which is what makes D-084's binding comparison at the moment of " +
+        "execution mean anything, and what keeps a redacted copy of them from being executed as if it were the original",
+    );
+    assert.equal(
+      harness.checkpoints.view(harness.taskId)?.resume.verdict,
+      "resume",
+      "nothing executed, so a runner handed this record has a step to continue rather than one to repeat",
+    );
+
+    harness.answer(run.approvalId, "approve", { via: "web" });
+    const after = await harness.resume(run);
+    assert.equal(after.kind, "completed");
+    assert.equal(
+      harness.checkpoint()?.boundary,
+      "step",
+      "and the answered step commits its own boundary on the way out, replacing the prompt one rather than joining it: " +
+        "one row per task, which is D-095's first rule",
+    );
+  });
+
+  it("commits a boundary for a step policy refused, because the refusal is the step's outcome", async () => {
+    const denied = createHarness({
+      rounds: [deleteRound, doneRound],
+      tools: fileTools(),
+      // No `fs.write`, so `file.delete` is a capability this identity does not hold: `deny`, not a prompt.
+      grants: ["fs.read", "task.read"],
+    });
+    assert.equal((await denied.start()).kind, "completed");
+    assert.equal(
+      denied.checkpointWrites.length,
+      1,
+      "a denied action is a committed boundary too \u2014 the model was told why, the step count moved, and a resume from " +
+        "here repeats nothing",
+    );
+    assert.equal(denied.executions.length, 0, "and the refusal is not an effect to reconcile");
+
+    const undeclared = createHarness({
+      rounds: [[{ kind: "tool-call", name: "browser.open", arguments: {} }], doneRound],
+      tools: fileTools(),
+    });
+    assert.equal((await undeclared.start()).kind, "completed");
+    assert.equal(
+      undeclared.checkpointWrites.length,
+      1,
+      "a tool no executor declares is the same case: the step has an outcome (\u00a73.1's third rule, refused), the run " +
+        "continues from it, and a resume would see the same refusal",
+    );
+  });
+
+  it("writes nothing for D-086's pause, because a pause is a state and not a step", async () => {
+    const otherTarget = [
+      { kind: "tool-call", name: "file.delete", arguments: { path: `${WORKSPACE}/dist` } },
+    ] as const;
+    const harness = createHarness({
+      rounds: [deleteRound, otherTarget, doneRound],
+      tools: fileTools(),
+    });
+    const first = suspended(await harness.start());
+    harness.answer(first.approvalId, "deny", { via: "tui" });
+    const second = suspended(await harness.resume(first));
+    harness.answer(second.approvalId, "deny", { via: "tui" });
+    const before = harness.checkpointWrites.length;
+
+    const paused = await harness.resume(second);
+
+    assert.equal(paused.kind, "paused");
+    assert.equal(
+      harness.checkpointWrites.length,
+      before,
+      "the pause adds a `task.progress` frame and no boundary: no step committed, so D-065 has nothing to write, and a " +
+        "pause that moved the resume point would be a pause that repeated the work it stopped",
+    );
+  });
+
+  it("refuses to commit a boundary outside the phase that records the step", async () => {
+    const harness = createHarness({ rounds: [doneRound], tools: [] });
+    await harness.start();
+
+    assert.throws(
+      () =>
+        harness.checkpoints.commit({
+          taskId: harness.taskId,
+          boundary: "step",
+          step: 9,
+          modelId: "fake-tools",
+          messages: [],
+        }),
+      /outside a transaction/,
+      "the harness guards the checkpoint the way it guards the arbiter, so \u00a7D-095's second rule is enforced in a test " +
+        "rather than requested in a comment: a boundary written after the commit could exist for a step a rollback took " +
+        "back, and that is a resume point that lies",
+    );
+  });
+});

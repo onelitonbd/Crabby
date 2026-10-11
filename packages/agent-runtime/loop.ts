@@ -31,23 +31,30 @@
 //     build can execute a `file.write`, so the loop offers the model only what an executor declares it can run.
 //   - **No second ladder rung.** D-043's stage 1 is here — the same model and provider, transient classes only, on D-064's
 //     schedule with its jitter, `Retry-After` overriding upward, and a `provider.retry.*` event per rung. D-044's stage 2
-//     (ask the user which model to use instead, then resume from the checkpoint) is not, because it needs a checkpoint and
-//     a switch surface; a budget exhausted therefore fails the task and says how many attempts it took. Tool steps are
-//     never retried at all — see `callProvider` for why that is §7.3's answer and not an omission.
+//     (ask the user which model to use instead, then resume from the checkpoint) is not: the checkpoint it would resume
+//     from is durable now (D-095), but a switch surface and a runner are not, and §4.1 has no edge out of `failed` for it
+//     to resume along — which is F-50 rather than an oversight. A budget exhausted therefore fails the task and says how
+//     many attempts it took. Tool steps are never retried at all — see `callProvider` for why that is §7.3's answer and
+//     not an omission.
 //   - **No cancellation policy of its own** — that is `cancellation.ts`, added in the next slice (M2e). This loop supplies
 //     what only the party running a step can know: what was in flight, and whether the step reported back or was walked
 //     away from. It stops scheduling steps the moment a request is recorded (§6.1's step 2, and the MUST NOT that follows
 //     it), and an abort with no request behind it still stops at `cancelling`, because settling without one would be the
 //     runtime inventing a requester.
-//   - **No conversation store.** A suspended run carries its messages in process memory. That is honest rather than
-//     durable: after a restart §7.1 marks the task `interrupted` and §7.2 decides what may resume, and a loop that
-//     pretended to rebuild a conversation from the event log would be inventing §8's compaction.
+//   - **No conversation store, and nothing that resumes from a restart.** A suspended run carries its messages in process
+//     memory; since M2i a redacted copy of them is durable at each committed step boundary (`checkpoint.ts`, D-095), which
+//     is what a runner would rebuild a `RunInput` from — but there is no runner, no `packages/tools` and no product
+//     provider adapter, so §7.1 still marks the task `interrupted` and §7.2 still decides what may resume. A loop that
+//     rebuilt a conversation from the event log instead would be inventing §8's compaction, with the log's redaction and
+//     64 KiB truncation already applied to it.
 //   - **No streaming.** The loop calls `generate()`, so assistant text arrives whole and is logged as `message.added`;
 //     §5.3's `message.stream.delta` path belongs to the streaming slice.
 //   - **No result validation.** §4.4's fifth step has nothing to validate against until a tool declares an output
 //     schema, and `PROVIDERS_AND_TOOLS.md` §4.1 lists `outputSchema` among the fields the runtime owes (F-41's
 //     neighbour): a check with no schema is a check that always passes.
 import {
+  type CheckpointBoundary,
+  type CheckpointPending,
   type ErrorClass,
   type Event,
   isTerminal,
@@ -81,6 +88,7 @@ import {
 } from "@crabby/providers";
 import type { ApprovalRecord, Approvals } from "./approvals.ts";
 import type { CancellationEvidence, CancellationGate } from "./cancellation.ts";
+import type { CheckpointGate } from "./checkpoint.ts";
 import { createPhaseWriter, type Emit, type TaskJournal } from "./journal.ts";
 import type { TransitionEvidence } from "./transitions.ts";
 
@@ -267,6 +275,10 @@ export interface LoopDeps {
    *  callers. Without one the loop still refuses to act on a terminal task, and an abort stops at `cancelling` rather
    *  than settling, because settling with no recorded request would be the runtime cancelling work on its own. */
   readonly cancellation?: CancellationGate | undefined;
+  /** D-065's checkpoint, written at each committed step boundary and inside the transaction that commits it. Optional for
+   *  the reason `cancellation` is: a loop with no checkpoint manager still runs, and what it loses is a resume point, not
+   *  a step. A runner wires the same `createCheckpoints` manager here, to `GET /tasks/{id}/checkpoint`, and to recovery. */
+  readonly checkpoints?: CheckpointGate | undefined;
   readonly limits?: Partial<LoopLimits> | undefined;
   readonly now?: (() => number) | undefined;
   /** D-064's jitter source, injected for the reason `now` is: a jittered schedule a test cannot pin is a schedule nobody
@@ -433,6 +445,28 @@ export function createLoop(deps: LoopDeps): Loop {
         ...(outcome?.code === undefined ? {} : { code: outcome.code }),
       },
     };
+  }
+
+  /** D-065's committed step boundary, written from inside the phase that records the step — because "committed" is the
+   *  operative word in that sentence. A checkpoint written after the phase could exist for a step a rollback took back, or
+   *  be missing for a step that happened, and either one is a resume point that disagrees with the log the verdict reads.
+   *  The `state` and `lastSeq` the record carries are read by the manager rather than passed in, so a boundary cannot
+   *  claim a sequence number the event store did not assign. */
+  function checkpointAt(
+    state: RunState,
+    boundary: CheckpointBoundary,
+    messages: readonly ProviderMessage[],
+    steps: number,
+    pending?: CheckpointPending,
+  ): void {
+    deps.checkpoints?.commit({
+      taskId: state.input.taskId,
+      boundary,
+      step: steps,
+      modelId: state.input.modelId,
+      messages,
+      ...(pending === undefined ? {} : { pending }),
+    });
   }
 
   function refused(
@@ -677,6 +711,13 @@ export function createLoop(deps: LoopDeps): Loop {
     input: {
       readonly call: ToolCall;
       readonly tier: Tier | undefined;
+      /** The provider's id for this call, so the result message that closes it is the one the model asked for. */
+      readonly toolCallId: string;
+      /** The conversation and the step counter as they stand. Both arrive because D-065's boundary is written *inside*
+       *  the phase that records this step's outcome, and a boundary that could not name the conversation it committed
+       *  would be a resume point with nothing to resume. */
+      readonly messages: readonly ProviderMessage[];
+      readonly steps: number;
       readonly approvalId?: string;
       readonly evidence?: TransitionEvidence;
       readonly begin?: (emit: Emit, at: number) => { reason: string; code?: string } | undefined;
@@ -687,6 +728,9 @@ export function createLoop(deps: LoopDeps): Loop {
      *  that has to record it. */
     readonly abandoned: boolean;
     readonly refusal?: { reason: string; code?: string };
+    /** The conversation with this step's result appended — built inside the phase that commits the boundary, so the
+     *  checkpoint and the run cannot disagree about what the step said. */
+    readonly nextMessages: readonly ProviderMessage[];
   }> {
     const startedAt = now();
     const begun = phase(state.input.taskId, state.input.correlationId, (emit) => {
@@ -702,7 +746,11 @@ export function createLoop(deps: LoopDeps): Loop {
           },
           startedAt,
         );
-        return { refusal };
+        // A refusal is a committed boundary too: the step has an outcome (the reason), the model will be told it, and the
+        // run continues from there. Nothing external happened, which is what makes it the easy case for §7.3.
+        const next = [...input.messages, toolMessage(input.toolCallId, refusal.reason)];
+        checkpointAt(state, "step", next, input.steps);
+        return { refusal, nextMessages: next };
       }
       const task = currentTask(state.input.taskId);
       // §4.1 has no `planning` → `completed` edge, and this is why: nothing has executed yet, so a task enters `running`
@@ -720,13 +768,17 @@ export function createLoop(deps: LoopDeps): Loop {
         },
         startedAt,
       );
-      return {};
+      // The start is not a boundary: nothing is committed yet, and a checkpoint written here would be a resume point that
+      // claims a step the executor has not run. The conversation is carried through unchanged so both branches of this
+      // phase return the same shape.
+      return { nextMessages: input.messages };
     });
     if (begun.refusal !== undefined) return { ...begun, abandoned: false };
 
     const ran = await runTool(input.call, state.input.taskId, state.input.signal);
     const outcome = ran.outcome;
     const doneAt = now();
+    const next = [...input.messages, toolMessage(input.toolCallId, outcome.output)];
     phase(state.input.taskId, state.input.correlationId, (emit) => {
       emit(
         outcome.ok ? "tool.execution.completed" : "tool.execution.failed",
@@ -739,8 +791,12 @@ export function createLoop(deps: LoopDeps): Loop {
         },
         doneAt,
       );
+      // The outcome event first and the boundary second, in that order and in one transaction: the boundary's `lastSeq`
+      // has to be the sequence number of the event that made the step committed, because the verdict's whole question is
+      // "what does the log say happened after this point".
+      checkpointAt(state, "step", next, input.steps);
     });
-    return { outcome, abandoned: ran.abandoned };
+    return { outcome, abandoned: ran.abandoned, nextMessages: next };
   }
 
   // ------------------------------------------------------------------ the gated action
@@ -776,6 +832,15 @@ export function createLoop(deps: LoopDeps): Loop {
       if (result.deduplicated !== true) emit(result.event, approvalPayload(result.record), at);
       const fresh = currentTask(task.id);
       if (fresh.state !== "awaiting_approval") move(fresh, "awaiting_approval", {}, emit, at);
+      // D-065's other boundary, and the only durable trace of a `SuspendedRun`: the step is proposed and gated, the
+      // request is open, and nothing has executed. The record names the step and points at the arbiter's row; it does not
+      // carry the action's arguments, because they are redacted on write like everything else in it and because a second
+      // copy of an approved action would be an action the arbiter never saw (D-084's binding comparison).
+      checkpointAt(state, "prompt", messages, steps, {
+        tool: call.tool,
+        toolCallId: proposed.id,
+        approvalId: result.record.id,
+      });
       return result;
     });
     if (!opened.ok) {
@@ -798,10 +863,12 @@ export function createLoop(deps: LoopDeps): Loop {
       if (refusals >= limits.refusalsBeforePause) {
         return { stop: pause(state, task.id, call.tool, opened.reason, refusals, at) };
       }
+      const next = [...messages, toolMessage(proposed.id, opened.reason)];
       phase(task.id, state.input.correlationId, (emit) => {
         emit("tool.execution.blocked", { tool: call.tool, reason: opened.reason, refusals }, at);
+        checkpointAt(state, "step", next, steps);
       });
-      return { messages: [...messages, toolMessage(proposed.id, opened.reason)], steps };
+      return { messages: next, steps };
     }
     return {
       stop: {
@@ -877,6 +944,7 @@ export function createLoop(deps: LoopDeps): Loop {
       // §3.1's third rule: a completion may propose tool calls, and only that. A name no executor declared has nothing
       // to run, and asking policy about it would produce an answer about a tool this build does not have.
       const reason = `'${proposed.name}' was proposed by the model, but no executor in this build declares it, so there is nothing to run`;
+      const next = [...messages, toolMessage(proposed.id, reason)];
       phase(task.id, correlationId, (emit) => {
         emit(
           "tool.call.proposed",
@@ -884,8 +952,9 @@ export function createLoop(deps: LoopDeps): Loop {
           at,
         );
         emit("tool.execution.blocked", { tool: proposed.name, reason, class: "validation" }, at);
+        checkpointAt(state, "step", next, steps);
       });
-      return { messages: [...messages, toolMessage(proposed.id, reason)], steps };
+      return { messages: next, steps };
     }
 
     const call = toToolCall(proposed);
@@ -917,6 +986,7 @@ export function createLoop(deps: LoopDeps): Loop {
       // `unavailable` carries no tier on purpose: a tool this client does not have was never classified for it, and
       // printing one would suggest the platform was the reason rather than the pairing.
       const tier = decision.outcome === "deny" ? decision.tier : undefined;
+      const next = [...messages, toolMessage(proposed.id, decision.reason)];
       phase(task.id, correlationId, (emit) => {
         emit(
           "tool.execution.blocked",
@@ -928,12 +998,19 @@ export function createLoop(deps: LoopDeps): Loop {
           },
           at,
         );
+        checkpointAt(state, "step", next, steps);
       });
-      return { messages: [...messages, toolMessage(proposed.id, decision.reason)], steps };
+      return { messages: next, steps };
     }
 
     // ---- allowed: execute, through the one function that runs a tool
-    const executed = await execute(state, { call, tier: decision.tier });
+    const executed = await execute(state, {
+      call,
+      tier: decision.tier,
+      toolCallId: proposed.id,
+      messages,
+      steps,
+    });
     // §6.1's steps 3 to 6: the step that was already running was allowed to finish, its output is captured above by
     // `execute`, and now the task is marked cancelled instead of looping for another round.
     const settled = cancelledWith(
@@ -941,8 +1018,7 @@ export function createLoop(deps: LoopDeps): Loop {
       toolEvidence(executed.outcome, executed.abandoned, call.tool),
     );
     if (settled !== undefined) return { stop: settled };
-    const output = executed.outcome?.output ?? executed.refusal?.reason ?? "";
-    return { messages: [...messages, toolMessage(proposed.id, output)], steps };
+    return { messages: executed.nextMessages, steps };
   }
 
   // ------------------------------------------------------------------ the drive
@@ -1217,6 +1293,7 @@ export function createLoop(deps: LoopDeps): Loop {
         return pause(state, run.taskId, run.call.tool, reason, refusals, at);
       }
       // §4.1's `awaiting_approval` → `planning` edge: a denial that leaves other work possible re-plans rather than dies.
+      const next = [...state.messages, toolMessage(run.toolCallId, reason)];
       phase(run.taskId, run.input.correlationId, (emit) => {
         emit(
           "tool.execution.blocked",
@@ -1225,11 +1302,9 @@ export function createLoop(deps: LoopDeps): Loop {
         );
         const task = currentTask(run.taskId);
         if (task.state === "awaiting_approval") move(task, "planning", {}, emit, at);
+        checkpointAt(state, "step", next, state.steps);
       });
-      return drive({
-        ...state,
-        messages: [...state.messages, toolMessage(run.toolCallId, reason)],
-      });
+      return drive({ ...state, messages: next });
     }
 
     if (row.state === "consumed") {
@@ -1292,6 +1367,9 @@ export function createLoop(deps: LoopDeps): Loop {
     const executed = await execute(state, {
       call: run.call,
       tier: row.request.tier,
+      toolCallId: run.toolCallId,
+      messages: state.messages,
+      steps: state.steps,
       approvalId: row.id,
       // §4.1's one edge into `running` that requires evidence, and the evidence is the answer the arbiter recorded:
       // §5's rule 5 and §7.2 both refuse to let a pending approval act as an approved one, and `transition()` enforces it.
@@ -1324,20 +1402,14 @@ export function createLoop(deps: LoopDeps): Loop {
       if (executed.refusal?.code === "materially-changed" || executed.refusal?.code === "expired") {
         return reRequest(state, run, reason);
       }
-      return drive({
-        ...state,
-        messages: [...state.messages, toolMessage(run.toolCallId, reason)],
-      });
+      return drive({ ...state, messages: executed.nextMessages });
     }
     const settled = cancelledWith(
       state,
       toolEvidence(executed.outcome, executed.abandoned, run.call.tool),
     );
     if (settled !== undefined) return settled;
-    return drive({
-      ...state,
-      messages: [...state.messages, toolMessage(run.toolCallId, executed.outcome.output)],
-    });
+    return drive({ ...state, messages: executed.nextMessages });
   }
 
   /** §6.3's "the action needs a fresh request", made by the only party allowed to make one: policy is asked again, so the

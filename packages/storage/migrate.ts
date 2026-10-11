@@ -123,6 +123,33 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // D-065's checkpoint, and D-095's first rule: **one row per task, replaced at each committed step boundary**. §7.1
+    // restores "the latest valid task state", and a history of boundaries would be a second event log with a retention
+    // rule nobody priced — the boundary before the latest one is only useful to a resume that intends to repeat work,
+    // which §7.3 forbids. `record_json` holds the whole record (the run's working context included), redacted on the way
+    // in like every other payload that reaches this file, and the columns beside it are the ones a reader or a verdict
+    // needs without parsing it. `ON DELETE CASCADE` because a checkpoint is saved state *for* a task and not a record
+    // *about* one: deleting the task deletes the transcript that only existed to resume it.
+    version: 4,
+    name: "checkpoints",
+    up(db) {
+      db.exec(`
+        CREATE TABLE checkpoint (
+          task_id     TEXT PRIMARY KEY REFERENCES task (id) ON DELETE CASCADE,
+          boundary    TEXT NOT NULL CHECK (boundary IN ('step','prompt')),
+          state       TEXT NOT NULL,
+          step        INTEGER NOT NULL,
+          last_seq    INTEGER NOT NULL,
+          model_id    TEXT NOT NULL,
+          written_at  TEXT NOT NULL,
+          bytes       INTEGER NOT NULL,
+          record_json TEXT NOT NULL
+        );
+        -- No index beyond the primary key: every read this table has is by task, and that is the key.
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

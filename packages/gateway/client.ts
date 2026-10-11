@@ -150,6 +150,10 @@ export interface GatewayClient {
   }): Promise<Response<unknown>>;
   getTask(id: string): Promise<Response<unknown>>;
   taskEvents(id: string, cursor?: number): Promise<Response<unknown>>;
+  /** §4.3's checkpoint view (D-095): the boundary a run last committed, its size, and D-065's verdict on resuming from
+   *  it. A task that never reached a step boundary answers `404` with the verdict's reason in `details`, so "no saved
+   *  state" and "a task you may not see" are different responses. */
+  taskCheckpoint(id: string): Promise<Response<unknown>>;
   /** §4.3's queue. `state` defaults to the only value a client can act on, and is passed through as text so a typo is
    *  refused by the Gateway rather than answered with an empty list. */
   approvals(options?: { state?: string }): Promise<Response<unknown>>;
@@ -251,6 +255,7 @@ export function createClient(input: {
       request(
         `/api/v1/tasks/${encodeURIComponent(id)}/events${cursor === undefined ? "" : `?cursor=${cursor}`}`,
       ),
+    taskCheckpoint: (id) => request(`/api/v1/tasks/${encodeURIComponent(id)}/checkpoint`),
     approvals: (options = {}) =>
       request(
         `/api/v1/approvals${options.state === undefined ? "" : `?state=${encodeURIComponent(options.state)}`}`,

@@ -8,12 +8,13 @@
 > this file), most recently on 2026-10-10 — findings F-13…F-31 are from the six 2026-10-10 passes (the (R) round,
 > the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from),
 > F-32…F-36 from M1c's implementation pass, the first pass where a *generator* rather than a reader compared the
-> documents with the code, and F-37…F-49 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38, sighted
+> documents with the code, and F-37…F-50 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38, sighted
 > twice), a rule enforced without a document to cite (F-39), the checker's own arithmetic (F-40), the three M2d's loop met
 > when it had to ask for numbers and vocabulary the plan had not priced (F-41…F-43), the three M2e's cancellation manager
 > met when it had to write down an outcome §6.2 requires and the plan had not defined (F-44…F-46), and the two M2g's
-> recovery met when it had to answer what a restart owes a prompt and a user (F-47, F-48), and the one M2h's ladder met
-> when it went looking for the budget D-043 had already priced (F-49). Every earlier finding has been re-checked against
+> recovery met when it had to answer what a restart owes a prompt and a user (F-47, F-48), the one M2h's ladder met
+> when it went looking for the budget D-043 had already priced (F-49), and the one M2i's checkpoint met when it went to
+> hand the run back to a task the state machine had already ended (F-50). Every earlier finding has been re-checked against
 > the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
@@ -839,6 +840,16 @@ says plainly that the authorization half of §7.2 has nothing to authorize yet. 
 manager, which are the two things that would make an answer actionable — and until then the prompt expires on its own
 deadline, which is the outcome D-064's gradient was designed to make safe.
 
+*(Half closed by M2i. `packages/agent-runtime/checkpoint.ts` commits D-065's boundary and writes a second kind of
+boundary for a run suspended at a prompt, so the pause is now a durable fact with coordinates — `GET /tasks/{id}/checkpoint`
+names the step the run stopped on, the approval that covers it and D-065's verdict on continuing from it — and the answer
+the user gives is no longer the only durable thing about the run. What is still missing is the party that would act: there
+is no runner in the Gateway, no `packages/tools` for the resumed step to execute and no product provider adapter to call,
+so the answer remains inert and this row stays open. The half that was this finding's to name as absent is gone: the
+`task.cancelled` payload's `checkpoint` field reports a boundary instead of apologising for one, and recovery reports the
+verdict per task rather than saying it has nothing to pass. F-50 is the residue, and it is a different shape: the
+checkpoint turned out not to be the only thing D-044's promise was waiting on.)*
+
 ### F-48 — Nothing swept the queue, so a stale prompt was shown as pending and counted as waiting
 **Severity: medium, fixed by D-093, and found by writing recovery rather than by reading the queue.** The arbiter has had
 `sweep` since M2b, and its header states why: "an approval that expires only when someone looks at it is an approval that
@@ -877,6 +888,35 @@ fixed is D-044's second rung, and F-47 is the reason it cannot be: ask-the-user-
 resume from and a switch surface to ask on, and neither exists. An exhausted budget therefore fails the task, and the
 `task.failed` payload carries `attempts`, `retried` and a `ladder` sentence naming the rung that is not built, which is
 the honest version of the promise D-044 makes.
+
+### F-50 — D-044 resumes from the checkpoint after a failure, and the state machine has no edge out of `failed`
+**Severity: medium, open, and found by writing a verdict rather than by reading D-044.** D-044's sentence is "on failure
+after the retry budget, Crabby asks the user which model to use instead, and resumes from the checkpoint — never restarts
+the task", and `PROVIDERS_AND_TOOLS.md` §3.6's stage 3 repeats it: "Switching models or exhausting retries **must not
+restart the task from scratch**. Work already completed remains complete; execution continues from the saved checkpoint and
+the pending step that failed." D-083's table makes `failed` terminal and absorbing — §4.1's first rule, enforced by
+`transition()`, which refuses a move out of it and is asserted refusing it in `agent-runtime.test.ts`. So the two
+documents describe one moment from opposite ends and no legal path joins them: a runtime that has failed the task has ended
+it, and a resume would have to un-end it. M2h left the impression that the checkpoint was the only missing piece (F-49's
+last paragraph says the rung cannot be built because there is no checkpoint to resume from); M2i built the checkpoint and
+found a second wall behind it.
+
+Three readings. **Let `failed → running` for this one case** makes the absorbing rule a default with an exception, which is
+the shape §4.1 exists to prevent, and it would ripple into every interface's assumption that a terminal state means the
+story is over — including `GET /tasks/{id}`'s contract, whose `state` is what a client decides whether to keep polling on.
+**Fail the task and keep the prompt open** — ask the user while the task is `failed` — is a state a client cannot render:
+§5.2's rule is that anything a client must act on is retrievable, and a prompt hanging off a terminal task is F-47 with the
+polarity reversed. **Ask before failing** is the reading the three documents agree on once the order is fixed: the ladder's
+exhaustion produces a pause in D-086's shape (`awaiting_approval`, no pending row, a `task.progress` frame naming the spent
+budget and the candidate models, per §3.6's stage-2 labeling rules), the answer records the switch on the task, and the run
+continues from the checkpoint while the task is still moving; only an ask that goes unanswered or is refused moves to
+`failed`, where it belongs. That is what the runner's slice has to implement, and nothing in M2i altered a state machine to
+get there early.
+
+What this slice did settle is the dependency D-044 named. `verdictFor` answers `none` for a failed task with a reason that
+carries both halves — the boundary is durable at step N, and `failed` is why nothing walks back to it — so a reader of
+`GET /tasks/{id}/checkpoint` learns the shape of the missing rung from the record itself rather than from a document. The
+row stays open until a slice either builds that pause or amends D-044 to say the ask happens before the task ends.
 
 ## 3. Checks That Passed
 

@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-49 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-50 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -210,10 +210,15 @@ attempts, transient classes only, a `provider.retry.scheduled` and a `provider.r
 cancellation recorded while the ladder waits settles the task as `cancelled` rather than `failed`, because sitting out a
 16 s rung for a task the user already stopped is the behaviour §6.3 forbids. D-094 records why the ladder climbs provider
 calls and never tool steps, and F-49 the gap it closed: D-043's attempt count had been "configurable" with no config key
-that reached it. Checkpoints are the remaining M2 manager, and they land in `packages/agent-runtime` rather than in the
-Gateway for the reason in D-003: a rule the Gateway owns is a rule only the Gateway can follow. D-044's second rung — ask
-the user which model to use instead — stays absent with them, because it needs a checkpoint to resume from and a switch
-surface to ask on, so an exhausted budget fails the task and says how many attempts it took. **Still absent, and the reason `crabby task run` and a
+that reached it. The checkpoint manager landed next, in `packages/agent-runtime` rather than in the Gateway for the reason in
+D-003: a rule the Gateway owns is a rule only the Gateway can follow. `checkpoint.ts` commits D-065's boundary inside the
+transaction that records each step and a second kind of boundary for a run suspended at an approval,
+`packages/storage/checkpoints.ts` keeps one row per task, `GET /tasks/{id}/checkpoint` reports the boundary and its verdict
+without handing the transcript to a fourth interface, and recovery reports that verdict per task instead of saying it has
+nothing to pass (D-095, closing half of F-47). D-044's second rung — ask the user which model to use instead — stays
+absent, and building the checkpoint is what showed why: the saved state it resumes from now exists, but there is no switch
+surface to ask on, no runner to answer to, and `failed` is terminal and absorbing, which is F-50. So an exhausted budget
+fails the task and says how many attempts it took. **Still absent, and the reason `crabby task run` and a
 cancellation route are not `ready`:** the loop has no tools to run (`ARCHITECTURE.md` §18's `packages/tools` does not
 exist, so the executor is a seam), no provider adapter to call (`PROVIDERS_AND_TOOLS.md` §3.3's four arrive in M2/M4, and
 the fake is a test reference rather than a product provider), and nothing in the Gateway that drives a task — so a route

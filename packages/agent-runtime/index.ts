@@ -21,4 +21,5 @@ export * from "./checkpoint.ts";
 export * from "./journal.ts";
 export * from "./loop.ts";
 export * from "./recovery.ts";
+export * from "./runner.ts";
 export * from "./transitions.ts";

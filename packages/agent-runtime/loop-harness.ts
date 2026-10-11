@@ -79,6 +79,7 @@ import {
   type ToolRunContext,
   type ToolSurface,
 } from "./loop.ts";
+import { createRunner, type Runner, type RunnerDeps } from "./runner.ts";
 
 /** One tool the harness's executor can run. `parameters` defaults to a declaration of *no* arguments, which is the
  *  strict default: `PROVIDERS_AND_TOOLS.md` §4.3 rejects arguments a tool did not declare, so a test that wants to pass
@@ -171,6 +172,9 @@ export interface Harness {
   /** The §6 manager, wired to the same journal and subscriber as the loop, so a test can request a cancellation from
    *  the outside the way an interface would and watch the loop honour it. */
   readonly cancellation: Cancellation;
+  /** The runner, composed on this fixture's own journal, executor, subscriber and managers — the same wiring a Gateway
+   *  does. A runner test that built its own deps would prove the runner works against a fiction. */
+  runner(overrides?: Partial<RunnerDeps>): Runner;
   task(): TaskRecord | undefined;
   /** The latest boundary, or `undefined` when the run never committed one. */
   checkpoint(): CheckpointRecord | undefined;
@@ -575,14 +579,19 @@ export function createHarness(options: HarnessOptions): Harness {
     checkpoints,
     now: clock.now,
   });
+  // Hoisted out of `createLoop`'s argument list so a runner composed on this fixture shares the *same* guarded arbiter
+  // and the same platform fact. Two guards would be two opinions about whether a write happened inside a transaction,
+  // and the point of `runner()` below is that a runner test is not testing a second, simpler copy of this wiring.
+  const guardedApprovals = guardApprovals(approvals, memory.insideTransaction);
+  const platform = { isTermux: options.isTermux ?? false };
   const loop = createLoop({
     journal: memory.journal,
-    approvals: guardApprovals(approvals, memory.insideTransaction),
+    approvals: guardedApprovals,
     cancellation,
     checkpoints,
     provider,
     tools: tools.surface,
-    platform: { isTermux: options.isTermux ?? false },
+    platform,
     // A real subscriber, so the invariant is checked rather than assumed: §9's rule is that publishing happens after the
     // transaction commits and never inside it, and a stream that learned about a write a rollback later took back is a
     // client that has to be told the opposite.
@@ -612,9 +621,37 @@ export function createHarness(options: HarnessOptions): Harness {
       realpathOf: (absolutePath: string) => absolutePath,
     };
 
+  /** `RunnerDeps.ctx` is `EvalContext` minus `grants`, because the runner supplies grants per run from the identity
+   *  that asks; this harness's `ctxFor()` includes them, so they are dropped here rather than passed twice. */
+  function ctxWithoutGrants(): Omit<EvalContext, "grants"> {
+    const base = ctxFor();
+    return {
+      ...(base.paths === undefined ? {} : { paths: base.paths }),
+      ...(base.egressAllowList === undefined ? {} : { egressAllowList: base.egressAllowList }),
+      ...(base.realpathOf === undefined ? {} : { realpathOf: base.realpathOf }),
+      ...(base.schemasValidated === undefined ? {} : { schemasValidated: base.schemasValidated }),
+    };
+  }
+
   const harness: Harness = {
     loop,
     cancellation,
+    runner: (overrides = {}) =>
+      createRunner({
+        journal: memory.journal,
+        approvals: guardedApprovals,
+        provider,
+        tools: tools.surface,
+        platform,
+        publish: publishEvent,
+        cancellation,
+        checkpoints,
+        modelId: options.modelId ?? FAKE_TOOL_MODEL_ID,
+        ctx: ctxWithoutGrants(),
+        now: clock.now,
+        ...(options.limits === undefined ? {} : { limits: options.limits }),
+        ...overrides,
+      }),
     approvals,
     taskId,
     sessionId,

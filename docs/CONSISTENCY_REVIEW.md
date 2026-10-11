@@ -1059,12 +1059,17 @@ handle that yields the value at call time; the agent never reads it, and it neve
 and D-031 say the same thing from the secrets side, and `docs/DATA_AND_MEMORY.md` §4.1 lists `vault/` at mode `0700` as
 part of the state directory's whole footprint.
 
-What exists is the directory and two honest reports about it. `packages/platform/paths.ts` names `vault/`;
+What exists is the directory and three honest reports about it. `packages/platform/paths.ts` names `vault/`;
 `crabby doctor` checks that it exists and that its mode is `0700`, and says plainly when it does not exist yet;
 `GET /health` reports `vault: { managed: false }` rather than `locked: false`, because a lock nobody implements is a
 protection nobody has. What does not exist is any code that stores a secret, resolves a `vault://` reference, or hands an
 adapter a handle — so `ProviderConfig.apiKey` is a plain string, and M2l's adapter holds one for the lifetime of the
-process (D-100 records that as what the build does instead, rather than letting a reader assume §3.7 is implemented).
+process (D-100 records that as what the build does instead, rather than letting a reader assume §3.7 is implemented). The third report is the one a
+user meets first, and M2m added it: `packages/providers/compose.ts` **refuses** a `provider.<id>.key` reference at
+composition, naming this finding and the milestone that closes it, so a keyed endpoint is answered with "the vault
+arrives in M5" instead of being composed with a dropped credential and failing as a `401` from the endpoint (D-101). The
+schema refuses the other shape — an inline key never validates, because §3.3's rule cannot be enforced after a
+mode-`0644` file exists and `crabby config get` prints what is in it.
 
 Not fixed in that slice because the honest fix is a subsystem, not a signature: an encrypted or at-rest-protected store
 whose keys survive a process restart, a `vault://` resolver with a rule for a missing or locked vault, `crabby provider
@@ -1078,6 +1083,27 @@ and a test that a key never appears in an event payload, a log line or a prompt 
 `SECURITY.md` §14 are actually about. Until then two duties sit with whoever composes an adapter and are stated in
 `PROVIDERS_AND_TOOLS.md` §3.7 rather than left to a reader: the key must not reach a log line (`packages/core/redact.ts`
 is defence in depth, not the control) and must not enter model context.
+
+### F-57 — §4.3's `POST /tasks` row documents four body fields and the contract accepts two
+
+**Severity: low, open, and the runner's to answer rather than a defect in what exists.** `docs/INTERFACES_AND_API.md`
+§4.3 spells the body out: "Create a task. Body: objective, optional session, **model pin, capability narrowing,
+schedule**. Idempotency key required." `packages/api-contracts/task.ts` answers `CreateTaskBody = { objective,
+sessionId? }` with `additionalProperties: false`, so a client that sends the documented model pin is refused with a
+named-field problem. That is the right behaviour for a field this build does not have and the wrong description of a
+route that does, and the two have sat side by side since M1c.
+
+Two of the three missing fields belong to other milestones: capability narrowing is `SECURITY.md` §13's per-pairing
+removal, which nothing assigns at pairing yet (F-52 names the same absence from the other side), and `schedule` is the
+scheduler's, which `docs/ROADMAP.md` §4 lists and nothing has built. The model pin is the one D-101 sharpened, because
+§3.6's sentence has two halves — "The user selects a default model **and may pin a model per task** or per interface
+session; per-task pinning wins" — and M2m implemented the first. So there is now a default with nothing able to override
+it, `TaskRecord` has no `model` column, and a pin would need schema version 5 plus an answer about whether a pinned model
+survives a restart (D-065's checkpoint already carries `modelId`, which is the same fact recorded from the other side).
+
+**Closing condition:** the row loses the fields this build refuses, or the contract gains them — and for the model pin the
+second is the honest one, because a runner needs a `modelId` and §3.6 says where it comes from. Until then a runner takes
+the model from composition rather than from the task, and says so.
 
 ## 3. Checks That Passed
 

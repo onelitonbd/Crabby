@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-56 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-57 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -318,6 +318,34 @@ native API, `anthropic`'s tool blocks and `gemini`'s streaming metadata, because
 caller in this build; adapter-side retries, because D-043's ladder is the loop's and an adapter that retried would double
 it; and `countTokens`, because §3.1 says absence means §3.4's own estimation, and an estimate dressed as a count would be
 spent as if it were one.
+
+The thirteenth slice is the configuration a run is made of, and it landed before the runner for a reason worth stating:
+a runner composed with no provider to call is a demo, and `crabby gateway start` had never loaded `config.json` at all —
+so D-074's `limits.sqliteBusyTimeoutMs` was an override that changed a screen and not a socket, and §3.3's "Configured
+through `crabby provider add` **or configuration**" was a path with no code on it. Three namespaces enter the file, each a
+spelling a document already uses rather than a shape this slice invented: `provider.<id>.*` (§3.7's own example,
+`provider.groq.key = vault://groq`), `defaultModel` (§3.6's selection, in the `<provider>/<modelId>` form §7.1's `/model`
+command takes), and `workspace.roots` (`SECURITY.md` §8's "one or more **configured workspace roots**", which §4.2's
+`config.set` row already names). `packages/providers/compose.ts` turns an entry into an adapter and refuses four ways,
+each with the sentence that owns it. **An inline key never reaches the file**: the schema requires `^vault://`, because
+§3.3's "never inline in … an ordinary config file" cannot be enforced after a mode-`0644` file exists and `crabby config
+get` prints what is in it. **A `vault://` reference is refused by composition**, naming M5 and F-56 — an adapter composed
+with a dropped credential answers `401` from the endpoint and reads as a broken network. **`mock` is refused from user
+configuration** although §3.3 lists it as a preset, because `SECURITY.md` §17 makes it the instrument that keeps tests off
+live APIs and composing it would let a task reach `completed` with no model behind it. **§3.3's other three families are
+refused by name** rather than coerced into the one adapter this build has, since pointing it at another wire protocol
+produces a failure that reads as a broken endpoint. What composes is therefore a keyless endpoint, which on the primary
+platform is the supported path and not a consolation prize: D-066 and O-034 both settle local inference on Android as an
+external server the user runs, and a `llama-server` on `127.0.0.1` asks for no key. `crabby init` does §5's step 3 — it
+creates `$HOME/crabby-workspace` and records what it created, which is a fact about this install rather than a default, so
+every D-074 number still lives in code — and `crabby doctor` re-runs §5's steps 2 and 3 as checks, **failing a root that is
+the home directory**, because §8 says the home directory is not a workspace and a root that wide leaves the sensitive
+deny-list, a floor rather than a containment rule, as the only boundary. `GET /api/v1/status`'s providers row stopped
+saying `contract-only`, which M2l had already made false, and reports what composed beside what refused. **Still absent:
+the runner.** A composed adapter is *reported* and not yet *called*, so `POST /api/v1/tasks` still records a task nothing
+moves, and `crabby task run` and a cancellation route stay `planned` for the reason §4 gives. F-57 records the body drift
+a runner will have to answer: §4.3 documents a model pin the contract refuses, and §3.6's per-task half now has a default
+with nothing able to override it (D-101).
 
 ## 5. Phase M3 — Four interfaces in parallel
 

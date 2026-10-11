@@ -137,6 +137,12 @@ Custom-provider requirements:
 
 - Configured through `crabby provider add` or configuration, never through an agent-requested change
   (`config.write` is T3, `PROVIDERS_AND_TOOLS.md` §4.2).
+  **The configuration half is built (M2m, D-101); the verb is still M4's.** `provider.<id>` in `config.json` is §3.7's
+  own namespace, and `packages/providers/compose.ts` turns an entry into an adapter. What composes is an entry that needs
+  no secret: an inline key never validates, because this section's rule cannot be enforced after a mode-`0644` file
+  exists, and a `vault://` reference is refused at composition with the reason §3.7 gives below. `mock` is refused from
+  configuration although this section lists it as a preset — `SECURITY.md` §17 makes it a test instrument, and a task that
+  completed on it would be the demo this phase has refused to ship.
 - Required fields: name, base URL, model name(s); key supplied by reference to the vault (`§3.7`), never inline in
   a conversation or an ordinary config file.
 - Base URL validation: absolute `http(s)` URL, no embedded credentials in the URL, and a clear warning if the
@@ -261,7 +267,10 @@ value at call time; the agent never reads it, and it never enters model context 
 
 **What this build does instead, stated rather than glossed (M2l).** There is no vault code: `crabby doctor` checks the
 directory's existence and mode, `GET /health` reports `vault: { managed: false }` rather than claiming a lock it cannot
-show, and nothing resolves a `vault://` reference. So `ProviderConfig.apiKey` is a plain string and the adapter holds it
+show, and nothing resolves a `vault://` reference. Since M2m that absence is also a
+refusal a user meets: `packages/providers/compose.ts` declines to compose an entry whose `key` is a `vault://` reference
+and names the milestone that changes the answer (D-101), because an adapter composed with a dropped credential answers
+`401` from the endpoint and reads as a broken network rather than an absent subsystem. So `ProviderConfig.apiKey` is a plain string and the adapter holds it
 for the lifetime of the process. Two duties follow for whoever composes an adapter, and they are the reason this
 paragraph exists: the key must never reach a log line (`packages/core/redact.ts` is defence in depth, not the control)
 and never enter model context — an adapter that put its own configuration into a prompt would leak the one secret the

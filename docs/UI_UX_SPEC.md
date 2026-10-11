@@ -152,6 +152,10 @@ crabby init
   6. first task             a one-command task that finishes in seconds, to prove the loop works
 ```
 
+- Step 3 is built (M2m, D-101): `crabby init` creates `$HOME/crabby-workspace`, shows the deny-list beside it, and
+  records the path it created in `config.json`. Steps 1, 2, 4, 5 and 6 are the interactive wizard's, which no interface in
+  this build runs yet — and step 2's model path is configurable without one (`provider.<id>` in `config.json`), which is
+  what `crabby doctor` reports as the `provider` and `model` checks.
 - `crabby doctor` re-runs the same checks at any time and prints fixes, not findings.
 - Every step states the security consequence in one line, e.g. "Enabling shell access lets the agent run commands
   as your Termux user. That is not a sandbox."

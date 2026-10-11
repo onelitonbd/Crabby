@@ -23,7 +23,9 @@ import {
   type PlatformFacts,
   STATE_DIR_NAME,
 } from "@crabby/platform";
+import { composeProviders, type ProviderComposition, selectDefaultModel } from "@crabby/providers";
 import type { Renderer } from "../output.ts";
+import { WORKSPACE_ROOT_NAME } from "./init.ts";
 
 export type CheckStatus = "ok" | "warn" | "fail" | "note" | "deferred";
 
@@ -92,6 +94,8 @@ export function collectChecks(input: DoctorInput): Check[] {
   checks.push(storageDriverCheck(input));
   checks.push(dataDirCheck(input));
   checks.push(configCheck(input));
+  checks.push(...providerChecks(input));
+  checks.push(workspaceCheck(input));
   checks.push(vaultCheck(input));
   checks.push(lastExitCheck(input));
   checks.push(...gatewayChecks(input.layout));
@@ -310,6 +314,154 @@ function configCheck(input: DoctorInput): Check {
     status: "ok",
     summary: loaded.path ?? "",
     detail: "valid against the schema in packages/core",
+  };
+}
+
+/** §5 step 2's "pick a model path", re-run as a check: `crabby doctor` "re-runs the same checks at any time and prints
+ *  fixes, not findings". Two lines rather than one, because "does an adapter compose" and "does this install know which
+ *  model to run" fail differently and are fixed by different commands — and §3.6 makes the second a user selection
+ *  rather than something the build may assume.
+ *
+ *  A refusal is `deferred` when the reason is a subsystem this build does not have (the vault, §3.3's other three
+ *  families) and `warn` when it is a configuration the user can fix now. Never a green tick, for the reason this file's
+ *  header gives (F-28): a diagnostic that claims a state the build cannot have is a lie with a checkmark on it. */
+function providerChecks(input: DoctorInput): Check[] {
+  const loaded = loadConfig(input.layout);
+  const entries = loaded.config.provider ?? {};
+  const composed = composeProviders(loaded.config.provider, loaded.limits);
+  const ready = composed.filter((entry) => entry.ok);
+  const refused = composed.filter((entry) => !entry.ok);
+
+  if (Object.keys(entries).length === 0) {
+    return [
+      {
+        id: "provider",
+        // A note and not a warn: §5 makes skipping a supported path ("Crabby must be usable in a read-only,
+        // approval-for-everything mode right after `init`"), so an install with no provider is configured that way
+        // rather than broken.
+        status: "note",
+        summary: "no provider is configured",
+        detail:
+          "§3.3's configuration path is `provider.<id>` in config.json, and an endpoint that needs no key composes today",
+        fix: "crabby config set provider.local.baseUrl http://127.0.0.1:8080/v1",
+      },
+      {
+        id: "model",
+        status: "note",
+        summary: "no default model, because no provider is configured",
+        fix: "crabby config set defaultModel <provider>/<modelId> once one is",
+      },
+    ];
+  }
+
+  const out: Check[] = [];
+  if (ready.length === 0) {
+    // `deferred` when every refusal is a subsystem that arrives later, `warn` when at least one is a mistake the user
+    // can correct now. Decided from the configuration rather than from the reason text, so rewording a refusal cannot
+    // silently move a check between the two.
+    const deferred = refused.every((entry) => {
+      const config = entries[entry.id];
+      return (
+        config?.key !== undefined ||
+        (config?.kind !== undefined && config.kind !== "openai-compatible")
+      );
+    });
+    out.push({
+      id: "provider",
+      status: deferred ? "deferred" : "warn",
+      summary: `no provider entry composes (${refused.length} refused)`,
+      detail: refused.map((entry) => `${entry.id}: ${refusalOf(entry)}`).join("; "),
+      fix: deferred
+        ? "an endpoint that needs no key composes now; a keyed one waits for the vault (M5, F-56)"
+        : "crabby config schema --json prints the shape an entry must have",
+    });
+    out.push({
+      id: "model",
+      status: "warn",
+      summary: "no default model can be selected while no provider composes",
+      fix: "fix the provider entry above, then `crabby config set defaultModel <provider>/<modelId>`",
+    });
+    return out;
+  }
+
+  out.push({
+    id: "provider",
+    status: "ok",
+    summary: ready.map((entry) => `${entry.id} (${entry.modelIds.length})`).join(", "),
+    detail:
+      refused.length > 0
+        ? `refused: ${refused.map((entry) => `${entry.id} — ${refusalOf(entry)}`).join("; ")}`
+        : "§3.3's openai-compatible family, composed from config.json (D-100, D-101)",
+  });
+  const selected = selectDefaultModel(composed, loaded.config.defaultModel);
+  out.push(
+    selected.ok
+      ? {
+          id: "model",
+          status: "ok",
+          summary: `${selected.providerId}/${selected.modelId}`,
+          detail: "§3.6's default selection; a per-task pin would win over it",
+        }
+      : {
+          id: "model",
+          status: "warn",
+          summary: "no default model is selected",
+          detail: selected.reason,
+          fix: "crabby config set defaultModel <provider>/<modelId>",
+        },
+  );
+  return out;
+}
+
+function refusalOf(entry: ProviderComposition): string {
+  return entry.ok ? "" : entry.reason;
+}
+
+/** `SECURITY.md` §8's containment, as a check: "Tool-declared paths must resolve within one or more **configured
+ *  workspace roots**", and "the home directory is not a workspace". Both halves are reported because they fail
+ *  differently. No roots is a `warn` and not a `fail`: containment is fail-closed, so nothing is exposed — what breaks
+ *  is that every `file.*` call outside a task's scratch directory is denied, and an agent that cannot touch a file
+ *  looks broken rather than unconfigured. A root that *is* the home directory is a `fail`, because that configuration
+ *  removes the boundary §8 requires and leaves the sensitive deny-list — a floor, not a containment rule — as the only
+ *  thing between a task and `~/.ssh`. */
+function workspaceCheck(input: DoctorInput): Check {
+  const loaded = loadConfig(input.layout);
+  const roots = loaded.config.workspace?.roots ?? [];
+  if (roots.length === 0) {
+    return {
+      id: "workspace",
+      status: "warn",
+      summary: "no workspace root is configured",
+      detail:
+        "§8's containment is fail-closed without one, so `file.*` is denied outside a task's scratch directory",
+      fix: `crabby init creates ${input.home}/${WORKSPACE_ROOT_NAME}, or crabby config set workspace.roots '["…"]'`,
+    };
+  }
+  if (roots.some((root) => root === input.home || root === `${input.home}/`)) {
+    return {
+      id: "workspace",
+      status: "fail",
+      summary: `${input.home} is a workspace root, and §8 says the home directory is not a workspace`,
+      detail:
+        "a root this wide leaves the sensitive deny-list as the only boundary, and that list is a floor rather than a containment rule",
+      fix: `crabby config set workspace.roots '["${input.home}/${WORKSPACE_ROOT_NAME}"]'`,
+    };
+  }
+  const missing = roots.filter((root) => !existsSync(root));
+  if (missing.length > 0) {
+    return {
+      id: "workspace",
+      status: "warn",
+      summary: `${missing.length} configured root(s) do not exist`,
+      detail: missing.join(", "),
+      fix: `mkdir -p ${missing[0]}`,
+    };
+  }
+  return {
+    id: "workspace",
+    status: "ok",
+    summary: roots.join(", "),
+    detail: "§8's containment resolves every tool-declared path inside one of these",
   };
 }
 

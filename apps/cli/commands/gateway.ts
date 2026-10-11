@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { EXIT, type ExitCode } from "@crabby/api-contracts";
-import { createLogger, createShutdown, type LogLevel } from "@crabby/core";
+import { createLogger, createShutdown, type LogLevel, loadConfig } from "@crabby/core";
 import {
   buildApp,
   clearGatewayInfo,
@@ -15,6 +15,7 @@ import {
   writeGatewayInfo,
 } from "@crabby/gateway";
 import type { DataLayout } from "@crabby/platform";
+import { composeProviders, selectDefaultModel } from "@crabby/providers";
 import { DB_FILE_NAME, migrate, openDatabase, schemaVersion } from "@crabby/storage";
 import { parseTail, unknownFlagMessage } from "../args.ts";
 import type { Renderer } from "../output.ts";
@@ -68,9 +69,18 @@ async function runStart(
   }
 
   const log = createLogger({ ...(logLevel === undefined ? {} : { level: logLevel }) }, "gateway");
+  const loaded = loadConfig(layout);
   const dbFile = path.join(layout.stateDir, DB_FILE_NAME);
-  const handle = openDatabase(dbFile);
+  // D-074 makes `limits.sqliteBusyTimeoutMs` the override for the busy timeout, and `openDatabase` reads it out of
+  // `options.limits` — so until this line the composition root opened the database without the loaded config and that
+  // one key changed nothing except the screen that printed it. The rest of `limits.*` waits for the runtime that
+  // consumes it; this one already had a consumer and was not being handed to it.
+  const handle = openDatabase(dbFile, { limits: loaded.limits });
   const migration = migrate(handle.db);
+  // §3.3's other configuration path — "Configured through `crabby provider add` **or configuration**" — composed here
+  // rather than inside the Gateway, because the party that starts the process is also the party that can print a
+  // refusal and its fix once, at startup, instead of leaving it to a route to explain later.
+  const providers = composeProviders(loaded.config.provider, loaded.limits);
   const startedAt = new Date();
   const built = await buildApp({
     db: handle.db,
@@ -79,6 +89,7 @@ async function runStart(
     version: readVersion(),
     startedAt,
     listenerMode: "local",
+    providers,
   });
 
   try {
@@ -111,6 +122,40 @@ async function runStart(
     `${dbFile} at schema v${schemaVersion(handle.db)}${
       migration.applied.length > 0 ? `, applied ${migration.applied.join(", ")}` : ""
     }`,
+  );
+  for (const problem of loaded.problems)
+    renderer.line("config", `${problem.path || "<root>"} ${problem.message}`);
+  if (loaded.problems.length > 0)
+    renderer.fix(
+      "`crabby doctor` prints the fix for each one; the keys that are valid still apply",
+    );
+  for (const entry of providers) {
+    if (!entry.ok) {
+      renderer.line("provider refused", `${entry.id}: ${entry.reason}`);
+      continue;
+    }
+    renderer.line("provider", `${entry.id}: ${entry.modelIds.join(", ")}`);
+    // §3.3's warning is a warning: the user chose a LAN endpoint on plain HTTP and the answer is to show it on the
+    // screen that started the process, not to refuse the configuration (D-100).
+    for (const warning of entry.warnings) renderer.fix(warning);
+  }
+  if (providers.length === 0) {
+    renderer.line("provider", "none configured");
+    renderer.fix(
+      "`crabby config set provider.local.baseUrl http://127.0.0.1:8080/v1` plus a `models` entry — an endpoint that " +
+        "needs no key composes today, and one that does waits for the vault (M5, F-56)",
+    );
+  }
+  const selected = selectDefaultModel(providers, loaded.config.defaultModel);
+  renderer.line(
+    "default model",
+    selected.ok
+      ? `${selected.providerId}/${selected.modelId}`
+      : `not selected — ${selected.reason}`,
+  );
+  renderer.line(
+    "tasks",
+    "recorded, not driven: this build has no runner, so a task created over HTTP stays `queued` (docs/ROADMAP.md §4)",
   );
   if (built.bootstrap) {
     renderer.line("", "");

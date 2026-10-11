@@ -7,10 +7,13 @@
 // interface may request, display, and relay; it may never grant" (`SECURITY.md` §6.1) would break at the first attempt
 // if a Gateway endpoint could wave a T3 through. The approval queue and its two §4.3 routes are in this build, and
 // they only *answer*: nothing here opens a request, and no route drives a task. The party that opens one exists —
-// `packages/agent-runtime/loop.ts` calls `policy.evaluate` and hands the result to the arbiter (D-084, D-086) — but it
-// has no tools to run, no provider adapter to call and no runner here to start it, so a task created over HTTP is still
-// recorded and read back while nothing moves it, and `docs/ROADMAP.md` §4 names the three. Wiring a route to the loop
-// against the fake provider would be the demo this phase has refused to ship.
+// `packages/agent-runtime/loop.ts` calls `policy.evaluate` and hands the result to the arbiter (D-084, D-086) — and the
+// two things it needed are here now: an executor to run (`packages/tools`, D-098) and an adapter to call
+// (`packages/providers`, D-100), which `crabby gateway start` composes from `config.json`'s `provider.*` entries and
+// hands to this file as `deps.providers`. What is still absent is the runner that would start one, so a task created
+// over HTTP is still recorded and read back while nothing moves it, and `docs/ROADMAP.md` §4 names that as the one
+// remaining item. Wiring a route to the loop against the fake provider would be the demo this phase has refused to
+// ship: a composed adapter is reported here, and reported is all it is until something drives a task with it.
 //
 // What this file *does* own at startup is §7's recovery, beside D-065's retention prune, and it is the reading side of
 // the checkpoint: `GET /api/v1/tasks/{id}/checkpoint` reports the boundary the run last committed and D-065's verdict on
@@ -49,6 +52,7 @@ import type { Logger } from "@crabby/core";
 import type { DataLayout } from "@crabby/platform";
 import { detectProcess } from "@crabby/platform";
 import { allToolRecords, CAPABILITIES, registryDigest, TIERS, TOOL_REGISTRY } from "@crabby/policy";
+import type { ProviderComposition } from "@crabby/providers";
 import {
   appendEvent,
   authenticate,
@@ -98,6 +102,12 @@ export interface GatewayDeps {
    *  comes from `process.env` cannot be tested on both sides of the predicate — which is the half that matters, since
    *  the desktop CI run is exactly where a Termux-only row has to show up as unavailable rather than broken. */
   readonly platformFacts?: { isTermux: boolean };
+  /** What the composition root made of `config.json`'s `provider.*` entries — §3.3's "Configured through `crabby
+   *  provider add` **or configuration**", the second half, composed by `packages/providers/compose.ts`. Handed in rather
+   *  than read here for the reason `platformFacts` is injected: this file has no opinion about where configuration comes
+   *  from, and a Gateway that loaded its own could not be tested against a second configuration. Refusals travel with the
+   *  list, because `GET /api/v1/status` owes a caller the reason an entry did not compose and not only its absence. */
+  readonly providers?: readonly ProviderComposition[] | undefined;
 }
 
 export interface BuiltApp {
@@ -249,6 +259,42 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   return { app, bus, ...(bootstrap ? { bootstrap } : {}) };
 }
 
+/** §4.1's `GET /status` providers row, answered from what the composition root handed in rather than from what the
+ *  build contains. `contract-only` was true until M2l landed an adapter and M2m gave it §3.3's other configuration path,
+ *  and a row that kept saying so is exactly the claim `docs/CONSISTENCY_REVIEW.md` exists to catch.
+ *
+ *  Three cases, and the middle one is why this is a function rather than a ternary: an entry that *refused* is not an
+ *  absent provider, and the difference is the whole content of the reason. "You have not configured one" and "the one you
+ *  configured needs a vault this build does not have" lead to different next commands, and §4.1's row exists so a client
+ *  can tell a subsystem that is missing from one that is misconfigured. */
+function providersRow(composed: readonly ProviderComposition[] | undefined) {
+  const entries: { readonly id: string; readonly models: readonly string[] }[] = [];
+  const refused: { readonly id: string; readonly reason: string }[] = [];
+  for (const entry of composed ?? []) {
+    if (entry.ok) entries.push({ id: entry.id, models: entry.modelIds });
+    else refused.push({ id: entry.id, reason: entry.reason });
+  }
+  if (entries.length === 0) {
+    return {
+      state: "absent",
+      reason:
+        refused.length > 0
+          ? `no provider entry composes — ${refused.map((row) => `${row.id}: ${row.reason}`).join("; ")}`
+          : "no provider is configured; §3.3's configuration path is `crabby config set provider.<id>.baseUrl …`, and an " +
+            "endpoint that needs a key waits for the vault (M5, docs/CONSISTENCY_REVIEW.md F-56)",
+      ...(refused.length === 0 ? {} : { refused }),
+    };
+  }
+  return {
+    state: "ready",
+    entries,
+    ...(refused.length === 0 ? {} : { refused }),
+    // What `ready` does not imply, stated because a client that infers it will POST a task and then watch it sit: the
+    // adapter composes and answers `describe()`/`listModels()`, and nothing in this build drives a task with it yet.
+    note: "no runner drives a task here yet, so a task created over HTTP is recorded and stays `queued` (docs/ROADMAP.md §4)",
+  };
+}
+
 // ------------------------------------------------------------------ system (§4.1)
 
 function registerSystemRoutes(
@@ -274,13 +320,7 @@ function registerSystemRoutes(
     const subsystems = {
       storage: { state: "ready", schemaVersion: schemaVersion(deps.db) },
       scheduler: { state: "absent", reason: "arrives with M2's runtime" },
-      // Three states, because "absent" would be false: the contract, the fake adapter, and the conformance suite are
-      // in the build now, and what M2 adds is the registry that selects among real adapters.
-      providers: {
-        state: "contract-only",
-        reason:
-          "the §3.1 contract, §3.2 descriptors, and §7 conformance suite are in place; adapters arrive with M2",
-      },
+      providers: providersRow(deps.providers),
       extensions: { state: "absent", reason: "arrives with M-Extensions" },
       tunnel: { state: "absent", reason: "arrives with the tunnel slice" },
     } as const;

@@ -9,6 +9,7 @@
 // a way this build has a caller for yet. What they will find waiting is the fixture, the suite and the shared config and
 // error mapping, which is the part that must not be written twice.
 
+export * from "./compose.ts";
 export * from "./config.ts";
 export * from "./conformance.ts";
 export * from "./contract.ts";

@@ -28,6 +28,7 @@ import {
 } from "@crabby/gateway";
 import { dataLayout } from "@crabby/platform";
 import { CAPABILITY_NAMES, PENDING_RECORD_FIELDS, TIERS, TOOL_REGISTRY } from "@crabby/policy";
+import { composeProviders, type ProviderComposition } from "@crabby/providers";
 import {
   appendEvent,
   DB_FILE_NAME,
@@ -52,11 +53,18 @@ interface Harness {
   close(): Promise<void>;
 }
 
-function boot(options: { platformFacts?: { isTermux: boolean } } = {}): Promise<Harness> {
+interface BootOptions {
+  readonly platformFacts?: { isTermux: boolean };
+  /** What `crabby gateway start` composes from `config.json`'s `provider.*` entries and hands in (§3.3's "or
+   *  configuration"). A test that composed none is the honest default, and the reason `GET /status` reports `absent`. */
+  readonly providers?: readonly ProviderComposition[];
+}
+
+function boot(options: BootOptions = {}): Promise<Harness> {
   return bootWith(options);
 }
 
-async function bootWith(options: { platformFacts?: { isTermux: boolean } }): Promise<Harness> {
+async function bootWith(options: BootOptions): Promise<Harness> {
   const dir = mkdtempSync(path.join(tmpdir(), "crabby-gateway-"));
   const layout = dataLayout(dir);
   const handle = openDatabase(path.join(dir, DB_FILE_NAME));
@@ -70,6 +78,7 @@ async function bootWith(options: { platformFacts?: { isTermux: boolean } }): Pro
     startedAt: new Date(),
     listenerMode: "local",
     ...(options.platformFacts ? { platformFacts: options.platformFacts } : {}),
+    ...(options.providers ? { providers: options.providers } : {}),
   });
   await built.app.listen({ host: "127.0.0.1", port: 0 });
   const address = built.app.server.address();
@@ -191,9 +200,79 @@ describe("gateway over http", () => {
     }
     assert.equal(
       body.subsystems.providers?.state,
-      "contract-only",
-      "M1c landed the §3.1 contract, the fake adapter, and the §7 suite; the adapters are still M2's",
+      "absent",
+      "the harness composes no provider, so the row reports an install that has not configured one — not `contract-only`, " +
+        "which stopped being true when M2l landed an adapter and M2m gave it §3.3's configuration path",
     );
+    assert.match(
+      body.subsystems.providers?.reason ?? "",
+      /config set provider/,
+      "an absent provider row has to name the command that ends the absence",
+    );
+  });
+
+  it("reports a provider the composition root handed it, and says plainly that nothing drives a task with it", async () => {
+    const composed = composeProviders({
+      local: {
+        baseUrl: "http://127.0.0.1:8080/v1",
+        models: {
+          "qwen2.5:3b": {
+            contextWindow: 4096,
+            maxOutputTokens: 512,
+            supports: {
+              streaming: true,
+              toolCalling: true,
+              parallelToolCalls: false,
+              systemRole: true,
+              structuredOutput: false,
+              imageInput: false,
+              audioInput: false,
+              reasoning: false,
+              promptCaching: false,
+              jsonSchemaValidation: false,
+            },
+            cancellation: "best-effort",
+            rateLimits: null,
+            cost: "local",
+            batching: null,
+          },
+        },
+      },
+      keyed: {
+        baseUrl: "https://api.groq.com/openai/v1",
+        key: "vault://groq",
+        models: { "llama-3.3-70b": {} },
+      },
+    });
+    const local = await boot({ providers: composed });
+    try {
+      const body = (await local.client.status()).body as {
+        subsystems: Record<
+          string,
+          { state: string; entries?: { id: string }[]; refused?: { id: string }[]; note?: string }
+        >;
+      };
+      const providers = body.subsystems.providers;
+      assert.equal(providers?.state, "ready", JSON.stringify(providers));
+      assert.deepEqual(
+        providers?.entries?.map((entry) => entry.id),
+        ["local"],
+      );
+      // A refusal is reported beside the entries rather than dropped: §4.1's row exists so a client can tell a
+      // subsystem that is missing from one that is misconfigured, and F-56's reason is the difference between "you
+      // have not configured a provider" and "the one you configured needs a vault this build does not have".
+      assert.deepEqual(
+        providers?.refused?.map((entry) => entry.id),
+        ["keyed"],
+      );
+      assert.match(
+        providers?.note ?? "",
+        /no runner drives a task/,
+        "`ready` for the provider subsystem must not read as `a task will run`",
+      );
+    } finally {
+      await local.close();
+    }
   });
 
   it("creates a task and answers with the record the contract describes", async () => {

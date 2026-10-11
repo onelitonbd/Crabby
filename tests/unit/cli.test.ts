@@ -13,14 +13,25 @@ import { type Check, containsSecret, tally } from "@crabby/cli/commands/doctor";
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const ENTRY = path.join(REPO, "apps/cli/crabby.ts");
 
-function crabby(args: string[], dataDir?: string) {
-  const argv = dataDir === undefined ? args : ["--data-dir", dataDir, ...args];
-  const run = spawnSync(process.execPath, [ENTRY, ...argv], { encoding: "utf8", cwd: REPO });
-  return { code: run.status, out: run.stdout ?? "", err: run.stderr ?? "" };
-}
-
 function tempDir(): string {
   return mkdtempSync(path.join(tmpdir(), "crabby-cli-"));
+}
+
+/** `HOME` belongs to the test, not to whoever ran it. `docs/UI_UX_SPEC.md` §5 step 3 has `crabby init` create
+ *  `$HOME/crabby-workspace`, so a suite that inherited the real environment would leave a directory in a developer's
+ *  home — and would be asserting against a path it does not own. The data dir's parent is the home the test already
+ *  chose, so one temp directory owns both and an assertion can name the root it expects. */
+const FALLBACK_HOME = tempDir();
+
+function crabby(args: string[], dataDir?: string) {
+  const argv = dataDir === undefined ? args : ["--data-dir", dataDir, ...args];
+  const home = dataDir === undefined ? FALLBACK_HOME : path.dirname(dataDir);
+  const run = spawnSync(process.execPath, [ENTRY, ...argv], {
+    encoding: "utf8",
+    cwd: REPO,
+    env: { ...process.env, HOME: home },
+  });
+  return { code: run.status, out: run.stdout ?? "", err: run.stderr ?? "" };
 }
 
 test("`--version` and `crabby version` are the same answer", () => {
@@ -71,7 +82,7 @@ test("an unknown command is refused with exit 2 and a suggestion", () => {
   assert.match(planned.out, /not implemented yet — planned for M\d/);
 });
 
-test("`init` creates the state dir, the vault at 700, and a config that holds no defaults", () => {
+test("`init` creates the state dir, the vault at 700, and §5 step 3's workspace root", () => {
   const root = tempDir();
   const state = path.join(root, ".crabby");
   const first = crabby(["init"], state);
@@ -79,7 +90,21 @@ test("`init` creates the state dir, the vault at 700, and a config that holds no
   assert.match(first.out, /config\s+.*config\.json/);
   const vaultMode = readMode(state, "vault");
   assert.equal(vaultMode & 0o077, 0, "the vault directory must not be group- or world-readable");
-  assert.deepEqual(JSON.parse(readFileSync(path.join(state, "config.json"), "utf8")), {});
+
+  // §5 step 3, and the reason the default is not `$HOME` itself: SECURITY.md §8 says "the home directory is not a
+  // workspace", and a root that wide would leave the sensitive deny-list — a floor, not a containment rule — as the
+  // only thing between a task and `~/.ssh`.
+  const workspace = path.join(root, "crabby-workspace");
+  assert.equal(statSync(workspace).isDirectory(), true, "init creates the root it names");
+  assert.match(first.out, /workspace\s+.*crabby-workspace/);
+  assert.match(first.out, /deny-list/, "§5 step 3 shows the deny-list with the root");
+
+  // The file holds what init created and nothing else: a recorded root is a fact about this install, while every
+  // D-074 default stays in code so a partial file cannot freeze one.
+  assert.deepEqual(JSON.parse(readFileSync(path.join(state, "config.json"), "utf8")), {
+    workspace: { roots: [workspace] },
+  });
+
   const second = crabby(["init"], state);
   assert.equal(second.code, 0);
   assert.match(
@@ -87,10 +112,10 @@ test("`init` creates the state dir, the vault at 700, and a config that holds no
     /already there/,
     "a second init is someone checking their work, not a request to reset it",
   );
-  assert.match(
-    readFileSync(path.join(state, "config.json"), "utf8").trim(),
-    /^\{\}$/,
-    "init never overwrites",
+  assert.deepEqual(
+    JSON.parse(readFileSync(path.join(state, "config.json"), "utf8")),
+    { workspace: { roots: [workspace] } },
+    "init never overwrites, and never records the same root twice",
   );
 });
 
@@ -155,9 +180,10 @@ test("`config` round-trips: path, get, set, schema — and a set writes only the
   crabby(["init"], state);
   const set = crabby(["config", "set", "limits.fsTimeoutMs", "15000"], state);
   assert.equal(set.code, 0, set.out + set.err);
+  const file = readFileSync(path.join(state, "config.json"), "utf8");
   assert.deepEqual(
-    JSON.parse(readFileSync(path.join(state, "config.json"), "utf8")),
-    { limits: { fsTimeoutMs: 15000 } },
+    (JSON.parse(file) as { limits?: unknown }).limits,
+    { fsTimeoutMs: 15000 },
     "defaults must not be frozen into the user's file",
   );
   const get = crabby(["config", "get", "limits.fsTimeoutMs", "--json"], state);
@@ -177,10 +203,10 @@ test("`config` round-trips: path, get, set, schema — and a set writes only the
   const bad = crabby(["config", "set", "limits.nope", "1"], state);
   assert.equal(bad.code, 2);
   assert.match(bad.out, /'nope'/);
-  assert.deepEqual(
-    JSON.parse(readFileSync(path.join(state, "config.json"), "utf8")),
-    { limits: { fsTimeoutMs: 15000 } },
-    "a refused set changed nothing",
+  assert.equal(
+    readFileSync(path.join(state, "config.json"), "utf8"),
+    file,
+    "a refused set changed nothing — not the key it was asked about, and not the root init recorded beside it",
   );
   const schema = crabby(["config", "schema", "--json"], state);
   const printed = JSON.parse(schema.out) as {
@@ -315,3 +341,141 @@ function checkOf(json: string, id: string): Record<string, unknown> {
 function readMode(stateDir: string, child: string): number {
   return statSync(path.join(stateDir, child)).mode & 0o777;
 }
+
+// ---- §5's steps 2 and 3 as doctor checks (D-101)
+//
+// `crabby doctor` "re-runs the same checks at any time and prints fixes, not findings", so the two things §5's
+// first-run flow asks a person to choose — a model path and a workspace root — have to be answerable from it afterwards.
+// What each test asserts is the *status*, because that is the part a user acts on: a gap this build cannot close is
+// `deferred`, a mistake the user can fix is `warn` or `fail`, and a choice nobody made yet is a `note` rather than a
+// finding (§5 makes skipping a supported path).
+
+const DESCRIPTOR = {
+  contextWindow: 4096,
+  maxOutputTokens: 512,
+  supports: {
+    streaming: true,
+    toolCalling: true,
+    parallelToolCalls: false,
+    systemRole: true,
+    structuredOutput: false,
+    imageInput: false,
+    audioInput: false,
+    reasoning: false,
+    promptCaching: false,
+    jsonSchemaValidation: false,
+  },
+  cancellation: "best-effort",
+  rateLimits: null,
+  cost: "local",
+  batching: null,
+};
+
+interface DoctorPayload {
+  ok: boolean;
+  checks: { id: string; status: string; summary: string; detail?: string; fix?: string }[];
+}
+
+// `code` is nullable for the reason `crabby()`'s is: a spawned process that was signalled has no exit status.
+function doctor(state: string): { code: number | null; payload: DoctorPayload; raw: string } {
+  const run = crabby(["doctor", "--json"], state);
+  return { code: run.code, payload: JSON.parse(run.out) as DoctorPayload, raw: run.out + run.err };
+}
+
+function checkIn(payload: DoctorPayload, id: string) {
+  return payload.checks.find((check) => check.id === id);
+}
+
+test("`doctor` reports the workspace root `init` created, and a model path nobody chose yet", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  crabby(["init"], state);
+  const { code, payload } = doctor(state);
+  assert.equal(code, 0, JSON.stringify(payload.checks.filter((c) => c.status === "fail")));
+  const workspace = checkIn(payload, "workspace");
+  assert.equal(workspace?.status, "ok");
+  assert.match(
+    workspace?.summary ?? "",
+    /crabby-workspace/,
+    "§8's containment has a root to contain to",
+  );
+  // A note, not a warn: §5's step 2 offers "skip for now", and an install that took it is configured that way rather
+  // than broken.
+  assert.equal(checkIn(payload, "provider")?.status, "note");
+  assert.equal(checkIn(payload, "model")?.status, "note");
+  assert.match(checkIn(payload, "provider")?.fix ?? "", /config set provider/);
+});
+
+test("`doctor` fails a workspace root that is the home directory, which §8 says is not a workspace", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  crabby(["init"], state);
+  writeFileSync(path.join(state, "config.json"), JSON.stringify({ workspace: { roots: [root] } }));
+  const { code, payload } = doctor(state);
+  assert.equal(
+    code,
+    1,
+    "a root this wide removes §8's boundary, so it is a finding and not a note",
+  );
+  const workspace = checkIn(payload, "workspace");
+  assert.equal(workspace?.status, "fail");
+  assert.match(workspace?.summary ?? "", /home directory/, workspace?.summary ?? "");
+  assert.match(
+    workspace?.fix ?? "",
+    /crabby-workspace/,
+    "the fix names the directory `init` would have created, not only the rule that was broken",
+  );
+});
+
+test("`doctor` defers a keyed provider instead of failing it, and names the milestone that closes it", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  crabby(["init"], state);
+  writeFileSync(
+    path.join(state, "config.json"),
+    JSON.stringify({
+      workspace: { roots: [path.join(root, "crabby-workspace")] },
+      provider: {
+        groq: {
+          baseUrl: "https://api.groq.com/openai/v1",
+          key: "vault://groq",
+          models: { "llama-3.3-70b": DESCRIPTOR },
+        },
+      },
+      defaultModel: "groq/llama-3.3-70b",
+    }),
+  );
+  const { code, payload } = doctor(state);
+  const provider = checkIn(payload, "provider");
+  assert.equal(provider?.status, "deferred", provider?.detail ?? "");
+  assert.equal(code, 0, "a subsystem this build does not have is not a broken install (F-28)");
+  assert.match(
+    provider?.fix ?? "",
+    /M5/,
+    "the fix names the milestone, so `deferred` is a plan and not a shrug",
+  );
+  assert.match(provider?.detail ?? "", /F-56/);
+  assert.equal(checkIn(payload, "model")?.status, "warn");
+});
+
+test("`doctor` names the model an install selected, and the provider that composes it", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  crabby(["init"], state);
+  writeFileSync(
+    path.join(state, "config.json"),
+    JSON.stringify({
+      workspace: { roots: [path.join(root, "crabby-workspace")] },
+      provider: {
+        local: { baseUrl: "http://127.0.0.1:8080/v1", models: { "qwen2.5:3b": DESCRIPTOR } },
+      },
+      defaultModel: "local/qwen2.5:3b",
+    }),
+  );
+  const { code, payload } = doctor(state);
+  assert.equal(code, 0, JSON.stringify(payload.checks.filter((c) => c.status === "fail")));
+  assert.equal(checkIn(payload, "provider")?.status, "ok");
+  assert.match(checkIn(payload, "provider")?.summary ?? "", /local \(1\)/);
+  assert.equal(checkIn(payload, "model")?.status, "ok");
+  assert.equal(checkIn(payload, "model")?.summary, "local/qwen2.5:3b");
+});

@@ -271,7 +271,7 @@ Fallback rules:
 
 ## 8. Filesystem and Workspace Security
 
-- All file tools operate relative to one or more **configured workspace roots**. Absolute paths, `..` traversal, and symlink resolution must be normalized and re-checked *after* resolving links.
+- All file tools operate relative to one or more **configured workspace roots** (`workspace.roots` in `config.json`; `crabby init` creates `$HOME/crabby-workspace` and records it, D-101). A root that *is* the home directory is refused by `crabby doctor` as a failing check, because the sentence below would otherwise be the only boundary left. Absolute paths, `..` traversal, and symlink resolution must be normalized and re-checked *after* resolving links.
 - The default install grants no filesystem access outside the workspace; the home directory is not a workspace.
 - Sensitive default deny-list (configurable, user-owned): `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gh`, browser profile directories, `.env*` files, `*.pem`, `*.key`, `credentials*`, and the Crabby data directory itself. Deny applies to read as well as write; agents routinely leak by reading.
 - Writes should prefer atomic write + rename; destructive overwrites of pre-existing user files are T2.

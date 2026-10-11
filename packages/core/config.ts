@@ -45,9 +45,95 @@ export const LimitsConfig = Type.Object(
 );
 export type LimitsConfig = Static<typeof LimitsConfig>;
 
+/** One provider entry in `config.json`, in the namespace §3.7 spells out (`provider.groq.key = vault://groq`) and with
+ *  the fields §3.3 requires of a custom endpoint: "name, base URL, model name(s); key supplied by reference to the
+ *  vault (§3.7), never inline in a conversation or an ordinary config file".
+ *
+ *  The division of labour with `packages/providers/compose.ts` is one sentence: **the schema refuses what must never be
+ *  written down, and composition refuses what cannot work.** A key on disk is the first kind, so its shape is a pattern
+ *  here; a missing base URL is the second, so it is a reason there — and an entry a user is still building has to be
+ *  writable one field at a time, which a schema demanding the whole entry would forbid.
+ *
+ *  Two of §3.3's sentences are schema rather than advice, and both are refusals:
+ *
+ *  - `key` must be a `vault://` reference. §3.3's "never inline … in an ordinary config file" is the reason the pattern
+ *    is in the schema instead of in a comment: a key typed into `config.json` is a key in a file mode `0644`
+ *    (`docs/DATA_AND_MEMORY.md` §4.1), in every backup of it, and one `crabby config get provider` away from a
+ *    terminal. Refusing the shape is the control; `packages/core/redact.ts` is defence in depth behind it.
+ *  - `models` must not be empty. §3.2's descriptors are what make a capability question answerable, and D-100 made the
+ *    list static and user-supplied because this build cannot ask a live API for one — so an entry with no models has
+ *    nothing to route a request to and nothing to answer `supports` from.
+ *
+ *  The descriptor values themselves are `Unknown` here on purpose. §3.2's rules are implemented once, in
+ *  `packages/providers`' `parseDescriptor`, and `packages/core` may not import `@crabby/providers`
+ *  (`ARCHITECTURE.md` §19 keeps the dependency one way), so this schema checks that a descriptor is *present* per model
+ *  and composition checks that it *parses*. A second copy of §3.2's rules here would be the drift rule 1 exists to
+ *  prevent. */
+export const ProviderEntryConfig = Type.Object(
+  {
+    /** §3.3's "name". Optional because the key it hangs off (`provider.groq`) is already a name, and a preset's whole
+     *  purpose is "to pre-fill a display name" — a second one the user has to keep in sync is a second source. */
+    name: Type.Optional(Type.String({ minLength: 1 })),
+    /** §3.3's family, which D-100 made the adapter's unit ("implement families, not N vendors"). Optional and defaulting
+     *  to `openai-compatible` because that is the only family with an adapter here, and the enum names the other three so
+     *  that composition can refuse one with a reason instead of letting a user point this adapter at a wire protocol it
+     *  does not speak and read the failure as a broken endpoint. `mock` is §3.3's preset and `SECURITY.md` §17's test
+     *  instrument; it is in the enum for the same reason and refused at composition for that one. */
+    kind: Type.Optional(
+      Type.Union([
+        Type.Literal("openai-compatible"),
+        Type.Literal("ollama"),
+        Type.Literal("anthropic"),
+        Type.Literal("gemini"),
+        Type.Literal("mock"),
+      ]),
+    ),
+    /** §3.3's "base URL", required of a *working* entry and optional in the file, for the reason every `limits.*` key
+     *  is optional: `crabby config set provider.local.baseUrl …` has to be able to write one field of an entry, and a
+     *  schema that demanded the whole entry at the keystroke would make §3.7's own spelling (`provider.groq.key =
+     *  vault://groq`) unwritable and answer with a pile of problems about fields the user has not typed yet. What an
+     *  incomplete entry means is composition's answer, not the writer's. */
+    baseUrl: Type.Optional(Type.String({ minLength: 1 })),
+    /** §3.7's reference. Accepted as a shape and refused at composition until a vault exists to resolve it (F-56). */
+    key: Type.Optional(Type.String({ pattern: "^vault://[A-Za-z0-9._-]+$" })),
+    /** §3.3's "model name(s)", keyed by model id, each carrying the §3.2 descriptor D-100 made the user's to supply.
+     *  Optional for `baseUrl`'s reason; `minProperties` stays, because an explicitly empty list is not an entry under
+     *  construction but a claim that a provider has no models, and §3.2 has nothing to route a request to. */
+    models: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { minProperties: 1 })),
+    /** §3.3's custom-provider requirement that an endpoint declares "whether it is treated as local". Absent means the
+     *  base URL decides, which is what `packages/providers`' loopback test already does. */
+    local: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+export type ProviderEntryConfig = Static<typeof ProviderEntryConfig>;
+
+/** `SECURITY.md` §8's containment, as configuration: "Tool-declared paths must resolve within one or more **configured
+ *  workspace roots**", and "the home directory is not a workspace". §4.2's `config.set` row names roots as one of the
+ *  things that key may change, so the namespace is documented even though the field names are this module's choice.
+ *  An absent or empty list is not an error and gets no default here: `loadConfig` runs on a machine whose home this
+ *  module must not guess at, and a root invented by a default would be a path the agent may write to that the user
+ *  never chose. `crabby init` creates one (`docs/UI_UX_SPEC.md` §5 step 3) and *records what it created*, which is a
+ *  fact about this install rather than a default. */
+export const WorkspaceConfig = Type.Object(
+  {
+    roots: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  },
+  { additionalProperties: false },
+);
+export type WorkspaceConfig = Static<typeof WorkspaceConfig>;
+
 export const ConfigFile = Type.Object(
   {
     limits: Type.Optional(LimitsConfig),
+    /** §3.7's namespace, one entry per provider. Absent means no provider is configured, which is a state the Gateway
+     *  reports rather than papers over: a run needs an adapter, and an adapter nobody selected is not a default. */
+    provider: Type.Optional(Type.Record(Type.String(), ProviderEntryConfig)),
+    /** §3.6's "The user selects a default model and may pin a model per task or per interface session; per-task pinning
+     *  wins." Spelled `<provider>/<modelId>`, which is the spelling `docs/INTERFACES_AND_API.md` §7.1's `/model
+     *  <provider/model>` command already uses, so the config value and the command argument are the same string. */
+    defaultModel: Type.Optional(Type.String({ minLength: 3 })),
+    workspace: Type.Optional(WorkspaceConfig),
   },
   { additionalProperties: false },
 );

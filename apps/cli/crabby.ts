@@ -195,7 +195,10 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
   switch (noun) {
     case "init": {
-      return runInit(layout, renderer);
+      // §5 step 3 puts the workspace root at `$HOME/crabby-workspace`, and the home this process resolved is the one
+      // `--data-dir` did not override — so init gets the same `home` the layout was built from rather than reading the
+      // environment a second time and risking two answers.
+      return runInit(layout, renderer, home);
     }
     case "version": {
       return runVersion(facts, readVersion(rootPackageJson), renderer);

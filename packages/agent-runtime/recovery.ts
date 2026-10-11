@@ -17,8 +17,9 @@
 //      asked to stop, which is the one recovery outcome §6 exists to prevent.
 //   3. **Nothing resumes automatically in this build, and the report says so per task.** Since M2i the saved state exists
 //      — the loop commits D-065's boundary and this module reads the verdict on it — and what is still missing is the party
-//      that would use it: no runner drives a task, `ARCHITECTURE.md` §18's `packages/tools` does not exist, and there is no
-//      product provider adapter, so §7.1's "attempt to resume" is orchestration without an executor. What recovery does is
+//      that would use it: no runner drives a task and there is no product provider adapter, so §7.1's "attempt to resume"
+//      is orchestration without a party to orchestrate. `ARCHITECTURE.md` §18's `packages/tools` has existed since M2k,
+//      which is what makes the missing piece precise rather than merely absent: an executor nothing composes into a run. What recovery does is
 //      leave the task paused with a clear, user-visible reason (§7.2's last bullet), name the still-valid approval a runner
 //      would be allowed to use, and report D-065's verdict — `resume`, `pass`, `re-ask` or `none` — so the fact is on the
 //      record instead of in a reviewer's memory.
@@ -257,15 +258,16 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
       return (
         `the process that was running task ${task.id} ended, and no approval covers the step it was on, so \u00a77.2 forbids ` +
         `resuming it automatically: a pending or absent approval is not an approved one. ${boundary}, and nothing in this ` +
-        "build drives a task in any case — no runner, no `packages/tools`, no product provider adapter — so the task is " +
-        "left paused for a new run or a cancellation"
+        "build drives a task in any case — no runner to compose an executor, no product provider adapter to ask — so the " +
+        "task is left paused for a new run or a cancellation"
       );
     }
     return (
       `the process that was running task ${task.id} ended. Approval ${approval.id} is still valid and \u00a77.2 would permit ` +
       `resuming work covered by it, and ${boundary} — but nothing in this build drives a task: there is no runner to call ` +
-      "`loop.resume`, no `packages/tools` to execute a step and no product provider adapter to ask, so \u00a77.1's " +
-      "orchestration reports what a resume would need instead of performing one. The task is left paused with this reason " +
+      "`loop.resume`, nothing composes an executor into a Gateway (`packages/tools` has existed since M2k), and there is " +
+      "no product provider adapter to ask, so \u00a77.1's orchestration reports what a resume would need instead of " +
+      "performing one. The task is left paused with this reason " +
       "rather than re-run"
     );
   }

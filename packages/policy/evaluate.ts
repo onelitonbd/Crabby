@@ -1,7 +1,7 @@
 // The decision function, in the order `PROVIDERS_AND_TOOLS.md` §4.4 fixes: "schema validation → capability check →
 // tier/approval → execution → result validation. A tool never runs 'to see if it works'." Steps 4 and 5 belong to the
-// runtime that does not exist yet (M2), so this module's job is the first three, and it returns a decision rather than
-// performing work.
+// runtime that executes the tool — since M2k that is `packages/tools` for eight of §4.2's rows (D-098) — so this module's
+// job is the first three, and it returns a decision rather than performing work.
 //
 // Two things the pipeline must not do, both from `SECURITY.md` and both easy to get wrong in the direction of looking
 // more permissive than intended:

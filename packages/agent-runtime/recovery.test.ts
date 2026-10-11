@@ -325,7 +325,7 @@ describe("recovery at startup (§7.1, §7.2)", () => {
       report.interrupted[0]?.resumed,
       false,
       "§7.2 permits a resume only for work that is *both* safe and covered; the cover exists, and what is missing is " +
-        "the party that would use it — no runner, no `packages/tools`, no product provider adapter",
+        "the party that would use it — no runner to compose an executor, and no product provider adapter to ask",
     );
     assert.match(
       report.interrupted[0]?.reason ?? "",

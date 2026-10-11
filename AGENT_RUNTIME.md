@@ -254,8 +254,10 @@ their own slice; **§6's cancellation settle** — an abort moves the task to `c
 about whether the operation stopped is the cancellation manager's to produce and `transition()` refuses the entry
 without it; **§8's context budgeting and compaction**; **a conversation store** — a run suspended at a prompt holds its
 messages in process memory, so a restart is §7.1's and §7.2's business rather than something the loop reconstructs; and
-**any tools at all**, because `ARCHITECTURE.md` §18's `packages/tools` does not exist yet. The executor is a seam, and
-the loop offers a model nothing an executor cannot run.
+**any tools of its own** — the loop has an executor interface and no tools built into it, because §19 makes adapters
+implement the runtime's abstractions and never the reverse. `ARCHITECTURE.md` §18's `packages/tools` has existed since M2k
+and implements eight of §4.2's rows (D-098), and the loop still does not import it: a run offers a model only what a
+composed `ToolSurface` declares, and nothing an executor cannot run.
 
 ## 6. Cancellation Behavior
 

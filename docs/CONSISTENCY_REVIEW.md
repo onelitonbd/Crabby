@@ -758,7 +758,9 @@ that declared `ext.install` today would be offered it, and a call carrying an ex
 instead of blocked at D-038.
 
 Recorded rather than fixed, for two reasons. Nothing in this build declares an `ext.install` executor — `ARCHITECTURE.md`
-§18's `packages/tools` does not exist — so the gap is not reachable, and the honest fix is an argument-dependent rule in
+§18's `packages/tools` has existed since M2k and implements eight file rows, none of them `ext.install`, so what makes the
+gap unreachable is now the executor's scope rather than its absence, which is a narrower reason and a stabler one — and the
+honest fix is an argument-dependent rule in
 `escalation.ts` beside the §4.2 row that justifies it, which belongs with the extension tooling and not with M2d's loop.
 `packages/agent-runtime/loop.test.ts` pins what *is* reachable (`withheldReason("ext.install", …)` answers `undefined`
 when the identity holds the grant) with this finding named in the assertion message, so the day someone adds the executor
@@ -851,7 +853,9 @@ boundary for a run suspended at a prompt, so the pause is now a durable fact wit
 names the step the run stopped on, the approval that covers it and D-065's verdict on continuing from it — and the answer
 the user gives is no longer the only durable thing about the run. What is still missing is the party that would act: there
 is no runner in the Gateway, no `packages/tools` for the resumed step to execute and no product provider adapter to call,
-so the answer remains inert and this row stays open. The half that was this finding's to name as absent is gone: the
+so the answer remains inert and this row stays open. M2k removed the middle item of those three — `packages/tools` exists
+and declares what a resumed file step needs (D-098) — so what this row now waits on is precisely two parties, a runner and
+an adapter, and neither is a tool question. The half that was this finding's to name as absent is gone: the
 `task.cancelled` payload's `checkpoint` field reports a boundary instead of apologising for one, and recovery reports the
 verdict per task rather than saying it has nothing to pass. F-50 is the residue, and it is a different shape: the
 checkpoint turned out not to be the only thing D-044's promise was waiting on.)*

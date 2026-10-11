@@ -1,7 +1,9 @@
-// `packages/tools` — the executor `ARCHITECTURE.md` §18 lists and `AGENT_RUNTIME.md` §4.4 named as a seam until now ("the
-// loop has an executor interface and **no tools at all**, because §18's `packages/tools` does not exist yet. The executor
-// is a seam"). §19 fixes the direction of the dependency — "adapters implement the runtime's abstractions" — so this
-// package implements `ToolSurface` and nothing in `packages/agent-runtime` knows it exists.
+// `packages/tools` — the executor `ARCHITECTURE.md` §18 lists, which `AGENT_RUNTIME.md` §4.4 described as a seam until M2k
+// and now describes as a surface the loop never imports ("the loop has an executor interface and no tools built into it").
+// §19 fixes the direction of the dependency — "adapters implement the runtime's abstractions" — so this package implements
+// `ToolSurface` and nothing in `packages/agent-runtime` knows it exists; the composition that joins them lives in this
+// package's `demo.ts` and in `tests/integration/tools.test.ts`, because the other direction would be the cycle §19
+// forbids.
 //
 // What is here is the eight file tools `PROVIDERS_AND_TOOLS.md` §4.2 classifies (`file.read`, `file.list`, `file.stat`,
 // `file.write`, `file.edit`, `file.delete`, `file.move`, `fs.search`), with §4.1's record filled in for them. That is the

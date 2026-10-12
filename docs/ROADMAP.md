@@ -687,6 +687,28 @@ to the Gateway and a second validator is a second way to be wrong. The scheduler
 `cron.schedule`, `GET /jobs`, `job pause` — and remain what §4's list names next, beside the initial tools that are still
 absent: `shell.run` behind §9's opt-in, `net.fetch`, `session.*`, `task.*` and `config.*`.
 
+**Twenty-sixth slice — two output lines that outlived their subject, and the measurement that replaces them.**
+`crabby status` printed `crabby task run "…" — planned for the runtime slice` and `crabby task ls` printed that the verb
+"comes with the runtime", and the handoff made both false without failing anything, because no test reads a prose string.
+That is the defect F-38 and F-40 were written about and the one `apps/cli/commands/status.ts` argues against in its own
+comments, arriving one screen at a time. Both lines now answer from the Gateway rather than from the build: the `runs`
+half of `GET /api/v1/diagnostics` is read into a `runs` line on the screen and carried into the `--json` document beside
+it, so the two renderings cannot disagree, and the fix under an empty task list is conditional on `runs.composed` and
+therefore cannot go stale by the verb existing. A Gateway old enough not to report `runs` at all is answered as
+"not reported — this Gateway predates the handoff", which is a measurement of the process answering and not a claim about
+the repository. Pinned by one assertion in the spawned-gateway test, where an install with no workspace root and no
+selected model has to print `runs not composed`.
+
+Both were found by running the commands against a live Gateway rather than by reading them, which is the reason the demo
+is part of the slice and not a courtesy after it: `crabby gateway start` on a fresh state dir, `auth pair` with the
+bootstrap code, `auth pair --restrict task,session` answered with "5 granted, narrowed from the telegram baseline",
+`--restrict shell` answered with §5.3's rule and both members listed, `task run` refusing with exit `1` before it created
+anything, and `task ls` printing `none` to prove the refusal was before the write. The same run turned up one wart that
+is recorded rather than fixed here, because it belongs to a different question: `crabby gateway start --data-dir <path>`
+on a directory that does not exist dies with better-sqlite3's `TypeError` rather than with a shaped error naming
+`crabby init`, and who creates the state dir is a decision §5's setup steps have not made explicitly. The scheduler
+D-046 and D-057 ship with M2 and remain what §4's list names next.
+
 
 ## 5. Phase M3 — Four interfaces in parallel
 

@@ -122,8 +122,13 @@ export async function runTask(
       const page = response.body as { items: TaskRecord[]; nextCursor?: string };
       if (page.items.length === 0) {
         renderer.line("tasks", "none");
+        // True whether or not this Gateway drives tasks, and it does not take a second request to be true: `task run`
+        // asks `runs.composed` itself and refuses before it creates anything, so naming the verb here cannot send a
+        // user to a command that silently leaves a task in `queued`. The line this replaces said the verb "comes with
+        // the runtime", which it now does.
         renderer.fix(
-          "the Gateway accepts POST /api/v1/tasks now; `crabby task run` comes with the runtime",
+          'no task has been created yet — `crabby task run "<objective>"` creates one and follows it, and refuses up ' +
+            "front if this Gateway composes no runner to drive it",
         );
         return renderer.done({ items: [], nextCursor: null });
       }

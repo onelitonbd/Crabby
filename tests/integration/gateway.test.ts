@@ -1322,6 +1322,14 @@ describe("a spawned gateway and a spawned cli (P-003)", () => {
     assert.equal(status.code, 0, status.stdout);
     assert.match(status.stdout, new RegExp(`http://127\\.0\\.0\\.1:${info.port}`));
     assert.match(status.stdout, /tasks +queued 1/);
+    assert.match(
+      status.stdout,
+      /runs +not composed/,
+      "the screen asks the process whether it can drive a task instead of asserting a property of the build. This " +
+        "spawned Gateway has no workspace root and no selected model, so it composes no runner and says so — and the " +
+        "line this replaced said `crabby task run` was 'planned for the runtime slice', which is the stale-claim " +
+        "defect `apps/cli/commands/status.ts` argues against in its own comments (F-38, F-40)",
+    );
 
     // §6.1's stop button, end to end through two spawned processes: the CLI asks, the route records, the manager settles.
     // A `queued` task has nothing in flight, so the request settles inside `request()` and the answer is already

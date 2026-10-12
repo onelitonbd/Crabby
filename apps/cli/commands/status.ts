@@ -12,6 +12,10 @@ interface Diagnostics {
   listener: { host: string; port: number | undefined };
   storage: { schemaVersion: number; stateDir: string };
   tasks: Record<string, number>;
+  /** Whether this process composed a runner and how many runs it is moving. Optional because it arrived with the
+   *  handoff, and a Gateway started from an older checkout does not send it: the screen asks the process rather than
+   *  asserting a property of the build, which is the discipline this file's own comments argue for. */
+  runs?: { composed: boolean; inFlight: number };
   streams: { subscribers: number };
 }
 
@@ -44,12 +48,29 @@ export async function runStatus(layout: DataLayout, renderer: Renderer): Promise
       "vault",
       info.vault.managed ? "managed" : "unmanaged — no secret store in this build (M2)",
     );
+    const runs = diagnostics.runs;
+    renderer.line(
+      "runs",
+      runs === undefined
+        ? "not reported — this Gateway predates the handoff, so it records tasks and drives none"
+        : runs.composed
+          ? runs.inFlight === 0
+            ? "composed · none in flight"
+            : `composed · ${runs.inFlight} in flight`
+          : "not composed — a task is recorded and nothing in this process drives it",
+    );
     renderer.line("streams", `${diagnostics.streams.subscribers} connected`);
     const total = Object.values(diagnostics.tasks).reduce((a, b) => a + b, 0);
     if (total === 0) {
       renderer.line("tasks", "none yet");
+      // The line here said `crabby task run` was "planned for the runtime slice", which is the defect the comment above
+      // the approvals line was written about: a state of the build hardcoded into an output, outliving the build without
+      // failing anything. What replaces it is conditional on the answer the Gateway just gave, so it cannot go stale by
+      // the verb existing — only by the Gateway changing, which it reports.
       renderer.fix(
-        'crabby task run "…" — planned for the runtime slice; the Gateway already accepts POST /api/v1/tasks',
+        runs?.composed === true
+          ? 'crabby task run "…" creates a task and follows it to its end'
+          : 'crabby task run "…" refuses up front here: `crabby gateway start` prints which half of a runner is missing',
       );
     } else {
       renderer.line(

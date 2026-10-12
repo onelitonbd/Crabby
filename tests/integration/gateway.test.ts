@@ -1770,6 +1770,158 @@ async function readFrame(
   return text.trim().length > 0 && !text.trimStart().startsWith(":") ? text : "";
 }
 
+describe("a spawned gateway that drives tasks, and §7.1's exit codes for the verb that runs them", () => {
+  let dir: string;
+  let child: ChildProcess | undefined;
+  let output = "";
+
+  before(async () => {
+    dir = mkdtempSync(path.join(tmpdir(), "crabby-run-"));
+    const work = mkdtempSync(path.join(tmpdir(), "crabby-run-work-"));
+    writeFileSync(path.join(work, "notes.md"), "# notes\n", "utf8");
+    // A configuration that composes a runner, which is the only way to test this verb's exit codes at all: one
+    // workspace root, one keyless provider entry, and a selected default model. The endpoint is a port nothing listens
+    // on and `limits.providerAttempts` is 1, so a run fails on its first attempt instead of walking D-074's ladder for
+    // half a minute. The assertions below are about an exit code and about what the command does and does not follow,
+    // and a test that spent thirty seconds proving one integer would be a test nobody ran twice.
+    writeFileSync(
+      path.join(dir, "config.json"),
+      `${JSON.stringify(
+        {
+          workspace: { roots: [work] },
+          provider: {
+            local: {
+              baseUrl: "http://127.0.0.1:9/v1",
+              models: {
+                "qwen2.5:3b": {
+                  contextWindow: 4096,
+                  maxOutputTokens: 512,
+                  supports: {
+                    streaming: true,
+                    toolCalling: true,
+                    parallelToolCalls: false,
+                    systemRole: true,
+                    structuredOutput: false,
+                    imageInput: false,
+                    audioInput: false,
+                    reasoning: false,
+                    promptCaching: false,
+                    jsonSchemaValidation: false,
+                  },
+                  cancellation: "best-effort",
+                  rateLimits: null,
+                  cost: "local",
+                  batching: null,
+                },
+              },
+            },
+          },
+          defaultModel: "local/qwen2.5:3b",
+          limits: { providerAttempts: 1 },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    child = spawn(
+      process.execPath,
+      [path.join(REPO, "apps/cli/crabby.ts"), "--data-dir", dir, "gateway", "start"],
+      { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    child.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString()));
+    child.stderr?.on("data", (chunk: Buffer) => (output += chunk.toString()));
+    await waitForGatewayInfo(dir, 25_000);
+    const code = output
+      .split("\n")
+      .find((line) => /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{8}$/.test(line.trim()));
+    assert.ok(code, `the gateway has to print a pairing code; output was:\n${output}`);
+    const paired = runCli(dir, ["auth", "pair", "--code", code.trim()]);
+    assert.equal(paired.code, 0, paired.stdout);
+    assert.match(
+      runCli(dir, ["status"]).stdout,
+      /runs +composed/,
+      "this gateway composes a runner, and the screen says so — without it every assertion below would be about a " +
+        "refusal instead of about a run",
+    );
+  });
+
+  after(() => {
+    child?.kill("SIGTERM");
+  });
+
+  it("exits with the run's outcome, so a failed task cannot be read as a success", () => {
+    const ran = runCli(dir, ["task", "run", "summarise notes.md"]);
+    assert.equal(
+      ran.code,
+      1,
+      `§7.1: exit \`1\` is failure, and the failure here is the run's — output was:\n${ran.stdout}`,
+    );
+    assert.match(
+      ran.stdout,
+      /ended failed/,
+      "and the sentence says whose outcome the code reports, because a verb that blocks has to explain the block",
+    );
+    assert.match(
+      ran.stdout,
+      /watching/,
+      "it followed the run to its end, which is what the verb without `--detach` promises",
+    );
+    assert.match(
+      runCli(dir, ["task", "ls"]).stdout,
+      /failed/,
+      "the state the exit code reported is the state on the record: the code is a reading of the run, not an opinion",
+    );
+  });
+
+  it("returns at once on `--detach`, and answers a script with one document", () => {
+    const detached = runCli(dir, ["task", "run", "--detach", "detached"]);
+    assert.equal(
+      detached.code,
+      0,
+      "a detached run is a task that was created, not an outcome nobody waited for — §7.1 calls this the script path",
+    );
+    assert.doesNotMatch(
+      detached.stdout,
+      /watching/,
+      "`--detach` means the command does not follow, and a switch the registry advertises has to be one the parser " +
+        "hands over: this one was read from `values` instead of `booleans`, so it was parsed and then ignored",
+    );
+    const doc = runCli(dir, ["task", "run", "--detach", "--json", "detached json"]);
+    assert.equal(doc.code, 0, doc.stdout);
+    const parsed = JSON.parse(doc.stdout) as {
+      following: boolean;
+      idempotencyKey: string;
+      state: string;
+    };
+    assert.equal(parsed.following, false);
+    assert.equal(parsed.state, "queued");
+    assert.ok(
+      parsed.idempotencyKey.length > 0,
+      "the key the command generated is in the document, because a script that retries has to be able to show it",
+    );
+  });
+
+  it("reports a failed task from a read verb without inheriting its outcome", () => {
+    const listed = runCli(dir, ["task", "ls", "--json"]);
+    const items = (JSON.parse(listed.stdout) as { items: { id: string; state: string }[] }).items;
+    const failed = items.find((row) => row.state === "failed");
+    assert.ok(failed, `a failed task has to be on the list; got ${listed.stdout}`);
+    const watched = runCli(dir, ["task", "watch", failed.id]);
+    assert.equal(
+      watched.code,
+      0,
+      "a read reports its subject's outcome rather than inheriting it — the same reason `task show` on a failed task " +
+        "exits `0`, and the state is on every line for a caller that wants to decide for itself",
+    );
+    assert.match(watched.stdout, /state +failed/, "and it says plainly what it found");
+    assert.equal(
+      runCli(dir, ["task", "show", failed.id]).code,
+      0,
+      "the snapshot verb agrees with the streaming one, so a script cannot get two answers from two reads",
+    );
+  });
+});
+
 async function waitForGatewayInfo(dir: string, timeoutMs: number) {
   const layout = dataLayout(dir);
   const deadline = Date.now() + timeoutMs;

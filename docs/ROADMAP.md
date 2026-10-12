@@ -709,6 +709,40 @@ on a directory that does not exist dies with better-sqlite3's `TypeError` rather
 `crabby init`, and who creates the state dir is a decision §5's setup steps have not made explicitly. The scheduler
 D-046 and D-057 ship with M2 and remain what §4's list names next.
 
+**Twenty-seventh slice — four defects that only running the system could find, all in the verb the handoff shipped.**
+The owner asked to check the system, so the check was run rather than read: a Gateway started from `config.json` with a
+workspace root, a keyless provider entry and a selected default model — a runner composed for real, with the endpoint
+pointed at a port nothing listens on, because there is no model server here and inventing one would have made the demo a
+fiction. Four things fell out, and none of them is visible in a diff.
+
+`crabby task run` exited `0` for a run that had ended `failed`, which is §7.1's contract inverted: the one thing an exit
+code exists to prevent is a caller continuing as though work had finished. The cause was underneath it and worse —
+`followTask` read the task's state from `payload.state`, but every transition frame reports `{from, to}`, so the command
+held the state the task was *created* in and never updated it. `task.created` carries `state` and the terminal
+`task.failed` does not, which is why the frame that said so was read and then not believed. Both are fixed: the state
+comes from `to` and is checked against §4.1's list before it is acted on, because `approval.requested` carries a `state`
+too and it is the *approval's*, and `task run` now answers with the run's outcome — `completed` exits `0`, `failed`,
+`cancelled` and `interrupted` exit `1`, a stop at an approval still exits `3`. `task watch` deliberately does not inherit
+the outcome: a read reports its subject's failure rather than becoming it, which is the rule `task show` has always
+followed, and §7.1's rows now say which verb does which.
+
+`--detach` had never worked. `parseTail` puts a registry entry written without an argument into a switch set, and the
+verb read `values.detach`, which is never anything — so the flag the registry advertised and §7.1 calls "the script
+path" was parsed, then ignored, and the command followed the run anyway. It is the CLI's first boolean tail flag, which
+is why there was no neighbouring call to copy: every other switch in the registry belongs to a verb still `planned`, and
+a convention with one member is a convention nobody has had to follow yet. Detached, the verb also rendered *two* JSON
+documents — a compact record and an indented summary — which no script can parse either way, so it now renders one.
+
+All four are pinned by a new integration block that spawns a Gateway which really drives tasks: the failed run exits
+`1` and says whose outcome it reported, `--detach` exits `0` without a `watching` line and answers `--json` with one
+document carrying `following: false` and the idempotency key it generated, and `task watch` plus `task show` on that same
+failed task both exit `0` and both say `failed`. The lesson is recorded rather than only fixed: a refusal path had tests
+and an outcome path had none, and the difference is that the outcome path needed a running Gateway to be reachable at
+all. `crabby gateway start --data-dir <a directory that does not exist>` still dies with better-sqlite3's `TypeError`
+instead of a shaped error naming `crabby init`, and that one stays recorded and unfixed, because who creates the state
+dir is a question §5's setup steps have not made explicit. The scheduler D-046 and D-057 remain what §4's list names
+next.
+
 
 ## 5. Phase M3 — Four interfaces in parallel
 

@@ -21,6 +21,7 @@ import {
   EXIT,
   type ExitCode,
   isTerminal,
+  TASK_STATES,
   type TaskCheckpoint,
   type TaskRecord,
   TERMINAL_STATES,
@@ -320,9 +321,18 @@ export async function runTask(
     renderer.fix(
       `crabby task watch ${record.id} — reattach from any client; the events are on the record`,
     );
-    if (renderer.json) renderer.raw(JSON.stringify(record));
-    if (tail.values.detach !== undefined)
+    // Read from `booleans` and not from `values`: `parseTail` puts a registry entry written without an argument —
+    // `"--detach"`, not `"--detach X"` — into the switch set, so `values.detach` was never anything and the flag this
+    // command advertised, the one §7.1's row calls "the script path", was parsed and then ignored. It is the CLI's
+    // first boolean tail flag, which is why there was no neighbouring call to copy: every other switch in the registry
+    // belongs to a verb that is still `planned`.
+    if (tail.booleans.has("--detach"))
+      // One document and not two. The `raw()` line below exists for the path that follows: there the record is the
+      // first line of an NDJSON stream and `followTask` returns without rendering a second document. Detached there is
+      // no stream, so `done()` is the whole answer — and a stdout holding two JSON documents, one compact and one
+      // indented, is a stdout no script can parse either way.
       return renderer.done({ ...record, following: false, idempotencyKey: key });
+    if (renderer.json) renderer.raw(JSON.stringify(record));
     return followTask({
       url: connection.url,
       client: connection.client,
@@ -330,6 +340,7 @@ export async function runTask(
       renderer,
       taskId: record.id,
       stopAtApproval: true,
+      exitOnOutcome: true,
     });
   }
 
@@ -342,6 +353,7 @@ export async function runTask(
       taskId: watchId,
       ...(watchTypes === undefined ? {} : { types: watchTypes }),
       stopAtApproval: false,
+      exitOnOutcome: false,
     });
 
   renderer.line("task", "which verb? `run`, `ls`, `show`, `cancel` or `watch`");
@@ -366,11 +378,27 @@ interface FollowInput {
   /** What to *print*. The stream always asks for the terminal types as well, so a filter cannot hide the event that
    *  ends the follow and leave the command holding an open socket forever. */
   readonly types?: readonly string[] | undefined;
+  /** Whether the task's own outcome decides the exit code. `task run` *is* the act of running a task, so §7.1's `1`
+   *  is about the run: a task that ended `failed` must not let a script, or a person, read success from the command that
+   *  started it. `task watch` leaves it false, because a read reports its subject's outcome rather than inheriting it —
+   *  the same reason `task show` on a failed task exits `0` — and the state is on every NDJSON line for a caller that
+   *  wants to decide for itself. */
+  readonly exitOnOutcome: boolean;
   readonly stopAtApproval: boolean;
 }
 
+/** §7.1's exit codes read off a terminal state rather than off a stream. `completed` is the only success: `failed`,
+ *  `cancelled` and `interrupted` all mean the work did not finish, and a caller that continues as though it had is the
+ *  harm an exit code exists to prevent — a cancellation the user asked for is still a run that produced nothing. A state
+ *  that is not terminal answers `undefined`, so the caller falls through to whatever else it knows. */
+function exitForState(state: TaskRecord["state"] | undefined): ExitCode | undefined {
+  if (state === "completed") return EXIT.success;
+  if (state === "failed" || state === "cancelled" || state === "interrupted") return EXIT.failure;
+  return undefined;
+}
+
 async function followTask(input: FollowInput): Promise<ExitCode> {
-  const { url, client, layout, renderer, taskId, types, stopAtApproval } = input;
+  const { url, client, layout, renderer, taskId, types, stopAtApproval, exitOnOutcome } = input;
   // The task is read once before the stream opens, for a reason that is about hanging rather than about convenience: a
   // task that already reached a terminal state will never publish another event, so opening a stream for it would block
   // until the user interrupts. Answering "already cancelled" is both faster and the truth.
@@ -386,6 +414,9 @@ async function followTask(input: FollowInput): Promise<ExitCode> {
       "arrive — `crabby task show` prints what it left behind";
     renderer.line("state", task.state);
     renderer.fix(absorbing);
+    // The verb that *is* the run answers with the run's outcome even when the task had already ended before the stream
+    // was worth opening; a read verb reports and succeeds.
+    const already = exitOnOutcome ? exitForState(task.state) : undefined;
     if (renderer.json) {
       // One line, because §7.1 promises this verb NDJSON and `done()` renders its document with two-space indentation:
       // a pretty-printed answer would arrive as dozens of lines that no script parsing one-document-per-line can read.
@@ -393,10 +424,26 @@ async function followTask(input: FollowInput): Promise<ExitCode> {
       // false` and `events: 0` saying plainly that no stream was ever opened rather than leaving a reader to infer it
       // from an absence.
       renderer.raw(
-        JSON.stringify({ ok: true, ...task, events: 0, streamed: false, fixes: [absorbing] }),
+        JSON.stringify({
+          ok: already !== EXIT.failure,
+          ...task,
+          events: 0,
+          streamed: false,
+          fixes: [absorbing],
+        }),
       );
-      return EXIT.success;
+      return already ?? EXIT.success;
     }
+    if (already === EXIT.failure)
+      return renderer.fail({
+        code: `task.${task.state}`,
+        message:
+          `${taskId} is ${task.state}, which is terminal and absorbing (AGENT_RUNTIME.md §4.1), and §7.1's exit code ` +
+          `is the run's outcome — \`crabby task show ${taskId}\` prints what it left behind`,
+        ...task,
+        events: 0,
+        streamed: false,
+      });
     return renderer.done({ ...task, events: 0, streamed: false });
   }
 
@@ -515,7 +562,25 @@ async function followTask(input: FollowInput): Promise<ExitCode> {
       // Two ways to recognise the end, because a terminal state arrives either as the state change itself or as the
       // event named for it, and watching past either one would leave the user staring at a prompt that will never
       // print. `interrupted` is deliberately not one of them: it is not terminal (§4.1), and a run may resume.
-      const state = typeof event.payload?.state === "string" ? event.payload.state : undefined;
+      //
+      // The state comes from `to`, and falls back to `state` only for the frames that carry one: every transition frame
+      // — `task.state.changed` and the terminal `task.completed`, `task.failed` and `task.cancelled` — reports
+      // `{from, to}`, and reading `state` alone left this command holding the state the task was *created* in. That is
+      // how `task run` came to answer exit `0` for a run that had ended `failed`: the frame that said so was read, and
+      // then not believed. Found by running the command against a live Gateway rather than by reading it, which is the
+      // reason §7.1's exit codes are a contract about the outcome and not about the stream. `approval.requested` carries
+      // a `state` too, but it is the *approval's* — "pending" — so what a frame reports is checked against §4.1's list
+      // before this command acts on it.
+      const reported =
+        typeof event.payload?.to === "string"
+          ? event.payload.to
+          : typeof event.payload?.state === "string"
+            ? event.payload.state
+            : undefined;
+      const state =
+        reported !== undefined && (TASK_STATES as readonly string[]).includes(reported)
+          ? reported
+          : undefined;
       if (typeof event.payload?.approvalId === "string") promptId = event.payload.approvalId;
       // §7.1's exit-3 row: "Approval needed, no answer reachable — exit `3` immediately", with `--wait-approval <n>`
       // as the only opt-in to keep waiting. That flag is in no registry, so there is nothing to opt into and blocking on
@@ -565,7 +630,17 @@ async function followTask(input: FollowInput): Promise<ExitCode> {
         event.type === "task.failed" ||
         event.type === "task.cancelled"
       ) {
-        finalState = (state ?? finalState) as TaskRecord["state"];
+        // The frame's own state, then the event type's, then whatever was last known: a terminal frame that somehow
+        // carried no `to` still ends a run, and `task run`'s exit code must not depend on which of the two halves of the
+        // record happened to speak last.
+        finalState = (state ??
+          (event.type === "task.completed"
+            ? "completed"
+            : event.type === "task.failed"
+              ? "failed"
+              : event.type === "task.cancelled"
+                ? "cancelled"
+                : finalState)) as TaskRecord["state"];
         await reader.cancel();
         break outer;
       }
@@ -575,6 +650,10 @@ async function followTask(input: FollowInput): Promise<ExitCode> {
   // The last id is printed rather than acted on. §5.1 gives a reconnecting client `Last-Event-ID` and the Gateway
   // honours it, but a command that reconnected silently would hide the outage that made it reconnect — so the cursor is
   // handed to whoever is driving, and the exit code says the stream is over.
+  // The outcome, and only for the verb that is the run. Everything above this line is the same for both verbs: the same
+  // frames, the same `seq`, the same last-event-id handed to whoever is driving.
+  const outcome = exitOnOutcome ? exitForState(finalState) : undefined;
+
   if (lastEventId !== undefined && !renderer.json)
     renderer.fix(
       `last event id ${lastEventId} — reconnect with Last-Event-ID to resume without a gap`,
@@ -582,8 +661,20 @@ async function followTask(input: FollowInput): Promise<ExitCode> {
   if (renderer.json) {
     // NDJSON is the contract §7.1 names for this verb, and a trailing summary document would be a line a script
     // parsing one-event-per-line did not ask for. The document form is what a snapshot command returns, not a stream.
-    return ended === undefined ? EXIT.success : EXIT.failure;
+    return outcome ?? (ended === undefined ? EXIT.success : EXIT.failure);
   }
+  if (outcome === EXIT.failure)
+    return renderer.fail({
+      code: finalState === undefined ? "failure" : `task.${finalState}`,
+      message:
+        `${taskId} ended ${finalState ?? "without a terminal state"}: §7.1's exit code is the run's outcome and not the ` +
+        `stream's — \`crabby task show ${taskId}\` prints what it left behind`,
+      task: taskId,
+      ...(finalState === undefined ? {} : { state: finalState }),
+      events: seen,
+      streamed: true,
+      ...(lastEventId === undefined ? {} : { lastEventId }),
+    });
   return renderer.done({
     task: taskId,
     state: finalState,

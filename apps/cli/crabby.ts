@@ -30,6 +30,7 @@ function isPipeError(error: unknown): boolean {
   );
 }
 
+import { type ApprovalVerb, runApproval } from "./commands/approval.ts";
 import { type AuthVerb, runAuth } from "./commands/auth.ts";
 import { type ConfigVerb, runConfig } from "./commands/config.ts";
 import { runDiagnostics } from "./commands/diagnostics.ts";
@@ -227,6 +228,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     case "auth": {
       return runAuth(verb as AuthVerb | undefined, rest, layout, renderer);
+    }
+    case "approval": {
+      return runApproval(verb as ApprovalVerb | undefined, rest, layout, renderer);
     }
     case "task": {
       return runTask(verb as TaskVerb | undefined, rest, layout, renderer);

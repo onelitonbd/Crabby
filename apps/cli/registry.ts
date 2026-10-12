@@ -192,28 +192,41 @@ export const COMMANDS: readonly CommandSpec[] = [
     milestone: "M2 (recovery that cannot bypass approvals)",
   },
   {
+    // `ready` because the milestone named a service that has been composed into the Gateway since before this entry was
+    // written: `createApprovals` is built in `buildApp`, `registerApprovalRoutes` registers both §4.3 routes, and the
+    // sweep the queue depends on (D-093) runs inside the read. `--state` is passed through to the route rather than
+    // checked here, so a typo is refused by the Gateway naming all five states instead of being coerced into a filter
+    // that matched nothing.
     noun: "approval",
     verb: "ls",
-    summary: "the pending approval queue for this client",
-    flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (the approval service)",
+    summary: "the approval queue for this client, `pending` unless `--state` says otherwise",
+    flags: ["--state <state>", "--json"],
+    status: "ready",
   },
   {
+    // The `--yes` this entry used to advertise is gone rather than implemented: it would have skipped a confirmation
+    // prompt, and no code asks for one — `approval approve <id>` is itself the deliberate act, so the flag's only effect
+    // would have been to tell a user that a prompt exists. There is no `--scope` either, and the reason is D-052 rather
+    // than an oversight: this release admits exactly one answer shape, so every value but `once` is a refusal the arbiter
+    // owes a sentence about, and a knob that can only fail is not a knob. The body's `scope` stays a string on the HTTP
+    // surface precisely so that refusal can be provoked and tested there.
     noun: "approval",
     verb: "approve",
     summary: "approve one action, once (D-052: the only answer shape)",
-    flags: ["--yes"],
-    status: "planned",
-    milestone: "M2 (the approval service)",
+    flags: ["--json"],
+    status: "ready",
   },
   {
+    // The summary promised "record why" and the route cannot keep that promise: `ApprovalDecisionBody` carries `decision`
+    // and an optional `scope`, and no reason field, so a `--reason` here would have been read, accepted, and dropped —
+    // losing silently the one thing the user offered. The summary is narrowed to what the record does hold, which is §14's
+    // audit fields written by the route from the answering identity: who decided, from which surface, and what they
+    // decided. Adding a reason is a change to §4.3's body and to the arbiter's record, not to a CLI flag.
     noun: "approval",
     verb: "deny",
-    summary: "deny one action and record why",
-    flags: [],
-    status: "planned",
-    milestone: "M2 (the approval service)",
+    summary: "deny one action, once",
+    flags: ["--json"],
+    status: "ready",
   },
   {
     noun: "provider",

@@ -25,7 +25,7 @@ import { GatewayFailure, readCredentials } from "@crabby/gateway";
 import type { DataLayout } from "@crabby/platform";
 import { parseTail } from "../args.ts";
 import { connect, reportFailure, reportNoGateway } from "../connect.ts";
-import type { Renderer } from "../output.ts";
+import { clip, type Renderer, shortId } from "../output.ts";
 import { findCommand } from "../registry.ts";
 
 export type TaskVerb = "ls" | "show" | "cancel" | "watch";
@@ -437,14 +437,4 @@ export async function runTask(
 
   renderer.line("task", "which verb? `ls`, `show`, `cancel` or `watch`");
   return EXIT.usage;
-}
-
-/** The prefix is what a user pastes back into `task show`, and the timestamp part of a sortable id is the same for
- *  every task in one minute — so the tail, not the head, is the distinguishing half. */
-function shortId(id: string): string {
-  return id.length <= 12 ? id : `${id.slice(0, 8)}…${id.slice(-4)}`;
-}
-
-function clip(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }

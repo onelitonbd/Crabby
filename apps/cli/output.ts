@@ -60,6 +60,21 @@ export function createRenderer(
   };
 }
 
+/** The prefix is what a user pastes back into `task show` or `approval approve`, and the timestamp part of a sortable id
+ *  is the same for every row created in one minute — so the tail, not the head, is the distinguishing half. One rule for
+ *  every noun rather than one per command file, because two ways of shortening an id are two ids a user can paste back
+ *  and only one of them resolves. */
+export function shortId(id: string): string {
+  return id.length <= 12 ? id : `${id.slice(0, 8)}\u2026${id.slice(-4)}`;
+}
+
+/** Clipped for a narrow screen, which §7.2 makes the design case (Termux is 40–60 columns): a summary that wraps pushes
+ *  the field a user has to read off the line they were looking at. `--json` carries the whole value, so nothing is lost
+ *  to a script by shortening it here. */
+export function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
+}
+
 const LABEL_WIDTH = 18;
 
 function pad(label: string): string {

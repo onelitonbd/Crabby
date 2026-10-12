@@ -4,6 +4,7 @@
 // may never grant" means the only writer of a request is the runtime that evaluated the policy. A test that invented an
 // HTTP creation path would be testing a route this project has decided not to build.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,7 +12,13 @@ import { after, before, describe, it } from "node:test";
 import { createApprovals } from "@crabby/agent-runtime";
 import { type Event, newId } from "@crabby/api-contracts";
 import { createLogger } from "@crabby/core";
-import { buildApp, createClient, GatewayFailure } from "@crabby/gateway";
+import {
+  buildApp,
+  createClient,
+  GatewayFailure,
+  writeCredentials,
+  writeGatewayInfo,
+} from "@crabby/gateway";
 import { dataLayout } from "@crabby/platform";
 import type { ApprovalRequest } from "@crabby/policy";
 import {
@@ -24,6 +31,8 @@ import {
   redeemPairingCode,
   type SqliteDb,
 } from "@crabby/storage";
+
+const REPO = path.resolve(new URL("../../", import.meta.url).pathname);
 
 const T0 = Date.now();
 const T3_TTL = 5 * 60_000;
@@ -43,6 +52,14 @@ interface Harness {
   readonly approvals: ReturnType<typeof createApprovals>;
   readonly taskId: string;
   readonly clientId: string;
+  /** The listener this harness serves on, plus the `cli` identity's own token and id: the three facts a spawned terminal
+   *  needs to reach the Gateway these tests reach in-process. Both files `connect` reads have to be written for it,
+   *  because §10's discovery rule is that a client learns the current URL from `gateway.json` rather than trusting the one
+   *  stored beside its token — an ephemeral port changes on every restart and the identity does not. */
+  readonly url: string;
+  readonly port: number;
+  readonly cliToken: string;
+  readonly cliId: string;
   close(): Promise<void>;
 }
 
@@ -106,6 +123,10 @@ async function boot(): Promise<Harness> {
     }),
     taskId: task.id,
     clientId: tui.clientId,
+    url,
+    port,
+    cliToken: cli.token,
+    cliId: cli.clientId,
     async close() {
       await built.app.close();
       handle.close();
@@ -123,6 +144,61 @@ function seed(h: Harness, overrides: Partial<ApprovalRequest> = {}, at = Date.no
   );
   assert.ok(opened.ok, `the fixture request has to be accepted: ${JSON.stringify(opened)}`);
   return opened.ok ? opened.record.id : "";
+}
+
+/** Spawn the real CLI against this harness, paired as the `cli` identity. The data dir gets both files `connect` reads:
+ *  `gateway.json` naming this process's own listener — the pid is this process, which is the truth rather than a fixture's
+ *  invention, since the Gateway under test is the one `boot()` listened with — and the credentials `crabby auth pair`
+ *  would have written. Nothing here stands in for the code under test: the request goes over HTTP to the real routes, and
+ *  the answer comes from the same arbiter the HTTP tests above use. */
+async function runCli(
+  h: Harness,
+  args: readonly string[],
+): Promise<{ code: number | null; out: string }> {
+  const dir = mkdtempSync(path.join(tmpdir(), "crabby-approval-cli-"));
+  const layout = dataLayout(dir);
+  writeGatewayInfo(layout, {
+    host: "127.0.0.1",
+    port: h.port,
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    version: "test",
+  });
+  writeCredentials(layout, {
+    url: h.url,
+    token: h.cliToken,
+    clientId: h.cliId,
+    pairedAt: new Date().toISOString(),
+  });
+  const child = spawn(
+    process.execPath,
+    [path.join(REPO, "apps/cli/crabby.ts"), "--data-dir", dir, ...args],
+    { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let out = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    out += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    out += chunk;
+  });
+  // Asynchronous, and necessarily so: the Gateway under test is *this process*, so a child waiting on an HTTP answer is
+  // waiting on an event loop that a synchronous spawn would have blocked — the pair deadlocks and the file times out
+  // instead of failing one test. The deadline is here for the same reason, since a hang in this file stops every later
+  // assertion rather than reporting the one that caused it.
+  const code = await new Promise<number | null>((resolve) => {
+    const deadline = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve(null);
+    }, 20_000);
+    child.once("exit", (status) => {
+      clearTimeout(deadline);
+      resolve(status);
+    });
+  });
+  return { code, out };
 }
 
 async function failure(
@@ -395,5 +471,105 @@ describe("the approval queue over http", () => {
     );
     assert.equal(conflicting.status, 409);
     assert.match(conflicting.code, /idempotency_conflict/);
+  });
+
+  // The same two routes from a spawned terminal, which is the surface §7.1 promises them to. The route behaviour is
+  // already asserted above over HTTP; what these four add is the fourth interface's half of "one behaviour, four
+  // surfaces", and the two ways a terminal could get it wrong are the two worth testing: claiming an authority it was
+  // refused, and rendering a queue that hides a prompt.
+  it("answers a T2 from the terminal, and the record names the identity that answered", async () => {
+    const id = seed(h, {
+      binding: "sha256:cliT2ok",
+      tier: "T2",
+      ttlMs: T2_TTL,
+      expiresAt: Date.now() + T2_TTL,
+    });
+    const run = await runCli(h, ["approval", "approve", id]);
+    assert.equal(run.code, 0, run.out);
+    assert.match(
+      run.out,
+      /^state +approved$/m,
+      "the verb prints the state the arbiter recorded, not its own opinion",
+    );
+    assert.match(
+      run.out,
+      /once \(§6\.3\)/,
+      "and says the answer is not standing authority, because a user who believes they granted something durable will " +
+        "not understand why the same step asks again",
+    );
+    assert.equal(
+      h.approvals.list().find((row) => row.id === id)?.answeredBy,
+      h.cliId,
+      "§14: the row names who answered, so an approval given on a phone and found denied on a desktop is a record " +
+        "somebody can read rather than a disagreement between two screens",
+    );
+  });
+
+  it("prints the arbiter's own sentence when a terminal may not sign a T3 (D-085)", async () => {
+    const id = seed(h, { binding: "sha256:cliT3no" });
+    const run = await runCli(h, ["approval", "approve", id]);
+    assert.equal(
+      run.code,
+      1,
+      `a policy refusal is a failure and not a usage question, and the CLI must not soften it to zero: ${run.out}`,
+    );
+    assert.match(
+      run.out,
+      /§6\.2/,
+      "the arbiter's sentence reaches the terminal verbatim — a command that rephrased a refusal would be a second " +
+        "voice telling a user why they were denied, and one that swallowed it would leave a prompt looking pending " +
+        "after the Gateway had already settled what it could",
+    );
+    assert.ok(
+      !/approved/.test(run.out),
+      "nothing in the output may look decided: D-085 confines a T3 signature to the TUI and the Web UI, so this row is " +
+        "still waiting for a surface that may sign it",
+    );
+    const listed = await runCli(h, ["approval", "ls"]);
+    assert.equal(listed.code, 0, listed.out);
+    assert.ok(
+      listed.out.includes(id.slice(0, 8)),
+      "and the refused row is still in the queue the terminal reads, because a refusal from the wrong surface neither " +
+        "consumes nor expires it",
+    );
+  });
+
+  it("shows the exact target and a countdown measured on the Gateway's clock (§6.3)", async () => {
+    const id = seed(h, {
+      binding: "sha256:cliList",
+      tier: "T2",
+      ttlMs: T2_TTL,
+      expiresAt: Date.now() + T2_TTL,
+    });
+    const run = await runCli(h, ["approval", "ls"]);
+    assert.equal(run.code, 0, run.out);
+    assert.match(
+      run.out,
+      /rm -rf target/,
+      "§6.3's exact target reaches the user whole: a summary is written to describe the action, which is not the " +
+        "same thing as being the action, and approving what a summary says is how a binding comes to cover something " +
+        "nobody meant",
+    );
+    assert.match(
+      run.out,
+      /left/,
+      "and the countdown is rendered, because §6.3 makes every interface show it",
+    );
+    assert.match(run.out, /T2/, "the tier is on the line the user decides from");
+    assert.ok(
+      run.out.includes(id.slice(0, 8)),
+      "the id is shortened the way `task ls` shortens one, so it can be pasted back into `approval approve`",
+    );
+  });
+
+  it("refuses an id nobody opened, printing the status that says which refusal it was", async () => {
+    const run = await runCli(h, ["approval", "approve", "apr_none"]);
+    assert.equal(run.code, 1, run.out);
+    assert.match(
+      run.out,
+      /gateway said 404/,
+      "the status is printed because which refusal arrived is the user's next clue: a 404 says the id was wrong, where a " +
+        "409 would have said somebody answered first",
+    );
   });
 });

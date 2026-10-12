@@ -618,3 +618,83 @@ test("`crabby task watch --types` is accepted rather than reported as an unknown
     "it must fail *after* accepting the flag, on the absent Gateway and not on the flag",
   );
 });
+
+// The three approval verbs are the same shape as `task cancel` was: the routes have been registered and documented since
+// the approval service was composed, and what was missing was the terminal. The unit-level promises are the ones that can
+// be kept without a Gateway — help, a missing id, and the flags this verb refuses because nothing stands behind them.
+test("`crabby approval ls|approve|deny` are each listed once, and none as planned", () => {
+  const run = crabby(["--help"]);
+  assert.equal(run.code, 0, run.err);
+  for (const verb of ["ls", "approve", "deny"]) {
+    const lines = run.out.split("\n").filter((line) => line.includes(`approval ${verb}`));
+    assert.equal(
+      lines.length,
+      1,
+      `one verb, one help line — got ${lines.length} for \`approval ${verb}\``,
+    );
+    const [line] = lines;
+    assert.ok(line !== undefined);
+    assert.ok(
+      !line.includes("planned"),
+      "`GET /approvals` and `POST /approvals/{id}/decision` are registered and §4.3 documents both, so the milestone " +
+        "these entries carried — the approval service — was delivered before the entries were flipped",
+    );
+  }
+});
+
+test("`crabby approval approve` with no id asks which approval instead of asking the Gateway", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  for (const verb of ["approve", "deny"]) {
+    const run = crabby(["approval", verb], state);
+    assert.equal(
+      run.code,
+      2,
+      `a missing id is a usage question, and §7.1 gives it exit 2 — got ${run.code}`,
+    );
+    assert.match(run.out, /which approval/);
+    assert.match(run.out, /crabby approval ls/, "the fix names the command that prints the ids");
+    assert.ok(
+      !/gateway/i.test(run.out),
+      "the id is checked before `connect`, so a machine whose Gateway is down still gets the usage answer rather than a " +
+        "connection failure that sends the user looking for a Gateway instead of for the id they forgot",
+    );
+  }
+});
+
+test("`crabby approval ls` with no Gateway fails rather than printing an empty queue", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["approval", "ls"], state);
+  assert.equal(
+    run.code,
+    1,
+    "the command was well formed, so this is a failure and not a usage question",
+  );
+  assert.match(run.out, /gateway/i);
+  assert.ok(
+    !run.out.includes("none waiting"),
+    "an unreachable Gateway must never render as an empty queue: §4.3's whole reason for refusing a bad `--state` " +
+      "rather than answering it with no rows is that nothing-waiting is what a live prompt must not look like",
+  );
+});
+
+test("`crabby approval approve --yes` and `deny --reason` are unknown flags, not silently ignored", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const yes = crabby(["approval", "approve", "apr_1", "--yes"], state);
+  assert.equal(yes.code, 2, yes.out);
+  assert.match(
+    yes.out,
+    /unknown flag/i,
+    "the registry no longer names --yes, so parseTail must refuse it",
+  );
+  const reason = crabby(["approval", "deny", "apr_1", "--reason", "because"], state);
+  assert.equal(reason.code, 2, reason.out);
+  assert.match(
+    reason.out,
+    /unknown flag/i,
+    "`ApprovalDecisionBody` carries no reason field, so a reason accepted here would have been dropped on the floor — " +
+      "refusing it is the only answer that does not lose what the user offered",
+  );
+});

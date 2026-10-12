@@ -449,6 +449,49 @@ runner into the Gateway, so no task can ever be parked and the verb would be sca
 the gap because its route check runs in one direction only: it fails when a registered route is undocumented, not when a
 documented route is unregistered.
 
+**Twentieth slice — `crabby approval ls|approve|deny`, and the terminal can now say yes.** The approval service was
+composed into the Gateway before this slice: `createApprovals` is built in `buildApp`, `registerApprovalRoutes` registers
+both §4.3 routes, the queue sweeps before it reads (D-093), `GatewayClient` already carried `approvals()` and
+`decideApproval()`, and nine integration tests answered the routes over HTTP from three identities. The registry entries
+for these three verbs named a milestone reading "M2 (the approval service)", which had been delivered, and the thing
+actually absent was `apps/cli/commands/approval.ts` — the file did not exist. The consequence was concrete: `crabby
+status` could print "N waiting" while no command could answer one, so a prompt raised over HTTP could only be answered
+over HTTP. Cancellation had reached all four interfaces and approval had reached none of them, which is the same "one
+behaviour, four surfaces" rule broken at the other end — three interfaces could stop work and not one could authorise
+it. All three verbs are `ready`, and the milestone is gone.
+
+Three flags are deliberately absent, and each absence is a claim about the route rather than an oversight. No `--scope`:
+`ApprovalDecisionBody` types `scope` as a string rather than the literal `"once"` precisely so that D-052's refusal of a
+remembered approval arrives from the arbiter citing §6.3 instead of from a schema, and the HTTP surface already has a test
+that provokes it — but this release admits one answer shape, so a flag whose every non-default value is a refusal would
+advertise an override that does not exist, which is the opposite of `--mode` on `task cancel`, where the override is real
+and leaving it unreachable from a terminal would have made §6.2 advice. No `--yes`, which the entry used to advertise: it
+would have skipped a confirmation prompt, and no code asks for one, so its only effect would have been to tell a user that
+a prompt exists. No `--reason` on `deny`, and for that one the registry's own summary was narrowed rather than the flag
+added: it promised "deny one action and record why", and §4.3's body has no reason field, so a reason typed at a terminal
+would have been read, accepted, and dropped on the floor. What the record does hold is §14's audit fields — `actor`,
+`via`, `outcome` — written by the route from the answering identity, and the summary now says only what the route can
+keep. Both refused flags are asserted as unknown in the unit tests, so neither can come back as a silently ignored
+argument.
+
+The refusal a terminal deserves is the one D-085 makes it earn: a T3 signature is confined to the TUI and the Web UI, so
+`crabby approval approve <a T3>` exits 1 printing the arbiter's own sentence citing §6.2, and the row stays pending for a
+surface that may sign it — neither consumed nor expired, with nothing written to the log. That is asserted end to end
+from a spawned CLI against the same arbiter the HTTP tests use, beside its counterpart: a T2 from the same terminal is
+accepted, which is what makes the restriction the tier and not the transport. The queue renders §6.3's countdown against
+the Gateway's `serverTime` rather than the terminal's clock, because the Gateway is the party that decides expiry, and it
+prints the exact target whole beside the summary, since approving what a summary says is how a binding comes to cover
+something nobody meant.
+
+One fact about testing this codebase came out of writing those assertions and is recorded because it will otherwise be
+rediscovered the slow way: a spawned CLI cannot be driven with `spawnSync` against an *in-process* Gateway. The child
+waits on an HTTP answer from the parent's event loop, and a synchronous spawn blocks that loop until the child exits, so
+the pair deadlocks and the whole file times out instead of failing one test. `P-003` gets away with `spawnSync` because its
+Gateway is a separate spawned process; the approval harness is `buildApp` plus `listen` inside the test, so its CLI helper
+spawns asynchronously and carries a deadline. With `gateway restart` still `planned` on a milestone reading "needs the
+approval service", that dependency is now met for the first half of its sentence and unmet for the second — restart is
+T3, and a T3 is exactly what a terminal may not sign.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

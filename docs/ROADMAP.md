@@ -492,6 +492,42 @@ spawns asynchronously and carries a deadline. With `gateway restart` still `plan
 approval service", that dependency is now met for the first half of its sentence and unmet for the second — restart is
 T3, and a T3 is exactly what a terminal may not sign.
 
+**Twenty-first slice — a workspace root behind a symlink was refused as an escape, and it was the reason macOS CI
+had been red since M2k.** `checkPath` resolved the *target* through links and then compared it against the workspace
+roots exactly as configured — `path.resolve`, which is lexical and follows nothing. So a root that is itself behind a
+link refused every file inside it, with the reason `'x' resolves through a link to '/private/var/...', outside every
+workspace root`: a sentence that reads like containment working while describing a file that never left the root. The
+fix resolves both sides of the re-check, falling back to the lexical root only when the resolver throws, which it does
+for a root that does not exist yet.
+
+Two shapes make this a defect rather than a CI inconvenience. macOS hands `os.tmpdir()` out as `/var/folders/...`
+where the real directory is `/private/var/folders/...`, so on a macOS runner every temporary root the file executor's
+suite builds is behind a link; and Termux's `/sdcard` — the primary platform's most obvious place to put a workspace
+— is a link to `/storage/emulated/0`. That is also the whole explanation of the CI history: `macos-arm64` has failed
+on every commit of this branch since `2c605d9` (M2k, the slice that introduced `packages/tools` and its real-filesystem
+suite) while `linux-x64` and `main` stayed green, because `/tmp` on Linux is a real directory and the two names are the
+same string.
+
+Why nothing caught it is the more useful half of the record. The policy tests injected *constant* resolvers —
+`() => "/etc/hosts"` — and a resolver that answers every path with the same string is not a resolver: it collapses the
+root onto the target, so containment holds for anything asked of it and the case "the root itself resolves somewhere
+else" was never modelled. Those three fixtures now name the one path that hops and leave every other path alone, which
+is what `realpathSync` does; **the assertions are unchanged**, and what they test is the rule rather than the artifact.
+This is recorded explicitly because making a fixture faithful is not the same move as softening a red — the fixtures
+were proving less than their test names claimed, and the fix is what exposed that.
+
+Two regression tests were added, one in each place the bug could hide: `packages/policy` asserts the containment
+judgement with a resolver that maps the root to its real location, and `packages/tools` asserts a real `file.write` and
+`file.read` inside a root addressed through an actual `symlinkSync` link, using the default resolver. Each was verified
+red with the fix reverted and green with it restored, because a regression test that was never seen failing is a claim
+about a bug rather than evidence of one.
+
+One property was decided rather than discovered along the way: the root a verdict reports back is now the *resolved*
+one. The file executor's `relative()` measures `path.relative(root, resolved)` to build the path it shows a user, and a
+lexical root beside a resolved target emits `..` segments that name no location on disk — so the two must come from the
+same resolution or the string shown to a user describes nothing. On Linux and on a Termux home directory that is not
+linked, nothing changes at all.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

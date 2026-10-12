@@ -3,6 +3,7 @@
 // that a function returns what it happens to return is how a policy engine grows a hole quietly.
 
 import assert from "node:assert/strict";
+import path from "node:path";
 import { describe, it } from "node:test";
 import {
   APPROVAL_TTL_MS,
@@ -376,15 +377,52 @@ describe("path judgement (SECURITY.md §8)", () => {
     assert.equal(checkPath("src/app.ts", PATHS).ok, true);
   });
 
+  // A resolver that answers every path with the same string is not a resolver. `realpath` is a function of the path it
+  // is given, and a constant one collapses the root onto the target, so containment holds for anything asked of it —
+  // which is how these three fixtures read before the root itself started resolving too. They now name the one path
+  // that hops and leave every other path alone, exactly as `realpathSync` does. The assertions are unchanged; what they
+  // test is the rule rather than the artifact.
+  const linkAt = path.resolve(ROOT, "link");
+  const hopTo = (target: string) => (absolute: string) => (absolute === linkAt ? target : absolute);
+
   it("re-checks after the symlink hop and rejects what the first check missed", () => {
-    const escaping = checkPath("link", PATHS, () => `${HOME}/.ssh/id_ed25519`);
+    const escaping = checkPath("link", PATHS, hopTo(`${HOME}/.ssh/id_ed25519`));
     assert.equal(escaping.ok, false);
     assert.match(escaping.ok === false ? escaping.reason : "", /resolves through a link/);
-    assert.equal(checkPath("link", PATHS, () => "/etc/hosts").ok, false);
+    assert.equal(checkPath("link", PATHS, hopTo("/etc/hosts")).ok, false);
     assert.equal(
-      checkPath("link", PATHS, () => `${ROOT}/real.txt`).ok,
+      checkPath("link", PATHS, hopTo(`${ROOT}/real.txt`)).ok,
       true,
       "a hop that stays inside the root is not a finding",
+    );
+  });
+
+  it("accepts a workspace root that is itself behind a link, because both sides of the re-check resolve", () => {
+    // The shape that made the file executor's whole suite fail on macOS while passing on every Linux runner, and that
+    // no test in this file covered: macOS hands `os.tmpdir()` out as `/var/folders/...` where the real directory is
+    // `/private/var/folders/...`, so a root configured at the link and a target resolved through it are two names for
+    // one directory. Refusing the target reads as an escape while describing a file that never left the root. Termux's
+    // `/sdcard` is a link to `/storage/emulated/0`, which makes this the primary platform's most obvious workspace
+    // layout and therefore a defect rather than a CI inconvenience.
+    const REAL = "/private/home/ua/work/site";
+    const throughLink = (absolute: string) =>
+      absolute === ROOT || absolute.startsWith(`${ROOT}/`)
+        ? absolute.replace(ROOT, REAL)
+        : absolute;
+    const inside = checkPath("src/app.ts", PATHS, throughLink);
+    assert.equal(inside.ok, true, inside.ok ? "" : inside.reason);
+    assert.equal(
+      inside.ok ? inside.root : "",
+      REAL,
+      "the root reported back is the resolved one: the file executor measures `path.relative(root, resolved)`, and a " +
+        "lexical root beside a resolved target emits `..` segments that name no location on disk",
+    );
+    assert.equal(
+      checkPath("link", PATHS, (absolute) =>
+        absolute === linkAt ? "/etc/hosts" : throughLink(absolute),
+      ).ok,
+      false,
+      "resolving both sides must not turn containment into a formality — a hop out of the real root is still a finding",
     );
   });
 

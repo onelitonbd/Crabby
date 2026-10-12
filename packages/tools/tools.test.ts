@@ -361,6 +361,40 @@ describe("§8's path enforcement, in the adapter §8 names", () => {
     ]);
   });
 
+  it("writes and reads inside a workspace root that is itself addressed through a symlink", async () => {
+    // The other half of the link rule, and the half nothing covered: a link *inside* a root that points out must be
+    // refused, and a root that is *itself* a link must not be. macOS hands `os.tmpdir()` out as `/var/folders/...`
+    // where the real directory is `/private/var/folders/...`, so on a macOS runner every root this file builds sits
+    // behind a link and every read and write inside it was refused as an escape — this suite failed there while passing
+    // on every Linux runner, where the temporary directory is a real one and the two names are the same string. Termux's
+    // `/sdcard` is a link to `/storage/emulated/0`, so the same shape is the primary platform's most obvious place to
+    // put a workspace, which is what makes the asymmetry a defect rather than a CI inconvenience.
+    const real = lab();
+    const holder = mkdtempSync(path.join(tmpdir(), "crabby-linked-root-"));
+    const link = path.join(holder, "workspace");
+    symlinkSync(real.root, link);
+    try {
+      const throughLink = lab({ roots: [link] });
+      const written = await throughLink.run("file.write", {
+        path: "notes.txt",
+        content: "through a link",
+      });
+      assert.equal(written.ok, true, written.ok ? "" : written.output);
+      assert.equal(
+        readFileSync(path.join(real.root, "notes.txt"), "utf8"),
+        "through a link",
+        "the file landed in the workspace the link names, which is the workspace that was configured",
+      );
+      const read = await throughLink.run("file.read", { path: "notes.txt" });
+      assert.equal(read.ok, true, read.ok ? "" : read.output);
+      assert.match(read.output, /through a link/);
+    } finally {
+      // Removing the holder takes the link with it and leaves the target alone, which is the difference between
+      // cleaning up a fixture and deleting the directory it points at.
+      rmSync(holder, { recursive: true, force: true });
+    }
+  });
+
   it("reports the path a link resolved to, so a hop the user did not name is still on the record", async () => {
     const instance = lab();
     instance.write("real.txt", "here");

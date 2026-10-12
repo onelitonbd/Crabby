@@ -14,6 +14,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -401,10 +402,16 @@ describe("§8's path enforcement, in the adapter §8 names", () => {
     symlinkSync(path.join(instance.root, "real.txt"), path.join(instance.root, "alias.txt"));
     const outcome = await instance.run("file.stat", { path: "alias.txt" });
     assert.equal(outcome.ok, true, outcome.output);
+    // Compared against the *resolved* root, because that is the root the call opened: on macOS `os.tmpdir()` is
+    // `/var/folders/...` while the real directory is `/private/var/folders/...`, so asserting the configured string
+    // asserts a path this call never touched and fails there while passing on Linux, where the two are one string. The
+    // assertion is unchanged in intent — it still demands the exact file — and `realpathSync` makes it a claim about
+    // §8 rather than about the platform's temporary directory.
+    const realRoot = realpathSync(instance.root);
     assert.match(
       outcome.output,
       new RegExp(
-        `"path": "${path.join(instance.root, "real.txt").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
+        `"path": "${path.join(realRoot, "real.txt").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
       ),
       "§8's re-check resolves the link, and the metadata is about the file it resolved to — reporting the name the caller " +
         "used instead would describe a file this call never opened",
@@ -421,7 +428,10 @@ describe("§8's path enforcement, in the adapter §8 names", () => {
     const resolved = defaultRealpathOf(path.join(instance.root, "deep", "hop", "new.txt"));
     assert.equal(
       resolved,
-      path.join(path.dirname(instance.root), "new.txt"),
+      // The expectation resolves the ancestor too: `defaultRealpathOf` returns a real path, so comparing it against the
+      // configured string only passes where the temporary directory is not itself a link — which is every Linux runner
+      // and no macOS one.
+      path.join(realpathSync(path.dirname(instance.root)), "new.txt"),
       "the link was resolved through the ancestor, which is how the containment check sees the real destination",
     );
   });
@@ -506,9 +516,13 @@ describe("file.read, file.list and file.stat", () => {
     assert.match(
       outcome.output,
       new RegExp(
-        `subject="${path.join(instance.root, "notes/todo.md").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
+        `subject="${path
+          .join(realpathSync(instance.root), "notes/todo.md")
+          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
       ),
-      "§10 asks for attribution, and §6.3's rule about the exact target in plaintext is why it is the resolved path",
+      "§10 asks for attribution, and §6.3's rule about the exact target in plaintext is why it is the resolved path — " +
+        "which is also why the expectation resolves the root: asserting the configured string would assert a subject " +
+        "the frame does not carry whenever the temporary directory is a link",
     );
     assert.match(outcome.output, /trust="untrusted"/, "§10 asks for a trust label");
     assert.match(outcome.output, /at="2026-10-11T07:00:00\.000Z"/, "§10 asks for a fetch time");

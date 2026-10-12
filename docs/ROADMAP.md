@@ -528,6 +528,30 @@ lexical root beside a resolved target emits `..` segments that name no location 
 same resolution or the string shown to a user describes nothing. On Linux and on a Termux home directory that is not
 linked, nothing changes at all.
 
+**Twenty-second slice — the previous paragraph claimed to be the whole explanation of the macOS failures, and it was
+not.** Resolving both sides of the re-check fixed the refusals, and `macos-arm64` stayed red. The job log could not be
+read from here — GitHub redirects it to a blob host this sandbox cannot reach — so instead of guessing, the macOS
+condition was reproduced on Linux: `os.tmpdir()` honours `TMPDIR` on both platforms, so pointing `TMPDIR` at a symlink
+makes every temporary root in the suite sit behind a link, exactly as `/var/folders/...` does on a macOS runner. The
+full suite of 482 tests then failed three, all in the file executor's, and all for the same second reason.
+
+Each of the three asserted a path built from `instance.root` — the configured string — against output that carries the
+*resolved* path: the `file.stat` metadata's `"path"` after a link hop, the frame's `subject=` attribute on a
+`file.read`, and the destination `defaultRealpathOf` computes for a create whose ancestor is a link. On Linux the two
+strings are identical, so every one of them passed while asserting nothing about the platform it ran on; on macOS the
+metadata names `/private/var/...` and the expectation names `/var/...`. Two of the three even argued for the resolved
+path in their own failure messages — "the metadata is about the file it resolved to", "§6.3's rule about the exact
+target in plaintext is why it is the resolved path" — and then compared against the name the caller used, which is the
+file the call never opened. The expectations now resolve the root with `realpathSync` before comparing, so they are
+claims about §8 rather than about the shape of the runner's temporary directory, and they still demand an exact path.
+
+Two properties are worth keeping from this. A test that passes on one platform because two different things have the
+same name there is not testing either of them; the way to find out is to make the names differ, which on this codebase
+costs one environment variable. And a red CI job whose log cannot be read is still diagnosable: the first commit that
+turned it red narrows the change to one slice, and the platform's own difference — here, a temporary directory that is
+a link — can be reproduced deliberately rather than waited for. All 482 tests now pass under both shapes, the linked
+one and the real one.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

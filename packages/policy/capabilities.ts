@@ -212,6 +212,12 @@ export interface Restriction {
  *  is a rule: a capability that is not in the vocabulary cannot be granted, and quietly dropping it would let a typo
  *  decide an identity's authority.
  *
+ *  A dot-less token is a family: §13's own example is `--restrict shell,config`, and refusing `config` as a word
+ *  nobody typed would make the document untypeable. Expansion is a shorthand for narrowing and cannot become a way
+ *  around one, because the members it adds are still intersected with the baseline — so `--restrict shell` is refused
+ *  with the rule named (§9 keeps both shell capabilities off every baseline) rather than honoured or mistaken for a
+ *  spelling error.
+ *
  *  D-054 settles what would otherwise be a guess here: "`--restrict` removes capabilities from an identity; it never
  *  converts them into an approval the same restricted client must answer." So a withheld name is simply gone from the
  *  set and nothing else happens — no approval row is opened, no tier is raised, and a restricted client is never asked
@@ -222,6 +228,17 @@ export interface Restriction {
  *  An empty list is refused too, and deliberately: `restrict` present with nothing in it names no capability, so it is
  *  not a restriction, and minting an identity that holds nothing would hand back a token that can only fail. Both cases
  *  arrive as a refusal the caller turns into a `400` naming the offender. */
+/** The members of a family the vocabulary actually has, whether or not any baseline holds them. §6.1's table groups
+ *  its rows by the prefix before the dot — `fs`, `net`, `task`, `config` and eight more — and §13 writes its own
+ *  example in those terms, `crabby auth pair --restrict shell,config`, so a dot-less token has to be readable as the
+ *  family it names. Splitting "the vocabulary has no such family" from "this baseline holds none of it" is what makes
+ *  the two refusals say different true things: the first is a typo, and the second is a rule — §9 keeps the shell off
+ *  every fresh install, so `--restrict shell` cannot be honoured anywhere, and answering it as an unknown word would
+ *  send the operator to check their spelling instead of the rule that stopped them. */
+export function familyMembers(token: string): readonly string[] {
+  return CAPABILITIES.map((entry) => entry.name).filter((name) => name.startsWith(`${token}.`));
+}
+
 export function restrictCapabilities(
   baseline: readonly string[],
   restrict: readonly string[],
@@ -244,6 +261,36 @@ export function restrictCapabilities(
   for (const raw of restrict) {
     const name = raw.trim();
     if (name.length === 0) continue;
+    if (!name.includes(".")) {
+      // A dot-less token names a family rather than a capability, and every vocabulary name has a dot, so there is no
+      // ambiguity to resolve between the two readings. Expansion happens before the intersection and cannot move it:
+      // what is added to the set is still only what the baseline already held, so a family is a shorthand for narrowing
+      // and never a way to reach a member §9 or §6.1 withheld (§5.3, D-054, D-102).
+      const members = familyMembers(name);
+      if (members.length === 0) {
+        refused.push({
+          name,
+          reason:
+            `'${name}' is not in the capability vocabulary (§6.1), and it is not a family either — the families ` +
+            "are the prefixes the table's rows share",
+        });
+        continue;
+      }
+      const heldMembers = members.filter((member) => held.has(member));
+      if (heldMembers.length === 0) {
+        refused.push({
+          name,
+          reason:
+            `'${name}' names a family whose members are ${members.join(", ")}, and this interface's baseline holds none ` +
+            "of them, so honouring it would widen the set rather than narrow it (§5.3, D-054). Name a family the " +
+            "baseline holds, or leave `--restrict` off to mint the baseline",
+        });
+        continue;
+      }
+      for (const member of heldMembers)
+        if (!capabilities.includes(member)) capabilities.push(member);
+      continue;
+    }
     if (!capabilityFor(name)) {
       refused.push({
         name,

@@ -236,6 +236,72 @@ describe("capability vocabulary (SECURITY.md §6.1)", () => {
     );
   });
 
+  it("reads a dot-less token as the family it names, which is how §13 writes its own example", () => {
+    const baseline = capabilitiesFor("cli");
+
+    const family = restrictCapabilities(baseline, ["config"]);
+    assert.deepEqual(
+      [...family.capabilities],
+      ["config.read", "config.write"],
+      "§13's example is `crabby auth pair --restrict shell,config`, so a dot-less token has to reach the family it " +
+        "names rather than be refused as a word nobody typed. The members arrive in the vocabulary's order, and the set " +
+        "is still only what the baseline held: expansion is a shorthand for narrowing, never a way to reach a member " +
+        "§9 or §6.1 withheld",
+    );
+    assert.deepEqual(family.refused, []);
+
+    const mixed = restrictCapabilities(baseline, ["task", "task.read"]);
+    assert.deepEqual(
+      [...mixed.capabilities],
+      ["task.create", "task.cancel", "task.read"],
+      "a family and one of its own members may be asked for together, and the answer holds no duplicate",
+    );
+    assert.deepEqual(mixed.refused, []);
+
+    // §13's example typed literally. One half of it works and the other cannot work on any install, and the difference
+    // is the reason the two refusals say different things.
+    const documented = restrictCapabilities(baseline, ["shell", "config"]);
+    assert.deepEqual([...documented.capabilities], ["config.read", "config.write"]);
+    assert.equal(documented.refused.length, 1);
+    assert.equal(
+      documented.refused[0]?.name,
+      "shell",
+      "the refusal names the token the operator typed rather than a member they never wrote, because a message naming " +
+        "`shell.run` would have them looking for a flag they did not use. The function reports both halves — what could " +
+        "be honoured and what could not — and it is the mint route that refuses the whole request when anything is " +
+        "refused (§2's rule 03), so `shell,config` never mints a config-only identity",
+    );
+    assert.match(
+      documented.refused[0]?.reason ?? "",
+      /shell\.run, shell\.privileged/,
+      "and it lists the family's members, so an operator sees what was withheld instead of guessing which rule stopped " +
+        "them: §9 keeps the shell off every fresh install, so no baseline anywhere holds this family",
+    );
+    assert.match(
+      documented.refused[0]?.reason ?? "",
+      /widen the set rather than narrow it/,
+      "with §5.3's rule named, because honouring it would be the widening D-054 forbids",
+    );
+
+    const remote = restrictCapabilities(capabilitiesFor("telegram"), ["auth"]);
+    assert.equal(remote.refused.length, 1);
+    assert.match(
+      remote.refused[0]?.reason ?? "",
+      /holds none of them/,
+      "the same refusal for a different reason: §6.1 marks `auth.manage` local-only, so the `auth` family is empty for " +
+        "a telegram baseline, and that is a rule about the interface rather than a spelling mistake",
+    );
+
+    const word = restrictCapabilities(baseline, ["nonsense"]);
+    assert.equal(word.capabilities.length, 0);
+    assert.match(
+      word.refused[0]?.reason ?? "",
+      /not a family either/,
+      "a token that is neither a name nor a family is a typo, and saying so is worth the extra clause: it tells the " +
+        "operator to check the spelling instead of hunting for a rule that stopped them",
+    );
+  });
+
   it("expands capabilities into well-formed grants, and withholds rather than inventing a parameter", () => {
     const first = "/data/data/com.termux/files/home/work";
     const second = "/sdcard/crabby";

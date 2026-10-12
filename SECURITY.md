@@ -373,8 +373,15 @@ Default posture: **loopback only**. Requirements for the optional remote mode:
 - Remote clients authenticate with the same mechanism as other clients (§5.1) over TLS to the tunnel. Without a valid token, the Gateway must reject every route, including health and SSE.
 - Remote access must not add capabilities. **Selected (D-032):** Crabby applies no tunnel-specific hardening on top of normal policy — a remote client may use exactly what its paired identity is allowed, preserving feature parity (D-005) across local and remote.
 - Residual risk is accepted and must be documented for users: with a valid token, a remote client can drive a shell-capable task. The compensating controls are risk-tier approvals (§6.2), per-action T2/T3 prompts, token revocation, and audit records.
-- Narrowing remains available per client, not per transport: `crabby auth pair --restrict shell,config` produces a
-  limited identity. This keeps parity intact — the *identity* is narrower, the *transport* is not.
+- Narrowing remains available per client, not per transport: `crabby auth pair --restrict task,session` produces a
+  limited identity. A dot-less name is a family — `task` stands for every name in the `task` family that the paired
+  interface's baseline holds — so the shorthand this rule has always been written in is what the mint route reads, and
+  expansion cannot widen anything, because the members it adds are still intersected with the baseline (D-102). This
+  keeps parity intact — the *identity* is narrower, the *transport* is not. The family this line used to name is the one
+  that cannot be honoured anywhere: §9 keeps `shell.run` and `shell.privileged` out of every baseline, so
+  `--restrict shell` is a refusal that names the rule and lists the family's members rather than an unknown word. There
+  is nothing in that family for an intersection to narrow to, and an operator who spelled it correctly should be told
+  that instead of being sent to check their typing.
 - Restriction semantics, so a narrow identity cannot deadlock: `--restrict` **removes** capabilities from that
   identity; it does not convert them into always-deny-with-an-approval-prompt. A removed capability is reported as
   `platform-unsupported`-style "not available to this client" with the reason, rather than queueing an approval the

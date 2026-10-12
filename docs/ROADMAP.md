@@ -653,6 +653,40 @@ next, beside the remaining initial tools: `shell.run` behind §9's opt-in, `net.
 `task show`'s ordering flaw, named in the seventeenth slice, is still there: it is a wart about a different verb, and
 fixing it inside a slice about the handoff is how a wart stops being visible.
 
+**Twenty-fifth slice — `--restrict` reads a family, so §13's own example became typeable and its impossible half became
+a rule.** `SECURITY.md` §13's narrowing bullet reads `crabby auth pair --restrict shell,config`, and neither of those
+names is in §6.1's vocabulary: they are families, the prefixes the table's rows share. So the mint route the previous
+slice wrote refused the document's own example, and refused it with the *typo* sentence — `'shell' is not in the
+capability vocabulary` — which sends an operator to check a spelling they got right. Trying a document's example against
+the code that implements it is the whole method of `docs/CONSISTENCY_REVIEW.md`, and this is what it found.
+
+`restrictCapabilities` now expands a dot-less token to the family it names before it intersects, and the two refusals it
+can give are separate sentences with separate repairs: a token that is neither a name nor a family is a typo, and a
+family no baseline holds is a rule, listed member by member. Expansion cannot widen anything, which is the property that
+makes it safe to add at all — what it puts in the set is still only what the baseline already held — so D-054, §5.3 and
+D-102's "an intersection and nothing else" are untouched by it. The half of §13's example that cannot be honoured
+anywhere stays unhonoured and now says why: §9 keeps `shell.run` and `shell.privileged` out of every baseline, so
+`--restrict shell` is refused with §5.3's rule named and both members listed, rather than answered as a word nobody
+typed. There is nothing in that family for an intersection to narrow to. §13's example is therefore amended to
+`--restrict task,session`, which mints an identity that can read and drive tasks and sessions and nothing else — a
+limited identity, which is what the bullet was illustrating.
+
+Asserted by one policy test (a family expands to what the baseline holds; a family and one of its own members together
+produce no duplicate; §13's example typed literally refuses on the `shell` half and names the token the operator typed
+rather than a member they never wrote; the `auth` family is empty for a `telegram` baseline for a different reason and
+says so; a nonsense token is told it is "not a family either") and by two cases over the wire in
+`tests/integration/gateway.test.ts`: `restrict: ["config"]` answers 201 with exactly `config.read` and `config.write`,
+and `restrict: ["shell"]` answers 400 naming the rule rather than the vocabulary.
+
+Documents: §13's bullet, `docs/INTERFACES_AND_API.md` §4.5's mint row, and F-52 — recorded there rather than as a new
+row, because what a restriction means and who may set it is F-52's subject and that row is where a reader looks.
+
+What is not here. Nothing about what a restriction *means* changed: it is still an intersection, the whole mint is still
+refused when any name is refused (§2's rule 03), and the CLI still does not validate the vocabulary, because §6.1 belongs
+to the Gateway and a second validator is a second way to be wrong. The scheduler D-046 and D-057 ship with M2 —
+`cron.schedule`, `GET /jobs`, `job pause` — and remain what §4's list names next, beside the initial tools that are still
+absent: `shell.run` behind §9's opt-in, `net.fetch`, `session.*`, `task.*` and `config.*`.
+
 
 ## 5. Phase M3 — Four interfaces in parallel
 

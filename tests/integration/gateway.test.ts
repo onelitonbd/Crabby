@@ -785,7 +785,7 @@ describe("gateway over http", () => {
     }
   });
 
-  it("narrows on a restriction, and refuses one that would widen or that names nothing known", async () => {
+  it("narrows on a restriction, reads a dot-less token as the family it names, and refuses one that would widen", async () => {
     const narrowed = await h.client.request<{ capabilities: readonly string[] }>(
       "/api/v1/auth/pair-codes",
       {
@@ -830,6 +830,38 @@ describe("gateway over http", () => {
           failure.envelope.error.message,
           /vocabulary/,
           "§2's rule 03: an unknown capability is a refusal, not a name quietly dropped from the list",
+        );
+        return true;
+      },
+    );
+
+    // §13 writes its own example in family terms — `crabby auth pair --restrict shell,config` — so the shorthand has to
+    // survive the wire, and the half of that example which cannot be honoured has to be refused for the rule rather than
+    // as a misspelling: `shell.run` and `shell` are different refusals with different repairs.
+    const family = await h.client.request<{ capabilities: readonly string[] }>(
+      "/api/v1/auth/pair-codes",
+      { method: "POST", body: { name: "family", interface: "cli", restrict: ["config"] } },
+    );
+    assert.deepEqual(
+      [...family.body.capabilities],
+      ["config.read", "config.write"],
+      "a dot-less token expands to the family the baseline holds, and to nothing the baseline withheld",
+    );
+
+    await assert.rejects(
+      async () =>
+        await h.client.request("/api/v1/auth/pair-codes", {
+          method: "POST",
+          body: { name: "shell-family", interface: "cli", restrict: ["shell"] },
+        }),
+      (error: unknown) => {
+        const failure = error as { status: number; envelope: { error: { message: string } } };
+        assert.equal(failure.status, 400);
+        assert.match(
+          failure.envelope.error.message,
+          /holds none of them/,
+          "§9 keeps both shell capabilities off every baseline, so the family is empty for every interface and the " +
+            "refusal says that instead of quoting the vocabulary at an operator who spelled it correctly",
         );
         return true;
       },

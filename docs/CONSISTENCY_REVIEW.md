@@ -1072,6 +1072,19 @@ existing identity its interface's baseline, after which the socket guard can be 
 have described since §3.1.
 
 
+**One more sentence in §13 was untypeable, and it took the handoff to notice.** The narrowing bullet reads
+`crabby auth pair --restrict shell,config`, and both of those names are families rather than vocabulary entries, so the
+mint route refused the document's own example as two unknown words. Worse, the refusal it gave was the *typo* refusal,
+which sends an operator to check a spelling they got right. `restrictCapabilities` now reads a dot-less token as the
+family it names and expands it to the members the baseline holds, and the two refusals are separate sentences: a token
+that is neither a name nor a family is a typo, and a family no baseline holds is a rule — `shell`, which §9 keeps out of
+every baseline, so `--restrict shell` cannot be honoured on any install and says so with its members listed. Expansion
+cannot widen anything, because what it adds is still intersected, so D-054 and §5.3 are untouched by it; and the example
+in §13 is now `--restrict task,session`, which mints an identity that can read and drive tasks and sessions and nothing
+else. The finding is recorded here rather than as a new row because it is F-52's subject — what a restriction means and
+who may set it — and this row is where a reader looks for that answer.
+
+
 ### F-54 — §4.4's first check is a *type* check, and a schema that arrives as data cannot be type-checked
 
 **Severity: low, open, and named in the code that skips it.** `PROVIDERS_AND_TOOLS.md` §4.4 fixes the order of checks —

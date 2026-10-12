@@ -70,16 +70,27 @@ test("a bare `crabby` is a usage answer, not a success", () => {
   assert.match(run.out, /crabby init/);
 });
 
-test("an unknown command is refused with exit 2 and a suggestion", () => {
+test("an unknown command is refused with exit 2, and a planned verb names its milestone", () => {
   const typo = crabby(["tsk", "run", "x"]);
   assert.equal(typo.code, 2);
   assert.match(typo.out, /did you mean `crabby task run`\?/, typo.out);
-  const planned = crabby(["task", "run", "do a thing"]);
+  // The verb this half of the test used to pin was `task run`, which answered "not implemented yet — planned for M2"
+  // until the handoff composed a runner into `POST /api/v1/tasks`. What is asserted is the *contract*, not that verb: a
+  // planned verb says it is planned and names the milestone, and the assertion keeps the shape of the sentence rather
+  // than a milestone that will age. `task resume` is still one, because `POST /api/v1/tasks/{id}/resume` has no route
+  // and nothing in this build can be `parked` for it to resume (docs/CONSISTENCY_REVIEW.md F-47).
+  const planned = crabby(["task", "resume", "tsk_1"]);
   assert.equal(planned.code, 2);
-  // M1b moved the *reason* : creating a task nothing will execute is not a command, so `task run` is planned for the
-  // runtime milestone and says so. The assertion keeps the shape of the sentence rather than a milestone that will
-  // age, because "which milestone" is a planning fact and "does help name it" is the contract.
   assert.match(planned.out, /not implemented yet — planned for M\d/);
+  // `task run` is a real command now, so its two refusals are the two §7.1 keeps apart: no objective is a usage
+  // question answered locally (exit 2, before any Gateway is asked about), and a Gateway that is not running is a
+  // failure (exit 1) naming the command that starts one.
+  const bare = crabby(["task", "run"]);
+  assert.equal(bare.code, 2, bare.out);
+  assert.match(bare.out, /what should the task do\?/);
+  const noGateway = crabby(["task", "run", "do a thing"]);
+  assert.equal(noGateway.code, 1, noGateway.out);
+  assert.match(noGateway.out, /crabby gateway start/);
 });
 
 test("`init` creates the state dir, the vault at 700, and §5 step 3's workspace root", () => {

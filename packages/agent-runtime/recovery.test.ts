@@ -324,8 +324,9 @@ describe("recovery at startup (§7.1, §7.2)", () => {
     assert.equal(
       report.interrupted[0]?.resumed,
       false,
-      "§7.2 permits a resume only for work that is *both* safe and covered; the cover exists, and what is missing is " +
-        "the party that would use it — a runner exists (M2n) but nothing composes it, and no code writes `Identity.capabilities` (F-52)",
+      "§7.2 permits a resume only for work that is *both* safe and covered; the cover exists, the runner that would " +
+        "use it is composed (M2n, behind `POST /api/v1/tasks` since the handoff), and what is missing is a way to ask: " +
+        "no `POST /tasks/{id}/resume`, and `crabby task resume` is `planned` (F-47)",
     );
     assert.match(
       report.interrupted[0]?.reason ?? "",
@@ -334,7 +335,10 @@ describe("recovery at startup (§7.1, §7.2)", () => {
     );
     assert.match(
       report.interrupted[0]?.reason ?? "",
-      /nothing in this build composes that runner into a Gateway/,
+      /there is no `POST \/api\/v1\/tasks\/\{id\}\/resume`/,
+      "the sentence has to name the party that is missing rather than one that exists. Since the handoff a runner *is* " +
+        "composed into a Gateway, so the `nothing composes that runner` this assertion used to pin is now the lie it is " +
+        "here to catch, and what really stands between a durable checkpoint and a resumed run is F-47's absent route",
     );
     assert.equal(
       report.interrupted[0]?.checkpoint?.verdict,

@@ -590,6 +590,69 @@ pointing at — compose a runner into `buildApp` so `POST /api/v1/tasks` can cal
 from the identity that asked, which is where F-52's third question gets its answer and where the grant test can
 finally replace the socket one.
 
+**Twenty-fourth slice — the handoff: `POST /api/v1/tasks` drives what it records, and `crabby task run` exists.** §4's
+last "still absent" sentence is gone, and the reason the handoff needed a slice of its own is that the missing piece was
+a seam rather than a file: an executor (M2k), an adapter (M2l), a runner (M2n) and identities that hold capabilities
+(D-102) all existed, and nothing joined them. `buildApp` now composes a runner when the composition root hands it a
+`drive` — executor, adapter, selected model, and the install's half of `EvalContext` — between the cancellation manager
+and recovery, and `crabby gateway start` builds that bundle from `config.json`: `createFileTools` over the configured
+workspace roots (D-098) and `selectDefaultModel` over the composed provider entries (D-101), refusing to invent either,
+so an install with no root or no selected model composes no runner at all and says so on its banner and in
+`GET /api/v1/diagnostics`' new `runs.{composed,inFlight}`. The route reads the identity that asked *before* it writes
+anything, expands its grants with `grantsFor` against those roots, logs every withheld grant with the reason
+`packages/policy` produced rather than dropping it, adds `removedGrantsFor`'s set, and calls `runner.start`. When `start`
+refuses — a task already in flight, or parked — the route still answers 201, because that refusal is a fact about the
+record and not a failure of the request, and logs why. Shutdown drains runs before it closes streams and before it
+closes the database, which registration order buys: `packages/core`'s manager runs its steps in the order they were
+registered, and a run still writing would otherwise meet a closed handle (D-066).
+
+`crabby task run` is `ready` on the strength of that, and it is built to refuse rather than to demo. It requires an
+objective (exit `2`, with the shape of the command in the fix); it asks `runs.composed` *before* it creates anything, so
+a Gateway that cannot drive never receives a task it would leave in `queued` (exit `1`, naming `crabby gateway start`);
+it mints its idempotency key with `randomBytes(16).toString("base64url")`, because `newId` has no prefix for one and
+inventing a prefix would put a fifth id shape on the record; and it follows the run with the watch verb's own loop,
+factored into `followTask` rather than copied, so one rule about NDJSON, per-task `seq` and §5.4's gap frame governs both
+verbs. A run that parks at an approval stops there with exit `3` and names the command that answers it, which is §7.1's
+row below this one; `--detach` prints the record with a `task watch <id>` reattach line and exits `0`.
+
+M2's Exit criterion now has a test per clause, in `tests/integration/tasks.test.ts`, over real HTTP, a real database and
+a real filesystem. A multi-step task a stub client creates completes and really writes the file; a second identity with
+a second token reads the same state; the events that got it there are persisted with the `seq` §5.4 gives a client to
+notice a gap with; a stream opened by a client that created nothing carries the run, and every frame it carries is a row
+on the record; policy denies what policy must deny, with §13's sentence and `platform-unsupported` as the class, and
+nothing completes the refused call; a Gateway that composed no runner records a task, drives nothing, and says so rather
+than leaving a client to guess; and a run the process died during is `interrupted` on the next start, with
+`resumed: false` and a reason that names the absent resume route instead of the composition.
+
+Three things the slice turned up are recorded because they were findings and not details. `PolicySubject.removedGrants`
+had no writer either, and without one §13's own sentence is unreachable from a Gateway-composed run: an unheld
+capability answers `deny` — "needs `fs.write`, which this identity does not hold" — which invites a user to grant what a
+restriction deliberately took away and pushes a restricted client toward an approval it cannot answer, the thing D-054
+forbids. `removedGrantsFor` is that writer, and only the integration test could have found the seam: reading the two
+packages showed two correct halves and nothing between them. Two user-visible sentences then had to stop claiming the
+composition was absent — `GET /api/v1/status`'s providers `note`, and recovery's per-task reason — and both were pinned
+by tests, so both pins moved to the true sentence instead of being deleted: the providers note now has two branches,
+because `ready` means different things when a runner is composed and when it is not, and recovery's reason names F-47's
+absent route instead of an absent runner. Third, a harness fact that cost a run to learn and is written down where the
+next one will read it: `dataLayout(dir).stateDir` *is* `dir`, and §8 denies everything under `dataDir`, so a workspace
+root inside the data dir arrives at T3 and parks every run at an approval; and `Last-Event-ID: 0` does not replay,
+because the Gateway matches an event id and answers anything else with §5.4's `gap` frame — so a test that watches a run
+opens the stream first, which is also what `crabby task watch` does.
+
+What is deliberately not here. `POST /api/v1/tasks` enforces nothing at the door: there is no `task.create` grant test,
+because every identity paired before assignment holds `[]` and a check would lock an owner out of their own Gateway —
+the outage D-097 named — so F-52's closing condition is now exactly that migration and nothing else. `config.json`'s
+`limits.*` still do not reach the loop, because `limits.providerAbsoluteMs` and `LoopLimits.providerCallMs` are not one
+budget under two names, and only `cancellationSettleMs` is read, for the drain budget; mapping half of them would put a
+number in a run that no document promises. There is no `--wait-approval` on `task run`: it is in no registry, and exit
+`3` beside the command that answers is the behaviour D-063 asked for. There is no `POST /api/v1/tasks/{id}/resume` and
+`crabby task resume` stays `planned`, because §7.1's recovery must not become a way past an approval (F-47). The
+scheduler D-046 and D-057 ship with M2 — `cron.schedule`, `GET /jobs`, `job pause` — and that is what §4's list names
+next, beside the remaining initial tools: `shell.run` behind §9's opt-in, `net.fetch`, `session.*`, `task.*` and
+`config.*`. F-57 still needs schema version 5 for a per-task model pin, per-task narrowing and a schedule. And
+`task show`'s ordering flaw, named in the seventeenth slice, is still there: it is a wart about a different verb, and
+fixing it inside a slice about the handoff is how a wart stops being visible.
+
 
 ## 5. Phase M3 — Four interfaces in parallel
 

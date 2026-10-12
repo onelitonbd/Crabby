@@ -1,4 +1,4 @@
-// `crabby task ls|show|cancel|watch` — reads, writes and streams over the same HTTP surface a phone uses, never into
+// `crabby task run|ls|show|cancel|watch` — reads, writes and streams over the same HTTP surface a phone uses, never into
 // SQLite (`ARCHITECTURE.md` §19). `cancel` is here because §6 has a route behind it and a stop button that only three of
 // four interfaces had would be the "one behaviour, four surfaces" rule broken where it matters most. `watch` is here for
 // the same reason over §5.4: `GET /events` has filtered by `taskId`, replayed from `Last-Event-ID` and answered an
@@ -8,8 +8,12 @@
 // per line, each carrying the per-task `seq` so a script notices a gap the way a browser does — which means the JSON
 // rendering is a stream rather than a snapshot, and the difference is deliberate rather than an oversight: a trailing
 // summary document would be a line a script parsing one-event-per-line never asked for.
-// `task run` is not here: creating a task that no runtime will move is the placeholder work the owner asked me not to
-// do, so the verb stays `planned` in the registry until the milestone that gives it an executor.
+// `run` is here because the thing that made it dishonest is gone: `POST /api/v1/tasks` composes a runner and hands the
+// task to it with grants expanded from the identity that asked, so a created task has an end to reach and this verb can
+// keep §7.1's promise to block until it does. It asks the Gateway whether a runner was composed *before* it creates
+// anything, because a 201 nobody drives is worse than a refusal — and it shares `watch`'s stream rather than owning a
+// second parser, differing only in §7.1's exit-3 rule.
+import { randomBytes } from "node:crypto";
 import {
   CANCELLATION_MODES,
   type CancellationMode,
@@ -21,14 +25,14 @@ import {
   type TaskRecord,
   TERMINAL_STATES,
 } from "@crabby/api-contracts";
-import { GatewayFailure, readCredentials } from "@crabby/gateway";
+import { type GatewayClient, GatewayFailure, readCredentials } from "@crabby/gateway";
 import type { DataLayout } from "@crabby/platform";
 import { parseTail } from "../args.ts";
 import { connect, reportFailure, reportNoGateway } from "../connect.ts";
 import { clip, type Renderer, shortId } from "../output.ts";
 import { findCommand } from "../registry.ts";
 
-export type TaskVerb = "ls" | "show" | "cancel" | "watch";
+export type TaskVerb = "ls" | "show" | "cancel" | "watch" | "run";
 
 /** The events that end a task, derived rather than retyped: `TERMINAL_STATES` is the constant the runtime uses to decide
  *  that a run is over, and a watch that could not see those events would never know to stop. Naming them as
@@ -88,6 +92,18 @@ export async function runTask(
     renderer.line("bad --types", `"${watchTypesRaw}" names no event type`);
     renderer.fix(
       "a comma-separated list such as `task.progress,tool.*` — leaving the flag off follows every event",
+    );
+    return EXIT.usage;
+  }
+  // `run`'s objective is every positional joined rather than the first one, because an objective is a sentence and a
+  // shell that was not given quotes should not turn "summarise notes.md" into a task called "summarise" with an
+  // argument nobody reads. Empty is a usage question, answered before the Gateway is asked about for the reason the
+  // other checks here are: §7.1's exit codes are about the command, not about the process it would have talked to.
+  const runObjective = verb === "run" ? tail.positionals.join(" ").trim() : undefined;
+  if (verb === "run" && (runObjective === undefined || runObjective.length === 0)) {
+    renderer.line("task run", 'what should the task do? `crabby task run "summarise notes.md"`');
+    renderer.fix(
+      "`--detach` creates it and returns at once; without it the command follows the task to its end",
     );
     return EXIT.usage;
   }
@@ -254,187 +270,321 @@ export async function runTask(
     }
   }
 
-  if (verb === "watch" && watchId !== undefined) {
-    // The task is read once before the stream opens, for a reason that is about hanging rather than about convenience: a
-    // task that already reached a terminal state will never publish another event, so opening a stream for it would block
-    // until the user interrupts. Answering "already cancelled" is both faster and the truth.
-    let task: TaskRecord;
+  if (verb === "run" && runObjective !== undefined) {
+    // Asked before anything is created, because §7.1's contract for this verb is that it *blocks and follows*: a
+    // Gateway that composed no runner would answer 201 and then leave the user watching a task that cannot move. The
+    // record is not the honest part — creating a task nobody will drive is, and it is avoidable for the price of one
+    // read the route already answers.
+    let diagnostics: { runs?: { composed?: boolean } };
     try {
-      task = (await connection.client.getTask(watchId)).body as TaskRecord;
+      diagnostics = (await connection.client.diagnostics()).body as {
+        runs?: { composed?: boolean };
+      };
     } catch (error) {
       return reportFailure(renderer, error);
     }
-    if (isTerminal(task.state)) {
-      const absorbing =
-        `${watchId} is ${task.state}, which is terminal and absorbing (AGENT_RUNTIME.md §4.1), so no further event will ` +
-        "arrive — `crabby task show` prints what it left behind";
-      renderer.line("state", task.state);
-      renderer.fix(absorbing);
-      if (renderer.json) {
-        // One line, because §7.1 promises this verb NDJSON and `done()` renders its document with two-space indentation:
-        // a pretty-printed answer would arrive as dozens of lines that no script parsing one-document-per-line can read.
-        // The same refusal is therefore a paragraph for a human and a single JSON object for a machine, with `streamed:
-        // false` and `events: 0` saying plainly that no stream was ever opened rather than leaving a reader to infer it
-        // from an absence.
-        renderer.raw(
-          JSON.stringify({ ok: true, ...task, events: 0, streamed: false, fixes: [absorbing] }),
-        );
-        return EXIT.success;
-      }
-      return renderer.done({ ...task, events: 0, streamed: false });
-    }
-
-    // A raw fetch rather than a client method, because `GatewayClient` is buffered by design: every other route answers
-    // with one document, and giving it a streaming member would mean two lifecycles behind one interface. The token comes
-    // from the same credentials `connect` paired with, and the URL from the Gateway's own published one, so an ephemeral
-    // port is honoured exactly as it is everywhere else.
-    const credentials = readCredentials(layout);
-    if (credentials === undefined) return reportNoGateway(renderer, "unpaired");
-    let response: globalThis.Response;
-    try {
-      // The filter the user asked for, widened by the three events that end a task. A `--types` value that left out
-      // `task.cancelled` would otherwise hide the very event that makes a watch finish, and the command would hold a
-      // stream open forever — which is §7.1's promise broken by a flag whose whole job is to narrow what is printed.
-      // Narrowing the *display* is the user's business; narrowing what the command can see about its own ending is not,
-      // so the widening happens in the query and the narrowing happens below, at print time.
-      const requested =
-        watchTypes === undefined ? undefined : [...watchTypes, ...TERMINAL_EVENT_TYPES];
-      response = await fetch(
-        `${connection.url}/api/v1/events?taskId=${encodeURIComponent(watchId)}` +
-          (requested === undefined ? "" : `&types=${encodeURIComponent(requested.join(","))}`),
-        {
-          headers: {
-            authorization: `Bearer ${credentials.token}`,
-            accept: "text/event-stream",
-          },
-        },
+    if (diagnostics.runs?.composed !== true) {
+      renderer.line("tasks", "this Gateway records tasks and drives none, so no task was created");
+      renderer.fix(
+        "`crabby gateway start` prints which half is missing: a workspace root (`crabby init`) and a selected default " +
+          "model (`crabby config set defaultModel <provider>/<modelId>`) are what a runner is composed from",
       );
-    } catch (error) {
-      return reportFailure(renderer, error);
-    }
-    if (!response.ok || response.body === null) {
-      renderer.line(
-        "stream refused",
-        `the Gateway answered ${response.status} to GET /api/v1/events`,
-      );
-      renderer.fix("crabby gateway status — is the Gateway still running?");
       return EXIT.failure;
     }
-
-    renderer.line(
-      "watching",
-      watchTypes === undefined
-        ? `${watchId} · ${task.state} · waiting for events`
-        : `${watchId} · ${task.state} · ${watchTypes.join(",")} · waiting for events`,
+    // One opaque key per invocation, generated rather than asked for: §2 makes `Idempotency-Key` mandatory on this
+    // route so a retried create cannot make a second task, and a command that made the user supply one would be a
+    // command whose common path needs a flag — which §10's latency row rules out by name. Random rather than derived
+    // from the objective on purpose: a key that came from the text would make a second, deliberate `task run` of the
+    // same sentence return the first task instead of creating one, and the user asked twice. Generated the way the
+    // pairing code and the token are (`packages/storage/clients.ts`), so one idiom makes the opaque strings in this
+    // codebase.
+    const key = randomBytes(16).toString("base64url");
+    let record: TaskRecord;
+    try {
+      record = (await connection.client.createTask({ objective: runObjective }, key))
+        .body as TaskRecord;
+    } catch (error) {
+      return reportFailure(renderer, error);
+    }
+    // Printed first and whole. §7.1's row exists for the case it names — a dropped SSH session — and the id on the
+    // screen is what makes the loss nothing: the events are on the record and any client can follow them from anywhere.
+    // The reattach line names `task watch` rather than the `task resume` the row was written around, because
+    // `POST /tasks/{id}/resume` is in no build and a printed command that cannot run is worse than a printed one that
+    // can (docs/CONSISTENCY_REVIEW.md F-47).
+    renderer.line("task", `${record.id} · ${record.state}`);
+    renderer.fix(
+      `crabby task watch ${record.id} — reattach from any client; the events are on the record`,
     );
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let lastEventId: string | undefined;
-    let seen = 0;
-    let finalState: TaskRecord["state"] = task.state;
-    let ended: string | undefined;
-    // Frames are separated by a blank line, and a chunk boundary can fall inside one, so the buffer is only ever consumed
-    // up to the last complete separator. Dropping the tail would lose an event; parsing it early would invent one.
-    outer: for (;;) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      for (;;) {
-        const separator = buffer.indexOf("\n\n");
-        if (separator === -1) break;
-        const rawFrame = buffer.slice(0, separator);
-        buffer = buffer.slice(separator + 2);
-        let name: string | undefined;
-        let idLine: string | undefined;
-        const dataLines: string[] = [];
-        for (const line of rawFrame.split("\n")) {
-          // A line starting with a colon is a comment, which is what the 15-second heartbeat sends. Skipping it is what
-          // keeps an idle stream from printing noise, and §5.1's heartbeat exists to be ignored.
-          if (line.startsWith(":")) continue;
-          if (line.startsWith("id:")) idLine = line.slice(3).trim();
-          else if (line.startsWith("event:")) name = line.slice(6).trim();
-          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-        }
-        if (dataLines.length === 0) continue;
-        const parsed = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
-
-        // §5.4's two control frames are facts, not noise: a gap means the cursor asked for events outside the window and
-        // the answer is to reconcile from `stateAt`, and an end frame means the stream itself is closing for a reason the
-        // client did not choose. Printing neither would turn an outage into a silent EOF.
-        if (name === "gap" || parsed.gap === true) {
-          const gapLine = JSON.stringify({ gap: true, stateAt: parsed.stateAt, taskId: watchId });
-          if (renderer.json) renderer.raw(gapLine);
-          else {
-            renderer.line(
-              "gap",
-              "the stream's window no longer holds the cursor; reconcile from the task's state",
-            );
-            renderer.fix(`crabby task show ${watchId}`);
-          }
-          continue;
-        }
-        if (parsed.end === true) {
-          ended = String(parsed.reason ?? "unknown");
-          if (renderer.json) renderer.raw(JSON.stringify({ end: true, reason: ended }));
-          else renderer.line("stream ended", String(ended));
-          break outer;
-        }
-
-        const event = parsed as unknown as Event;
-        if (idLine !== undefined) lastEventId = idLine;
-        // Printed only if the user asked for it, matched the way the Gateway matches: an exact type or a prefix ending in
-        // a dot, so `task` follows `task.state.changed` and `task.` follows the same events without swallowing
-        // `taskmaster.whatever`. The cursor still advances for an event that is not printed, because §5.1's reconnect
-        // contract is about the stream's position and not about what one client chose to look at.
-        const wanted =
-          watchTypes === undefined ||
-          watchTypes.some((filter) => event.type === filter || event.type.startsWith(`${filter}.`));
-        if (wanted) {
-          seen += 1;
-          if (renderer.json) renderer.raw(JSON.stringify(event));
-          else renderer.line(String(event.seq).padStart(4), `${event.type}  ${event.ts}`);
-        }
-
-        // Two ways to recognise the end, because a terminal state arrives either as the state change itself or as the
-        // event named for it, and watching past either one would leave the user staring at a prompt that will never
-        // print. `interrupted` is deliberately not one of them: it is not terminal (§4.1), and a run may resume.
-        const state = typeof event.payload?.state === "string" ? event.payload.state : undefined;
-        if (
-          (state !== undefined && isTerminal(state as TaskRecord["state"])) ||
-          event.type === "task.completed" ||
-          event.type === "task.failed" ||
-          event.type === "task.cancelled"
-        ) {
-          finalState = (state ?? finalState) as TaskRecord["state"];
-          await reader.cancel();
-          break outer;
-        }
-      }
-    }
-
-    // The last id is printed rather than acted on. §5.1 gives a reconnecting client `Last-Event-ID` and the Gateway
-    // honours it, but a command that reconnected silently would hide the outage that made it reconnect — so the cursor is
-    // handed to whoever is driving, and the exit code says the stream is over.
-    if (lastEventId !== undefined && !renderer.json)
-      renderer.fix(
-        `last event id ${lastEventId} — reconnect with Last-Event-ID to resume without a gap`,
-      );
-    if (renderer.json) {
-      // NDJSON is the contract §7.1 names for this verb, and a trailing summary document would be a line a script
-      // parsing one-event-per-line did not ask for. The document form is what a snapshot command returns, not a stream.
-      return ended === undefined ? EXIT.success : EXIT.failure;
-    }
-    return renderer.done({
-      task: watchId,
-      state: finalState,
-      events: seen,
-      streamed: true,
-      ...(lastEventId === undefined ? {} : { lastEventId }),
-      ...(ended === undefined ? {} : { ended }),
+    if (renderer.json) renderer.raw(JSON.stringify(record));
+    if (tail.values.detach !== undefined)
+      return renderer.done({ ...record, following: false, idempotencyKey: key });
+    return followTask({
+      url: connection.url,
+      client: connection.client,
+      layout,
+      renderer,
+      taskId: record.id,
+      stopAtApproval: true,
     });
   }
 
-  renderer.line("task", "which verb? `ls`, `show`, `cancel` or `watch`");
+  if (verb === "watch" && watchId !== undefined)
+    return followTask({
+      url: connection.url,
+      client: connection.client,
+      layout,
+      renderer,
+      taskId: watchId,
+      ...(watchTypes === undefined ? {} : { types: watchTypes }),
+      stopAtApproval: false,
+    });
+
+  renderer.line("task", "which verb? `run`, `ls`, `show`, `cancel` or `watch`");
   return EXIT.usage;
+}
+
+/** Following one task's events to the end of it, shared by `watch` and `run` because they are the same stream and the
+ *  same framing rules — §5.4's `gap` and `end` frames, §5.1's heartbeat, the per-task `seq`, and the cursor a
+ *  reconnecting client would use. One copy rather than two, because a second implementation of an SSE parser is a second
+ *  place for the chunk-boundary bug to live.
+ *
+ *  `stopAtApproval` is the only difference the two verbs need, and it is §7.1's rather than a preference: `watch`
+ *  keeps streaming through a prompt because its whole job is to show what happens, while `run` exits 3 at one because
+ *  its contract is to block until the task ends and `--wait-approval <n>` — the opt-in that would make blocking
+ *  legitimate — is in no registry. */
+interface FollowInput {
+  readonly url: string;
+  readonly client: GatewayClient;
+  readonly layout: DataLayout;
+  readonly renderer: Renderer;
+  readonly taskId: string;
+  /** What to *print*. The stream always asks for the terminal types as well, so a filter cannot hide the event that
+   *  ends the follow and leave the command holding an open socket forever. */
+  readonly types?: readonly string[] | undefined;
+  readonly stopAtApproval: boolean;
+}
+
+async function followTask(input: FollowInput): Promise<ExitCode> {
+  const { url, client, layout, renderer, taskId, types, stopAtApproval } = input;
+  // The task is read once before the stream opens, for a reason that is about hanging rather than about convenience: a
+  // task that already reached a terminal state will never publish another event, so opening a stream for it would block
+  // until the user interrupts. Answering "already cancelled" is both faster and the truth.
+  let task: TaskRecord;
+  try {
+    task = (await client.getTask(taskId)).body as TaskRecord;
+  } catch (error) {
+    return reportFailure(renderer, error);
+  }
+  if (isTerminal(task.state)) {
+    const absorbing =
+      `${taskId} is ${task.state}, which is terminal and absorbing (AGENT_RUNTIME.md §4.1), so no further event will ` +
+      "arrive — `crabby task show` prints what it left behind";
+    renderer.line("state", task.state);
+    renderer.fix(absorbing);
+    if (renderer.json) {
+      // One line, because §7.1 promises this verb NDJSON and `done()` renders its document with two-space indentation:
+      // a pretty-printed answer would arrive as dozens of lines that no script parsing one-document-per-line can read.
+      // The same refusal is therefore a paragraph for a human and a single JSON object for a machine, with `streamed:
+      // false` and `events: 0` saying plainly that no stream was ever opened rather than leaving a reader to infer it
+      // from an absence.
+      renderer.raw(
+        JSON.stringify({ ok: true, ...task, events: 0, streamed: false, fixes: [absorbing] }),
+      );
+      return EXIT.success;
+    }
+    return renderer.done({ ...task, events: 0, streamed: false });
+  }
+
+  // A raw fetch rather than a client method, because `GatewayClient` is buffered by design: every other route answers
+  // with one document, and giving it a streaming member would mean two lifecycles behind one interface. The token comes
+  // from the same credentials `connect` paired with, and the URL from the Gateway's own published one, so an ephemeral
+  // port is honoured exactly as it is everywhere else.
+  const credentials = readCredentials(layout);
+  if (credentials === undefined) return reportNoGateway(renderer, "unpaired");
+  let response: globalThis.Response;
+  try {
+    // The filter the user asked for, widened by the three events that end a task. A `--types` value that left out
+    // `task.cancelled` would otherwise hide the very event that makes a watch finish, and the command would hold a
+    // stream open forever — which is §7.1's promise broken by a flag whose whole job is to narrow what is printed.
+    // Narrowing the *display* is the user's business; narrowing what the command can see about its own ending is not,
+    // so the widening happens in the query and the narrowing happens below, at print time.
+    const requested = types === undefined ? undefined : [...types, ...TERMINAL_EVENT_TYPES];
+    response = await fetch(
+      `${url}/api/v1/events?taskId=${encodeURIComponent(taskId)}` +
+        (requested === undefined ? "" : `&types=${encodeURIComponent(requested.join(","))}`),
+      {
+        headers: {
+          authorization: `Bearer ${credentials.token}`,
+          accept: "text/event-stream",
+        },
+      },
+    );
+  } catch (error) {
+    return reportFailure(renderer, error);
+  }
+  if (!response.ok || response.body === null) {
+    renderer.line(
+      "stream refused",
+      `the Gateway answered ${response.status} to GET /api/v1/events`,
+    );
+    renderer.fix("crabby gateway status — is the Gateway still running?");
+    return EXIT.failure;
+  }
+
+  renderer.line(
+    "watching",
+    types === undefined
+      ? `${taskId} · ${task.state} · waiting for events`
+      : `${taskId} · ${task.state} · ${types.join(",")} · waiting for events`,
+  );
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let lastEventId: string | undefined;
+  let seen = 0;
+  let promptId: string | undefined;
+  let finalState: TaskRecord["state"] = task.state;
+  let ended: string | undefined;
+  // Frames are separated by a blank line, and a chunk boundary can fall inside one, so the buffer is only ever consumed
+  // up to the last complete separator. Dropping the tail would lose an event; parsing it early would invent one.
+  outer: for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    for (;;) {
+      const separator = buffer.indexOf("\n\n");
+      if (separator === -1) break;
+      const rawFrame = buffer.slice(0, separator);
+      buffer = buffer.slice(separator + 2);
+      let name: string | undefined;
+      let idLine: string | undefined;
+      const dataLines: string[] = [];
+      for (const line of rawFrame.split("\n")) {
+        // A line starting with a colon is a comment, which is what the 15-second heartbeat sends. Skipping it is what
+        // keeps an idle stream from printing noise, and §5.1's heartbeat exists to be ignored.
+        if (line.startsWith(":")) continue;
+        if (line.startsWith("id:")) idLine = line.slice(3).trim();
+        else if (line.startsWith("event:")) name = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (dataLines.length === 0) continue;
+      const parsed = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+
+      // §5.4's two control frames are facts, not noise: a gap means the cursor asked for events outside the window and
+      // the answer is to reconcile from `stateAt`, and an end frame means the stream itself is closing for a reason the
+      // client did not choose. Printing neither would turn an outage into a silent EOF.
+      if (name === "gap" || parsed.gap === true) {
+        const gapLine = JSON.stringify({ gap: true, stateAt: parsed.stateAt, taskId: taskId });
+        if (renderer.json) renderer.raw(gapLine);
+        else {
+          renderer.line(
+            "gap",
+            "the stream's window no longer holds the cursor; reconcile from the task's state",
+          );
+          renderer.fix(`crabby task show ${taskId}`);
+        }
+        continue;
+      }
+      if (parsed.end === true) {
+        ended = String(parsed.reason ?? "unknown");
+        if (renderer.json) renderer.raw(JSON.stringify({ end: true, reason: ended }));
+        else renderer.line("stream ended", String(ended));
+        break outer;
+      }
+
+      const event = parsed as unknown as Event;
+      if (idLine !== undefined) lastEventId = idLine;
+      // Printed only if the user asked for it, matched the way the Gateway matches: an exact type or a prefix ending in
+      // a dot, so `task` follows `task.state.changed` and `task.` follows the same events without swallowing
+      // `taskmaster.whatever`. The cursor still advances for an event that is not printed, because §5.1's reconnect
+      // contract is about the stream's position and not about what one client chose to look at.
+      const wanted =
+        types === undefined ||
+        types.some((filter) => event.type === filter || event.type.startsWith(`${filter}.`));
+      if (wanted) {
+        seen += 1;
+        if (renderer.json) renderer.raw(JSON.stringify(event));
+        else renderer.line(String(event.seq).padStart(4), `${event.type}  ${event.ts}`);
+      }
+
+      // Two ways to recognise the end, because a terminal state arrives either as the state change itself or as the
+      // event named for it, and watching past either one would leave the user staring at a prompt that will never
+      // print. `interrupted` is deliberately not one of them: it is not terminal (§4.1), and a run may resume.
+      const state = typeof event.payload?.state === "string" ? event.payload.state : undefined;
+      if (typeof event.payload?.approvalId === "string") promptId = event.payload.approvalId;
+      // §7.1's exit-3 row: "Approval needed, no answer reachable — exit `3` immediately", with `--wait-approval <n>`
+      // as the only opt-in to keep waiting. That flag is in no registry, so there is nothing to opt into and blocking on
+      // anyway would be exactly the silent hang inside a cron job the row exists to prevent. The id is tracked across
+      // frames rather than read from the one that stops the follow, because D-086's pause arrives as a state with *no*
+      // prompt behind it and the two answers a user needs are different sentences.
+      if (
+        stopAtApproval &&
+        (state === "awaiting_approval" || event.type === "approval.requested")
+      ) {
+        await reader.cancel();
+        const answer =
+          promptId === undefined
+            ? "`crabby task show " +
+              taskId +
+              "` prints why — a task paused under D-086 has no prompt to answer, and nothing resumes it but a new run"
+            : "`crabby approval approve " +
+              promptId +
+              "` continues it and `crabby approval deny " +
+              promptId +
+              "` ends the step; `--wait-approval`, §7.1's opt-in to keep blocking here, is in no registry yet";
+        if (renderer.json) {
+          renderer.raw(
+            JSON.stringify({
+              ok: false,
+              code: "needs-approval",
+              task: taskId,
+              state: "awaiting_approval",
+              ...(promptId === undefined ? {} : { approvalId: promptId }),
+            }),
+          );
+          return EXIT.needsApproval;
+        }
+        renderer.line(
+          "needs approval",
+          promptId === undefined
+            ? `${taskId} is awaiting_approval with no prompt behind it (D-086's pause after repeated denials)`
+            : `${taskId} is waiting on approval ${promptId}`,
+        );
+        renderer.fix(answer);
+        return EXIT.needsApproval;
+      }
+
+      if (
+        (state !== undefined && isTerminal(state as TaskRecord["state"])) ||
+        event.type === "task.completed" ||
+        event.type === "task.failed" ||
+        event.type === "task.cancelled"
+      ) {
+        finalState = (state ?? finalState) as TaskRecord["state"];
+        await reader.cancel();
+        break outer;
+      }
+    }
+  }
+
+  // The last id is printed rather than acted on. §5.1 gives a reconnecting client `Last-Event-ID` and the Gateway
+  // honours it, but a command that reconnected silently would hide the outage that made it reconnect — so the cursor is
+  // handed to whoever is driving, and the exit code says the stream is over.
+  if (lastEventId !== undefined && !renderer.json)
+    renderer.fix(
+      `last event id ${lastEventId} — reconnect with Last-Event-ID to resume without a gap`,
+    );
+  if (renderer.json) {
+    // NDJSON is the contract §7.1 names for this verb, and a trailing summary document would be a line a script
+    // parsing one-event-per-line did not ask for. The document form is what a snapshot command returns, not a stream.
+    return ended === undefined ? EXIT.success : EXIT.failure;
+  }
+  return renderer.done({
+    task: taskId,
+    state: finalState,
+    events: seen,
+    streamed: true,
+    ...(lastEventId === undefined ? {} : { lastEventId }),
+    ...(ended === undefined ? {} : { ended }),
+  });
 }

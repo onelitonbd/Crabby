@@ -32,6 +32,7 @@ import {
   READ_ONLY_COMMANDS,
   raiseOnly,
   registerTool,
+  removedGrantsFor,
   resolveTool,
   restrictCapabilities,
   TIERS,
@@ -272,6 +273,56 @@ describe("capability vocabulary (SECURITY.md §6.1)", () => {
       ["fs.read:/home/ua/one-root"],
       "a parameter somebody already chose is kept — re-expanding it against today's config would let an edit silently " +
         "move an identity's authority",
+    );
+  });
+
+  it("names what a restriction removed, which is the half of §13's report `grants` cannot carry", () => {
+    const full = capabilitiesFor("cli");
+    assert.deepEqual(
+      removedGrantsFor(full, "cli"),
+      [],
+      "an identity paired without `--restrict` had nothing removed. The empty set is the whole point: with it, a missing " +
+        "capability reads as a denial the user can fix, and §13's other sentence stays reserved for a client that was " +
+        "actually narrowed",
+    );
+
+    const narrow = restrictCapabilities(full, ["task.read", "fs.read"]);
+    assert.deepEqual(
+      narrow.refused,
+      [],
+      "the fixture restriction has to be honoured for the rest of this to mean anything",
+    );
+    const removed = removedGrantsFor(narrow.capabilities, "cli");
+    assert.ok(
+      removed.includes("fs.write"),
+      "`fs.write` was in the baseline and is not held now, so it is what the restriction removed — and it is the name " +
+        "that turns a refusal into 'not available to this client' instead of 'needs `fs.write`, which this identity " +
+        "does not hold'",
+    );
+    assert.ok(
+      !removed.includes("fs.read"),
+      "and a capability the restriction kept is not reported as removed",
+    );
+
+    assert.ok(
+      !removed.includes("shell.run") && !removed.includes("shell.privileged"),
+      "§9 withholds the shell from every install, so no restriction removed it. Naming a rule's own exclusion as " +
+        "somebody's narrowing would send the operator to inspect a pairing nobody narrowed, and `withheldReason` " +
+        "already answers the shell from the registry side with the reason §9 gives",
+    );
+
+    const remote = capabilitiesFor("telegram");
+    assert.deepEqual(
+      removedGrantsFor(remote, "telegram"),
+      [],
+      "§6.1's local-only exclusions are a property of the interface, not of a restriction: an unrestricted telegram " +
+        "identity had nothing taken away from it at pairing",
+    );
+    const empty = removedGrantsFor([], "telegram");
+    assert.ok(
+      !empty.includes("auth.manage"),
+      "and a capability the telegram baseline never contained is not in the removed set either, however little the " +
+        "identity holds",
     );
   });
 });

@@ -6,7 +6,13 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { EXIT, type ExitCode } from "@crabby/api-contracts";
-import { createLogger, createShutdown, type LogLevel, loadConfig } from "@crabby/core";
+import {
+  createLogger,
+  createShutdown,
+  LIMITS_DEFAULTS,
+  type LogLevel,
+  loadConfig,
+} from "@crabby/core";
 import {
   buildApp,
   clearGatewayInfo,
@@ -17,7 +23,7 @@ import {
 import { type DataLayout, homeDirectory } from "@crabby/platform";
 import { composeProviders, selectDefaultModel } from "@crabby/providers";
 import { DB_FILE_NAME, migrate, openDatabase, schemaVersion, taskScratch } from "@crabby/storage";
-import { createFileTools } from "@crabby/tools";
+import { createFileTools, defaultRealpathOf } from "@crabby/tools";
 import { parseTail, unknownFlagMessage } from "../args.ts";
 import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
@@ -102,6 +108,30 @@ async function runStart(
           scratchDirFor: (taskId) => taskScratch(layout, taskId),
           limits: loaded.limits,
         });
+  /** §3.6's selection, resolved here rather than inside the Gateway for the reason the providers and the executor are:
+   *  the party that starts the process is the party that can print a refusal and its fix once, at startup, instead of
+   *  leaving it to a route to explain later. It moved above `buildApp` when the runner arrived, because the runner needs
+   *  the answer; the banner still prints it below, beside what refused (D-101). */
+  const selected = selectDefaultModel(providers, loaded.config.defaultModel);
+  /** The handoff's ingredients, bundled because they are all-or-nothing: `buildApp` composes the runner only when every
+   *  one of them exists, and a Gateway with an executor but no model would be a Gateway that accepts a task and then
+   *  fails it at the first provider call, which is a worse answer than refusing to drive at all. Absent means
+   *  `POST /api/v1/tasks` records a task and nothing moves it, and the `tasks` line below says so in as many words. */
+  const drive =
+    executor === undefined || !selected.ok
+      ? undefined
+      : {
+          tools: executor,
+          provider: selected.provider,
+          modelId: selected.modelId,
+          // §8's resolver, and the *same* one the executor defaults to: a policy that resolved a symlink and an
+          // executor that did not would let the link decide a containment question between them, which is the defect the
+          // twenty-first slice took out of `checkPath` from the other side.
+          ctx: {
+            paths: { home: homeDirectory(), dataDir: layout.stateDir, roots },
+            realpathOf: defaultRealpathOf,
+          },
+        };
   const startedAt = new Date();
   const built = await buildApp({
     db: handle.db,
@@ -112,6 +142,7 @@ async function runStart(
     listenerMode: "local",
     providers,
     ...(executor === undefined ? {} : { declares: executor.declares }),
+    ...(drive === undefined ? {} : { drive }),
   });
 
   try {
@@ -168,7 +199,6 @@ async function runStart(
         "needs no key composes today, and one that does waits for the vault (M5, F-56)",
     );
   }
-  const selected = selectDefaultModel(providers, loaded.config.defaultModel);
   renderer.line(
     "default model",
     selected.ok
@@ -193,14 +223,34 @@ async function runStart(
         "the rows nothing implements still name their runtime fields as pending (F-55)",
     );
   }
-  renderer.line(
-    "tasks",
-    "recorded, not driven: the runner exists (M2n) and `POST /api/v1/tasks/{id}/cancel` stops a task, but nothing " +
-      "composes the runner into `POST /api/v1/tasks`. Identities do hold capabilities now — a mint assigns §6.1's " +
-      "baseline for the interface, narrowed by `--restrict` when one is given, and `crabby auth list` prints the set — " +
-      "but no code turns them into a run's grants yet, so a task started from a route would carry no PolicySubject and " +
-      "be refused every tool it proposed (F-52's third question is the one still open)",
-  );
+  // Both halves of the condition are named because TypeScript cannot infer one from the other, and neither can a
+  // reader: `drive` is built from `selected`, so "there is a runner" and "a model was selected" are the same fact seen
+  // from two places, and writing it twice is what keeps the line below from printing a model that does not exist.
+  if (drive !== undefined && selected.ok) {
+    renderer.line(
+      "tasks",
+      `driven: a task created over HTTP is handed to the runner, whose grants are expanded from the identity that ` +
+        `asked it (§6.1, D-102) — ${selected.providerId}/${selected.modelId} over ${roots.length} root(s)`,
+    );
+    renderer.fix(
+      "`crabby task run` with an objective creates a task and follows it to its end; a run that parks at an approval " +
+        "waits there for `crabby approval approve <id>`, and `limits.*` does not reach the loop yet",
+    );
+  } else {
+    renderer.line(
+      "tasks",
+      "recorded, not driven: the runner is composed only when an executor and a selected model both exist, and " +
+        (executor === undefined && !selected.ok
+          ? "neither does here — no workspace root is configured and no default model is selected"
+          : executor === undefined
+            ? "no workspace root is configured"
+            : "no default model is selected"),
+    );
+    renderer.fix(
+      "`POST /api/v1/tasks` still answers 201 and the task stays `queued`, which is the truth rather than a shrug: " +
+        "§7.1's recovery marks it `interrupted` on the next start",
+    );
+  }
   if (built.bootstrap) {
     renderer.line("", "");
     renderer.line(
@@ -212,7 +262,12 @@ async function runStart(
   renderer.line("", "");
   renderer.fix("crabby auth pair --code <code>");
   renderer.fix("crabby status");
-  renderer.line("stop", "Ctrl-C — streams drain, then the listener closes (D-066's 5 s budget)");
+  renderer.line(
+    "stop",
+    drive === undefined
+      ? "Ctrl-C — streams drain, then the listener closes (D-066's 5 s budget)"
+      : "Ctrl-C — runs settle inside D-066's 5 s budget, then streams drain, then the listener closes",
+  );
   log.info("gateway listening", { url, ...info });
 
   const shutdown = createShutdown(layout);
@@ -224,6 +279,31 @@ async function runStart(
   // answering, then the listener, then the file other processes read, then SQLite — WAL is only safe to drop last.
   // D-066's drain has to fit a live stream in it, so the bus ends them with the reason that makes a reconnect
   // deliberate rather than reflexive (`docs/INTERFACES_AND_API.md` §5.4's `end` frame, D-096).
+  // Runs first, and the order is the whole point: a run writes through the journal, so a step still moving when SQLite
+  // closes is a crash wearing a drain's clothes, and a stream closed while its task is still emitting leaves a client
+  // reconnecting to a cursor nothing will advance. D-066's budget is spent waiting rather than killing, and what is
+  // still moving when the budget ends is printed rather than dropped, because §7.1's recovery owns it next and an
+  // operator who does not know a task was cut off cannot tell an interruption from a hang.
+  shutdown.onShutdown("runs", async () => {
+    if (built.runner === undefined) return;
+    // D-066's budget read out of `limits.*` and defaulted from `LIMITS_DEFAULTS` rather than restated here: a second
+    // copy of the number is a number that drifts from the one `crabby config get limits` prints.
+    const report = await built.runner.shutdown(
+      loaded.limits.cancellationSettleMs ?? LIMITS_DEFAULTS.cancellationSettleMs,
+    );
+    log.info("runs drained", { ...report });
+    if (report.abandoned.length > 0 || report.parked.length > 0) {
+      renderer.line(
+        "runs",
+        `${report.drained} settled, ${report.abandoned.length} still moving when the budget ended, ` +
+          `${report.parked.length} parked at an approval`,
+      );
+      renderer.fix(
+        "§7.1's recovery marks a task that was moving `interrupted` on the next start; a parked run cannot be resumed " +
+          "by a new process, and its approval still expires under D-064's window (F-47)",
+      );
+    }
+  });
   shutdown.onShutdown("streams", () => built.bus.closeAll("shutdown"));
   shutdown.onShutdown("listener", async () => {
     await built.app.close();

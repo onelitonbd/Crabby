@@ -1044,6 +1044,33 @@ the handoff" sentence. That handoff is the slice that joins the durable fact to 
 lands `auth.manage` and `task.cancel` stay cited by routes that decide on something else, which is what this row has
 said since M2j and what it will keep saying until it can stop.
 
+**The handoff landed, and with it the answer to the third question.** `POST /api/v1/tasks` reads the identity that asked
+before it writes anything, calls `grantsFor(client.capabilities, { roots })` with the roots the composition root was
+given, logs every withheld grant with the reason `packages/policy` produced rather than dropping it, and hands
+`runner.start` a subject of `{ grants, removedGrants, clientKind: client.interface }`. So `capability_json` becomes
+`PolicySubject.grants` at the route, once per task, from the durable fact D-102 started writing at pairing — and
+`tests/integration/tasks.test.ts` asserts the join end to end over HTTP: a run that completes and really writes a file,
+and a narrowed identity whose refused write is reported §13's way.
+
+The second half of the subject is the finding this slice made rather than read. `PolicySubject.removedGrants` had no
+writer either, and without it `§13`'s own sentence is unreachable from a Gateway-composed run: an unheld capability
+answers `deny` — "needs `fs.write`, which this identity does not hold" — which reads as something the user could go and
+grant, when for a restricted client it is a feature that is not available and must not be laundered into an approval it
+cannot answer. `removedGrantsFor(capabilities, interface)` is the missing writer: the interface's baseline minus what the
+identity holds, so an unrestricted pairing has nothing in it and §9's withheld shell and §6.1's local-only marks are
+*not* reported as somebody's narrowing. Only the integration test could have caught this; reading the two packages
+showed two correct halves and no seam between them.
+
+What this row still says, and now more precisely. `auth.manage` and `task.cancel` remain enforced by D-097's socket
+guard rather than by a grant, but the reason has lost one of its two legs: a route *does* now have a `PolicySubject` to
+ask. What is left is the migration — no code gives capabilities to an identity paired before assignment existed, and
+such an identity holds `[]`, so a grant test on `POST /auth/pair-codes` or on `POST /api/v1/tasks` would refuse the
+owner's own CLI and lock them out of the recovery path, which is the outage D-097 named. `POST /api/v1/tasks` therefore
+records a task from any paired identity and enforces nothing at the door; the enforcement it does perform is per tool
+call, inside the run, where the subject exists. That is the closing condition, stated once: a migration that gives every
+existing identity its interface's baseline, after which the socket guard can be replaced by the grant test the documents
+have described since §3.1.
+
 
 ### F-54 — §4.4's first check is a *type* check, and a schema that arrives as data cannot be type-checked
 

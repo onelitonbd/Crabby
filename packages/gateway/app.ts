@@ -5,20 +5,29 @@
 // Two things are absent on purpose. There is no policy *enforcement* here: `@crabby/policy` answers "what tier is this
 // and who may do it" and `GET /api/v1/tools` publishes that registry, but no route grants anything, because "an
 // interface may request, display, and relay; it may never grant" (`SECURITY.md` §6.1) would break at the first attempt
-// if a Gateway endpoint could wave a T3 through. The approval queue and its two §4.3 routes are in this build, and
-// they only *answer*: nothing here opens a request, and no route drives a task. The party that opens one exists —
-// `packages/agent-runtime/loop.ts` calls `policy.evaluate` and hands the result to the arbiter (D-084, D-086) — and the
-// two things it needed are here now: an executor to run (`packages/tools`, D-098) and an adapter to call
-// (`packages/providers`, D-100), which `crabby gateway start` composes from `config.json`'s `provider.*` entries and
-// hands to this file as `deps.providers`. The runner exists now — `packages/agent-runtime/runner.ts` (M2n) owns the one
-// rule four clients make necessary, that a task has one run — so what is still absent is not the runner but the
-// *handoff*. Identities do hold capabilities now: the mint route below assigns §6.1's baseline for the interface and
-// narrows it when the caller asks, so `auth.manage` is a real property of a client record and no longer a sentence with
-// nothing behind it. What is still absent is the step from a capability to a grant — no code calls `grantsFor` for a
-// run, so a task started from a route would carry no `PolicySubject` and be refused every tool it proposed (the third of
-// F-52's three questions). A task created over HTTP is therefore
-// still recorded and read back while nothing moves it, and that is reported rather than demoed: wiring this route to the
-// loop against the fake provider is exactly the shipment this phase has refused.
+// if a Gateway endpoint could wave a T3 through. The approval queue and its two §4.3 routes are in this build, and they
+// only *answer*: nothing here opens a request. The loop opens them, from `policy.evaluate`'s verdict (D-084, D-086).
+//
+// `POST /api/v1/tasks` does hand its task over, and that handoff is the last thing M2's Exit criterion was waiting on.
+// The route records the task, turns the identity's recorded capabilities into a `PolicySubject` — `grantsFor` expands a
+// root-scoped name against the roots this install configured and reports as *withheld*, rather than silently dropping,
+// the ones no configuration could honour — adds `removedGrantsFor`'s set so that a narrowed client is told §13's "not
+// available to this client" instead of a denial that reads as something it could go and grant, and then calls
+// `runner.start`. A Gateway composed with no drive (no workspace root, or no selected default model) has no runner at
+// all, and says so where a client can ask before it commits: `GET /api/v1/diagnostics` reports `runs.composed` and
+// `runs.inFlight`, which is what lets `crabby task run` refuse to create a task that nothing would move rather than
+// create one and let the client discover it. The route still answers 201 when `start` refuses, because a task that is
+// already in flight or parked is a fact about the record and not a failure of the request, and logs the reason.
+//
+// What is still absent here, and deliberately. Nothing at this route tests whether the identity holds `task.create`:
+// every identity paired before capability assignment holds an empty set, so a grant test would lock an owner out of
+// their own Gateway — the outage D-097 named — and the check belongs beside the socket guard it replaces.
+// `config.json`'s `limits.*` are not wired into the loop either, because `limits.providerAbsoluteMs` and
+// `LoopLimits.providerCallMs` are not one budget under two names and half-mapping them would put a number in the run
+// that no document promises; the gap is recorded in the slice that composed the runner rather than papered over. And
+// there is no `POST /api/v1/tasks/{id}/resume` (F-47): §7.1's recovery marks an interrupted task and sweeps the prompts
+// whose deadlines passed, and never resurrects a run, because a recovery that could resume work would be a way past an
+// approval.
 //
 // §6's cancellation *is* wired, because stopping work is not the same act as doing it and needs no grants: `buildApp`
 // composes the process's one manager and `POST /api/v1/tasks/{id}/cancel` requests through it. A `queued` task has
@@ -41,6 +50,10 @@ import {
   createCancellation,
   createCheckpoints,
   createRecovery,
+  createRunner,
+  type LoopSubject,
+  type Runner,
+  type ToolSurface,
 } from "@crabby/agent-runtime";
 import type { ApprovalState, ToolDeclaration } from "@crabby/api-contracts";
 import {
@@ -66,13 +79,18 @@ import { detectProcess } from "@crabby/platform";
 import {
   allToolRecords,
   CAPABILITIES,
+  type ClientKind,
   capabilitiesFor,
+  type EvalContext,
+  grantsFor,
+  type PlatformFactsLike,
   registryDigest,
+  removedGrantsFor,
   restrictCapabilities,
   TIERS,
   TOOL_REGISTRY,
 } from "@crabby/policy";
-import type { ProviderComposition } from "@crabby/providers";
+import type { Provider, ProviderComposition } from "@crabby/providers";
 import {
   appendEvent,
   authenticate,
@@ -111,6 +129,25 @@ import {
 } from "./errors.ts";
 import { comment, frame, gapFrame, HEARTBEAT_MS, openStream, type StreamState } from "./sse.ts";
 
+/** What a run needs that only the party that started the process knows. These four arrive together or not at all, and
+ *  the bundling is the point: an executor with no model, or a model with no executor, is not a runner, and four
+ *  independent optionals would let that combination be written down and then discovered at the first task.
+ *
+ *  `ctx` is `EvalContext` minus `grants` because the two halves have different owners: the roots, the egress allow-list
+ *  and the symlink resolver are facts about the install, so the composition root resolves them once, while `grants` are
+ *  facts about the identity that asked, so they arrive per run (F-52's third question, answered at the route, D-102). */
+export interface DriveFacts {
+  /** §4.1's executor. The type is `packages/agent-runtime`'s seam rather than `packages/tools`' class, which is what
+   *  keeps this package free of a dependency on the executor: which one a process has is a fact about the composition
+   *  root that ran, for the reason `declares` is handed in. */
+  readonly tools: ToolSurface;
+  readonly provider: Provider;
+  /** §3.6's selection, resolved by the caller and not chosen here: a provider must not be able to alter a task's
+   *  permissions (§3.1's third rule), and a loop that picked its own model would be one step from that. */
+  readonly modelId: string;
+  readonly ctx: Omit<EvalContext, "grants">;
+}
+
 export interface GatewayDeps {
   readonly db: SqliteDb;
   readonly layout: DataLayout;
@@ -136,6 +173,10 @@ export interface GatewayDeps {
    *  composed, and then every row keeps naming all five — which is a true statement about this process rather than a
    *  default invented to fill a response. */
   readonly declares?: ((tool: string) => ToolDeclaration | undefined) | undefined;
+  /** The handoff's ingredients. Absent means this process cannot drive a task, and `POST /api/v1/tasks` then records one
+   *  and the startup banner says so — which is the honest answer for an install that configured no workspace root or
+   *  selected no default model, and the reason the field is one bundle rather than four optionals. */
+  readonly drive?: DriveFacts | undefined;
 }
 
 export interface BuiltApp {
@@ -145,6 +186,11 @@ export interface BuiltApp {
    *  that a code be "generated inside the Gateway's own host/terminal, never accepted from an unauthenticated network
    *  caller", and a bootstrap can hardly require the credential it exists to create. */
   readonly bootstrap?: { code: string; clientId: string; expiresAt: string };
+  /** The process's one runner, when the composition root supplied what one needs. Exposed because D-066's drain is a
+   *  *sequence* and the sequence belongs to whoever owns the exit path: runs settle before streams close and before
+   *  SQLite does, and a run still writing when the database closes is a crash wearing a drain's clothes. Absent means
+   *  nothing in this process can move a task, which the banner reports rather than hides. */
+  readonly runner?: Runner | undefined;
 }
 
 const REDEEM_PATH = "/api/v1/auth/pair";
@@ -156,6 +202,10 @@ const CLIENTS_PATH = "/api/v1/auth/clients";
 export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   const { db, log } = deps;
   const bus = createEventBus();
+  /** §4.1's `availability` predicate needs a fact this file must not read from `process.env` inside a handler, and a
+   *  runner needs the same fact for the same reason — so it is resolved once, at composition, and both read the answer
+   *  rather than each asking the process again (`RunnerDeps.platform`, `deps.platformFacts`). */
+  const platform = deps.platformFacts ?? detectProcess();
   const pruned = pruneEvents(db);
   if (pruned.deleted > 0) log.info("event retention pruned rows", { deleted: pruned.deleted });
 
@@ -193,6 +243,40 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
     // publishes — §9's pairing rule is the manager's to keep, not this file's to re-implement.
     publish: (event) => bus.publish(event),
   });
+
+  // The handoff, composed here rather than handed in whole, and the reason is the same one that puts the cancellation
+  // manager here: `runner.start` can only honour "one task has one run" (§4.4) and §6.1's step 2 if it holds the *same*
+  // manager the cancel route requests through, the same journal the routes read, and the same arbiter the approval
+  // routes answer through. A runner composed by the caller would have to be given all four, and then two compositions
+  // could disagree about which manager a stop goes through — two parties each holding half of one request, which is
+  // exactly what the manager's own comment forbids. So the composition root hands in what only it knows (the executor,
+  // the provider, §3.6's model, the install's half of `EvalContext`) and this file wires the rest.
+  const runner: Runner | undefined =
+    deps.drive === undefined
+      ? undefined
+      : createRunner({
+          journal,
+          approvals,
+          provider: deps.drive.provider,
+          tools: deps.drive.tools,
+          platform,
+          // Fan-out only. The loop appends its own events through `journal.append`, which returns the frame with the
+          // `seq` that was actually stored, so publishing here is the same pairing §9 asks of every other writer:
+          // commit, then publish what was committed. A second writer of `task.last_seq` is how a counter starts lying.
+          publish: (event) => bus.publish(event),
+          cancellation,
+          checkpoints,
+          modelId: deps.drive.modelId,
+          ctx: deps.drive.ctx,
+          log,
+        });
+  if (runner === undefined)
+    // Logged rather than inferred from an absence: a Gateway that records tasks and drives none answers every caller
+    // with `queued`, and the difference between "no provider was configured" and "the runner is broken" is a sentence
+    // the startup log can carry and a task record cannot.
+    log.info("no runner composed", {
+      reason: "POST /api/v1/tasks will record a task and nothing in this process will drive it",
+    });
 
   // §7.1's recovery, at the same place the retention prune runs: a restart is one operation, and both halves are about
   // making the file match the world. Recovery marks every non-terminal task `interrupted`, settles a cancellation that
@@ -287,10 +371,10 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
       .send(errorEnvelope(error.body));
   });
 
-  registerSystemRoutes(app, deps, bus);
-  registerPolicyRoutes(app, deps);
+  registerSystemRoutes(app, deps, bus, runner);
+  registerPolicyRoutes(app, deps, platform);
   registerAuthRoutes(app, deps, bus);
-  registerTaskRoutes(app, deps, bus, checkpoints, cancellation);
+  registerTaskRoutes(app, deps, bus, checkpoints, cancellation, runner);
   registerApprovalRoutes(app, deps, bus, approvals);
   registerEventStream(app, deps, bus);
 
@@ -302,7 +386,12 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
           capabilities: capabilitiesFor("cli"),
         })
       : undefined;
-  return { app, bus, ...(bootstrap ? { bootstrap } : {}) };
+  return {
+    app,
+    bus,
+    ...(bootstrap ? { bootstrap } : {}),
+    ...(runner === undefined ? {} : { runner }),
+  };
 }
 
 /** §4.1's `GET /status` providers row, answered from what the composition root handed in rather than from what the
@@ -313,7 +402,10 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
  *  absent provider, and the difference is the whole content of the reason. "You have not configured one" and "the one you
  *  configured needs a vault this build does not have" lead to different next commands, and §4.1's row exists so a client
  *  can tell a subsystem that is missing from one that is misconfigured. */
-function providersRow(composed: readonly ProviderComposition[] | undefined) {
+function providersRow(
+  composed: readonly ProviderComposition[] | undefined,
+  runnerComposed: boolean,
+) {
   const entries: { readonly id: string; readonly models: readonly string[] }[] = [];
   const refused: { readonly id: string; readonly reason: string }[] = [];
   for (const entry of composed ?? []) {
@@ -335,15 +427,20 @@ function providersRow(composed: readonly ProviderComposition[] | undefined) {
     state: "ready",
     entries,
     ...(refused.length === 0 ? {} : { refused }),
-    // What `ready` does not imply, stated because a client that infers it will POST a task and then watch it sit. The
-    // adapter composes and answers `describe()`/`listModels()`, and a runner exists that could drive a task with it
-    // (`packages/agent-runtime/runner.ts`, M2n) — but nothing composes that runner into `POST /api/v1/tasks`, because no
-    // code in this build writes `Identity.capabilities` and a run started from a route would hold no grants and be
-    // refused every tool it proposed (F-52). Naming the missing party precisely is what keeps `ready` from reading as
-    // "a task will run".
-    note:
-      "the adapter is ready and a runner exists (M2n), but nothing composes it into a task route: no code writes " +
-      "`Identity.capabilities`, so a task created over HTTP is recorded and stays `queued` (F-52, docs/ROADMAP.md §4)",
+    // What `ready` does not imply, stated because a client that infers it will POST a task and then watch it sit — or,
+    // since the handoff, will watch it run and be told it cannot. The adapter composing is a fact about `describe()` and
+    // `listModels()`; whether a task is *driven* is a fact about the runner, which exists only when an executor and a
+    // selected default model both do. Two notes rather than one, because the two states lead to different next commands:
+    // an install that composes a runner is being told what it still cannot pin per task (F-57), and one that does not is
+    // being told why its task is sitting in `queued` and where to look (D-098's roots, D-101's default).
+    note: runnerComposed
+      ? "the adapter is composed into the runner this Gateway drives tasks with, so `POST /api/v1/tasks` is handed a " +
+        "run; what is still absent is a per-task model pin, per-task narrowing and a schedule — F-57's fields, which " +
+        "need schema version 5 — and a way to ask for a resume of an interrupted run (F-47)"
+      : "the adapter is ready and a runner exists (M2n), but this Gateway composed none, because that takes an " +
+        "executor over a configured workspace root and a selected default model together: a task created over HTTP is " +
+        "recorded and stays `queued`, and `GET /api/v1/diagnostics` reports `runs.composed` " +
+        "(docs/ROADMAP.md §4)",
   };
 }
 
@@ -353,6 +450,7 @@ function registerSystemRoutes(
   app: FastifyInstance,
   deps: GatewayDeps,
   bus: ReturnType<typeof createEventBus>,
+  runner: Runner | undefined,
 ): void {
   app.get("/api/v1/health", async (_request, reply) => {
     const listener = boundAddress(app);
@@ -372,7 +470,7 @@ function registerSystemRoutes(
     const subsystems = {
       storage: { state: "ready", schemaVersion: schemaVersion(deps.db) },
       scheduler: { state: "absent", reason: "arrives with M2's runtime" },
-      providers: providersRow(deps.providers),
+      providers: providersRow(deps.providers, runner !== undefined),
       extensions: { state: "absent", reason: "arrives with M-Extensions" },
       tunnel: { state: "absent", reason: "arrives with the tunnel slice" },
     } as const;
@@ -391,6 +489,10 @@ function registerSystemRoutes(
       listener: boundAddress(app),
       storage: { schemaVersion: schemaVersion(deps.db), stateDir: deps.layout.stateDir },
       tasks: stateCounts(deps.db),
+      /** What *this process* is driving, kept apart from `tasks`, which is what the database holds. The two can
+       *  disagree and the disagreement is the fact an operator needs: a task can sit `queued` in a Gateway that
+       *  composed no runner, and `crabby task run` asks this before it agrees to block on a task nothing will move. */
+      runs: { composed: runner !== undefined, inFlight: runner?.outstanding() ?? 0 },
       streams: { subscribers: bus.subscriberCount },
     });
   });
@@ -398,10 +500,13 @@ function registerSystemRoutes(
 
 // ------------------------------------------------------------------ policy registry (§8's "List tools + tiers" row)
 
-function registerPolicyRoutes(app: FastifyInstance, deps: GatewayDeps): void {
+function registerPolicyRoutes(
+  app: FastifyInstance,
+  deps: GatewayDeps,
+  platform: PlatformFactsLike,
+): void {
   app.get("/api/v1/tools", async (_request, reply) => {
-    const facts = deps.platformFacts ?? detectProcess();
-    const records = allToolRecords(facts, deps.declares);
+    const records = allToolRecords(platform, deps.declares);
     // Two counts rather than one, because they answer different questions and collapsing them would overstate the merge:
     // `implemented` is how many rows a composed executor declares at all, `described` how many ended up with no §4.1 field
     // left pending. An executor that declares a tool without an `outputSchema` raises the first and not the second, and
@@ -548,6 +653,9 @@ function registerTaskRoutes(
   bus: ReturnType<typeof createEventBus>,
   checkpoints: Checkpoints,
   cancellation: Cancellation,
+  /** The process's one runner, or nothing: absent means a task this route creates is recorded and not driven, which is
+   *  reported at startup and is a true statement about the install rather than a gap in the route. */
+  runner: Runner | undefined,
 ): void {
   app.post<{ Body: { objective: string; sessionId?: string } }>(
     "/api/v1/tasks",
@@ -577,6 +685,12 @@ function registerTaskRoutes(
       }
       if (cached.found && "record" in cached) return reply.code(201).send(cached.record.response);
 
+      // Read before the record is written rather than after: the run's grants come from this identity, and a caller the
+      // guard could not resolve must not leave a task behind that nothing can drive. The check mirrors the cancel
+      // route's, because `crabbyClient` is optional on the request type — the one route that answers without a token
+      // is `POST /auth/pair`, and this is not it.
+      const client = request.crabbyClient;
+      if (client === undefined) throw authError("missing", request.crabbyRequestId);
       const created = createTask(deps.db, {
         objective: body.objective,
         ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
@@ -600,6 +714,64 @@ function registerTaskRoutes(
       const record = getTask(deps.db, created.id) ?? created;
       remember(deps.db, { key, route: "POST /api/v1/tasks", requestHash: hash, response: record });
       bus.publish({ ...event, seq: appended.seq });
+
+      // The handoff. F-52's third question — how `capability_json` becomes `PolicySubject.grants` — is answered here
+      // rather than in the runner, because the grants belong to the identity that asked and only this route knows which
+      // one that was. `client.capabilities` are the ones D-102 assigned at pairing, and `grantsFor` expands them
+      // against the roots this install configured: a run started anywhere else would have to guess its caller, and a
+      // guess about authority is the one thing §2's rule 01 cannot absorb.
+      if (runner !== undefined) {
+        const expansion = grantsFor(client.capabilities, {
+          roots: deps.drive?.ctx.paths?.roots ?? [],
+        });
+        // Withheld rather than dropped, and logged rather than silent: an identity that holds `fs.write` and can write
+        // nowhere is a fact an operator should be able to find, instead of having to read a denied tool call backwards
+        // and wonder whether the capability or the configuration was missing.
+        for (const withheld of expansion.withheld)
+          deps.log.info("capability held, no grant emitted", {
+            task: created.id,
+            capability: withheld.capability,
+            reason: withheld.reason,
+          });
+        const started = runner.start({
+          taskId: created.id,
+          subject: {
+            grants: expansion.grants,
+            // The other half of `PolicySubject`, and the reason a narrowed client gets §13's sentence instead of a
+            // denial that reads as repairable: what a restriction removed is not discoverable from `grants`, because an
+            // absent grant and a removed one are the same absence. The route is the only party that knows which
+            // interface the identity was paired for, which is what makes the difference computable at all.
+            removedGrants: removedGrantsFor(client.capabilities, client.interface),
+            // `ClientInterface` is a subset of policy's `ClientKind` — the same four names — so the kind arrives as the
+            // interface that was paired rather than as a guess about the transport. That matters beyond bookkeeping:
+            // the kind is what decides whether a T3 prompt may be answered from here at all (D-085).
+            clientKind: client.interface satisfies ClientKind,
+          } satisfies LoopSubject,
+          correlationId: request.crabbyRequestId,
+        });
+        if (!started.ok)
+          // Reachable only while the process is draining: a task this route just created cannot already be in flight or
+          // parked, and the journal has been written, so it cannot be missing. The task stays `queued`, which is the
+          // truth rather than a shrug — §7.1's recovery marks it `interrupted` on the next start, and the runner's own
+          // sentence says so in the log beside this one.
+          deps.log.warn("run not started", {
+            task: created.id,
+            code: started.code,
+            reason: started.reason,
+          });
+        // Not awaited, because the route's answer is the record it just wrote and the run moves the task on its own
+        // clock. A handler is attached anyway: a rejection nobody owns takes the Gateway down with it, and a dead
+        // Gateway is a worse answer than a failed task — the runner's own rule, kept at its caller too.
+        else
+          void started.run.then(
+            (outcome) => deps.log.info("run settled", { task: created.id, kind: outcome.kind }),
+            (error: unknown) =>
+              deps.log.error("run rejected", {
+                task: created.id,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+          );
+      }
       return reply.code(201).header("location", `/api/v1/tasks/${created.id}`).send(record);
     },
   );

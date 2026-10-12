@@ -1,9 +1,10 @@
-// M2g: §7's recovery, and the honest limit of what "full auto-resume" can mean in a build where nothing composes the
-// runner that would perform one.
+// M2g: §7's recovery, and the honest limit of what "full auto-resume" can mean in a build where nothing can *ask* for a
+// resume: the runner that would perform one is composed now, and no route or command calls `runner.resume` (F-47).
 // `AGENT_RUNTIME.md` §7.1 says Crabby MUST attempt to resume interrupted tasks automatically, and §7.2 says
 // the attempt may only succeed for work that is *both* safe and covered by a still-valid approval — "automatic
 // orchestration of recovery, not automatic authorization". This module does the orchestration and reports, task by task,
-// why the authorization half has nothing to authorize yet.
+// why the authorization half is not performed: §7.2's rule for work that has no cover, and F-47's absent route for work
+// that has one.
 //
 // Three rules, all of them D-092's:
 //
@@ -18,14 +19,16 @@
 //      asked to stop, which is the one recovery outcome §6 exists to prevent.
 //   3. **Nothing resumes automatically in this build, and the report says so per task.** Since M2i the saved state exists
 //      — the loop commits D-065's boundary and this module reads the verdict on it — and since M2n the party that would use
-//      it exists too: `runner.ts` composes an executor, calls `loop.resume`, and holds the one-run-per-task rule. What is
-//      missing is that *nothing composes the runner into a Gateway*. Identities have held capabilities since the mint
-//      route started assigning §6.1's baseline for an interface, but no code turns them into `grantsFor`'s output for a
-//      run, so a route-started task would carry no `PolicySubject` and be refused every tool it proposed (F-52). `ARCHITECTURE.md` §18's `packages/tools` has existed since M2k and `packages/providers`' adapter since M2l,
-//      which is what makes the missing piece precise rather than merely absent: not an executor or an adapter or a runner,
-//      but the handoff from an HTTP request to one. What recovery does is
-//      leave the task paused with a clear, user-visible reason (§7.2's last bullet), name the still-valid approval a runner
-//      would be allowed to use, and report D-065's verdict — `resume`, `pass`, `re-ask` or `none` — so the fact is on the
+//      it exists too: `runner.ts` composes an executor, calls `loop.resume`, and holds the one-run-per-task rule. Since the
+//      handoff that party is *composed*: `crabby gateway start` builds a runner from the configured workspace roots and the
+//      selected default model, `POST /api/v1/tasks` hands it a `PolicySubject` whose grants are expanded from the identity
+//      that asked (F-52's third question, answered), and `GET /api/v1/diagnostics` reports `runs.composed` so a client can
+//      tell a Gateway that drives tasks from one that only records them. What is still missing is a way to *ask*: there is
+//      no `POST /api/v1/tasks/{id}/resume` and `crabby task resume` is `planned` (F-47), so a run a dead process left
+//      behind has a resume nothing can request — and §7.2 makes that the right shape rather than an oversight, because
+//      automatic orchestration of recovery is not automatic authorization. What recovery does is leave the task
+//      `interrupted` with a clear, user-visible reason (§7.2's last bullet), name the still-valid approval a runner would
+//      be allowed to use, and report D-065's verdict — `resume`, `pass`, `re-ask` or `none` — so the fact is on the
 //      record instead of in a reviewer's memory.
 //
 // Also here, because a restart is the moment a stale queue becomes visible: the approval sweep. An approval whose deadline
@@ -245,9 +248,9 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
   }
 
   /** §7.2's answer for one task, as a sentence a user can read. The two halves differ: with a still-valid approval the
-   *  rule *would* permit a resume and the missing piece is this build's, while without one the rule forbids it outright.
-   *  Since M2i the sentence also says what the run left behind, because "nothing resumed" is a different fact when a
-   *  durable boundary exists than when it does not, and D-065's verdict is what tells a reader which one this was. */
+   *  rule *would* permit a resume and what is missing is a way to ask for one (F-47), while without one the rule forbids
+   *  it outright. Since M2i the sentence also says what the run left behind, because "nothing resumed" is a different fact
+   *  when a durable boundary exists than when it does not, and D-065's verdict is what tells a reader which one this was. */
   function resumeRefusal(
     task: TaskRecord,
     approval: ApprovalRecord | undefined,
@@ -261,21 +264,20 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
           : `the checkpoint at step ${saved.step} is durable and D-065's verdict on it is \`${saved.verdict}\``;
     if (approval === undefined) {
       return (
-        `the process that was running task ${task.id} ended, and no approval covers the step it was on, so \u00a77.2 forbids ` +
-        `resuming it automatically: a pending or absent approval is not an approved one. ${boundary}, and nothing in this ` +
-        "build composes the runner that would drive a task in any case, so the " +
-        "task is left paused for a new run or a cancellation"
+        `the process that was running task ${task.id} ended, and no approval covers the step it was on, so §7.2 forbids ` +
+        `resuming it automatically: a pending or absent approval is not an approved one. ${boundary}. The task is left ` +
+        "interrupted for a new run or a cancellation, and what stops it is the rule rather than a gap in the " +
+        "composition: a Gateway that composes a runner drives the tasks it is given"
       );
     }
     return (
-      `the process that was running task ${task.id} ended. Approval ${approval.id} is still valid and \u00a77.2 would permit ` +
-      `resuming work covered by it, and ${boundary}. A runner could call ` +
-      "`loop.resume` (M2n), an executor exists to compose (`packages/tools`, M2k) and an adapter exists to ask " +
-      "(`packages/providers`, M2l) - but nothing in this build composes that runner into a Gateway, because no code " +
-      "writes `Identity.capabilities` and a run started from a route would hold no grants (F-52), so \u00a77.1's " +
-      "orchestration reports what a resume would need instead of " +
-      "performing one. The task is left paused with this reason " +
-      "rather than re-run"
+      `the process that was running task ${task.id} ended. Approval ${approval.id} is still valid and §7.2 would permit ` +
+      `resuming work covered by it, and ${boundary}. Everything a resume needs exists now — a runner with ` +
+      "`resume` (M2n), an executor (M2k), an adapter (M2l), and a `PolicySubject` built from the identity that asked, " +
+      "which is F-52's third question answered — and what is missing is a way to *ask*: there is no " +
+      "`POST /api/v1/tasks/{id}/resume` and `crabby task resume` is `planned` (F-47). So §7.1's orchestration reports " +
+      "what a resume would need instead of performing one, and the task is left interrupted with this reason rather " +
+      "than re-run"
     );
   }
 }

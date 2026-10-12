@@ -285,6 +285,29 @@ export interface GrantExpansion {
  *  A capability that already carries a parameter is kept as it is rather than re-expanded against the configured roots:
  *  a parameter somebody chose is a decision, and replacing it with whatever `config.json` says today would let a config
  *  edit silently move an identity's authority. */
+/** What a restriction took away from an identity — the half of §13's report `grants` cannot carry on its own.
+ *
+ *  `PolicySubject.removedGrants` exists for one reason, and its own contract states it: "an ungranted capability is a
+ *  denial the user can fix, a restricted one is a feature that is not available to this client, and the two must not
+ *  print the same sentence". So the set is the interface's baseline minus what the identity actually holds: an identity
+ *  paired without a restriction has nothing in it, and one paired with `--restrict` names exactly what the restriction
+ *  removed (D-054). Without it, a narrowed client's refusal arrives as `deny` — "needs `fs.write`, which this identity
+ *  does not hold" — which reads as something the user could grant, and §13 asks for the other sentence: "not available
+ *  to this client", reported `platform-unsupported`-style rather than queued as an approval the same restricted client
+ *  may be unable to answer.
+ *
+ *  What is deliberately *not* in it: the capabilities §9 withholds from every fresh install and §6.1 withholds from a
+ *  remote interface. Those were never in the identity's baseline, so no restriction removed them, and reporting a rule's
+ *  own exclusion as somebody's narrowing would send the operator to look at a pairing nobody narrowed. `withheldReason`
+ *  answers those from the registry side instead — "not offered", with the reason the rule gives. */
+export function removedGrantsFor(
+  capabilities: readonly string[],
+  iface: ClientInterface,
+): readonly string[] {
+  const held = new Set(capabilities);
+  return capabilitiesFor(iface).filter((name) => !held.has(name));
+}
+
 export function grantsFor(
   capabilities: readonly string[],
   ctx: { readonly roots?: readonly string[] | undefined },

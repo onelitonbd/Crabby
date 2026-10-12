@@ -151,14 +151,15 @@ export const COMMANDS: readonly CommandSpec[] = [
     verb: "run",
     summary: "create a task and follow it (blocks; `--detach` for scripts)",
     flags: ["--json", "--detach"],
-    status: "planned",
-    // The milestone moved, and saying so precisely is the point of the field: the loop, a runner (M2n), an executor
-    // (M2k) and a provider adapter (M2l) all exist now, so the missing piece is no longer any of them. What is missing is
-    // that nothing composes the runner into `POST /api/v1/tasks`, because no code writes `Identity.capabilities` and a run
-    // started from a route would hold no grants and be refused every tool it proposed (F-52). A `crabby task run` built
-    // before that is decided would print a task id and then watch it sit in `queued`.
-    milestone:
-      "M2 (the runner exists; nothing composes it, because capabilities are not assigned at pairing — F-52)",
+    // `ready` for the reason `task cancel` and `task watch` are: a route stands behind the verb. `POST /api/v1/tasks`
+    // has stood there since M1c, and `ready` would still have been a lie until a runner was composed into it, because
+    // this verb's contract is that it blocks and follows to an end (§7.1) and a task nothing drives has no end to
+    // reach — it would print an id and then watch it sit in `queued`, which is what the milestone field used to say.
+    // What is *still* absent is named rather than implied: `--wait-approval <n>`, §7.1's opt-in to keep blocking
+    // through a prompt, is in no registry, so a run that parks at an approval exits 3 at once; and
+    // `POST /tasks/{id}/resume` has no route, so the reattach line this verb prints names `task watch` rather than the
+    // `task resume` the row in §7.1 was written around (F-47).
+    status: "ready",
   },
   {
     noun: "chat",

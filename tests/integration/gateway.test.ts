@@ -226,7 +226,7 @@ describe("gateway over http", () => {
     );
   });
 
-  it("reports a provider the composition root handed it, and says plainly that nothing drives a task with it", async () => {
+  it("reports a provider the composition root handed it, and says plainly that this Gateway drives no task with it", async () => {
     const composed = composeProviders({
       local: {
         baseUrl: "http://127.0.0.1:8080/v1",
@@ -282,10 +282,11 @@ describe("gateway over http", () => {
       );
       assert.match(
         providers?.note ?? "",
-        /nothing composes it into a task route/,
-        "`ready` for the provider subsystem must not read as `a task will run`, and the note has to name the party that " +
-          "is missing rather than a party that exists — a runner has existed since M2n, so `no runner` would be the lie " +
-          "this assertion is here to catch (F-52)",
+        /this Gateway composed none/,
+        "`ready` for the provider subsystem must not read as `a task will run`. This harness hands `buildApp` a composed " +
+          "provider and no drive, which is the state an install reaches by configuring a model and no workspace root, and " +
+          "the note has to say that plainly rather than leave a client to infer it from `ready`. The driven case is " +
+          "asserted in `tests/integration/tasks.test.ts`, where a runner exists and the note says something else again",
       );
     } finally {
       await local.close();

@@ -698,3 +698,33 @@ test("`crabby approval approve --yes` and `deny --reason` are unknown flags, not
       "refusing it is the only answer that does not lose what the user offered",
   );
 });
+
+// `--restrict` is the documented narrowing INTERFACES §4.5's mint row named and no registry carried: the row says the
+// flag "is in no registry and this body accepts no such field", and both halves are now false. The vocabulary itself is
+// deliberately *not* checked here — a name that is not in §6.1 is refused by the Gateway, which owns the list, and a
+// second copy of it in the CLI would be a second policy that could drift.
+test("`crabby auth pair --restrict` with nothing in it is a usage error answered locally", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  for (const value of ["", ",", " , "]) {
+    const run = crabby(["auth", "pair", "--name", "desk", "--restrict", value], state);
+    assert.equal(run.code, 2, `--restrict "${value}" must be answered before the Gateway is asked`);
+    assert.match(run.out, /names no capability/);
+    assert.match(run.out, /§6\.1/, "the fix names the document that holds the list");
+  }
+});
+
+test("`crabby auth pair --restrict task.read` is accepted rather than reported as an unknown flag", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["auth", "pair", "--name", "desk", "--restrict", "task.read"], state);
+  assert.ok(
+    !run.out.includes("unknown flag"),
+    `the registry entry must name --restrict for the verb to accept it, got ${JSON.stringify(run.out)}`,
+  );
+  assert.equal(
+    run.code,
+    1,
+    "it fails after accepting the flag, on the absent Gateway and not on the flag",
+  );
+});

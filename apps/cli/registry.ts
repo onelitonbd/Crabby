@@ -90,7 +90,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     noun: "auth",
     verb: "pair",
     summary: "redeem a code with --code, or mint one for another interface",
-    flags: ["--code CODE", "--name NAME", "--interface I"],
+    flags: ["--code CODE", "--name NAME", "--interface I", "--restrict <a,b>"],
     status: "ready",
   },
   {

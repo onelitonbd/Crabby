@@ -1006,6 +1006,45 @@ approximate, and this row is where a reader learns that.
 
 **M2n widened this row instead of closing any of it.** `POST /api/v1/tasks/{id}/cancel` now exists, and §6.1's `task.cancel` is the capability that decides who may stop a task — enforced by nothing beyond the token the guard already demanded, for exactly the reason above: every paired identity holds `capabilities: []`, so a real check would refuse the owner's own CLI. That makes `task.cancel` a second capability routes cite and no code can enforce, and it makes the missing writer load-bearing for a second reason. The task *handoff* — `POST /tasks` passing a created task to the runner that now exists — is deliberately not written, and this row is why: `LoopSubject.grants` would come from `Identity.capabilities`, so a run started from a route would hold no grants and `packages/policy` would refuse every tool it proposed. A Gateway that started runs which could do nothing would be worse than one that says plainly it starts none, so the honest state is recorded here: the runner exists and nothing composes it, the cancellation half of §6 is wired because stopping work needs no grants, and the pairing-time grant decision now blocks three things — `POST /admin/*`, the handoff, and `crabby task run` — rather than one.
 
+**This slice answers two of F-52's three questions and locates the third precisely.** The decision, recorded as D-102:
+an identity's baseline is `SECURITY.md` §6.1's vocabulary for the interface it was paired for, less the two §9 shell
+capabilities no fresh install holds (`shell.run`, `shell.privileged`), less the two §6.1 marks local-only that
+`telegram` does not hold (`auth.manage`, `tunnel.enable`) — so a remote client never receives a wider set than a local
+one (§5.3). D-032 ("interface type may narrow only what the user configures, never what the core allows") is not
+contradicted by that withholding, and the reason is worth stating because it is the first objection a reviewer will
+raise: §6.1's table *is* the core's allowance, and its `auth.manage` row reads "Local-only by construction: no remote
+or agent-facing path may grant it". `restrict` then narrows the baseline and nothing else. It is an intersection, so
+`--restrict shell.run` is refused with the rule named instead of enabling the shell — D-054, which says a restriction
+removes capabilities and never converts one into an approval the same restricted client must answer; an unknown name is
+refused with the vocabulary named; an empty list is refused, because a restriction naming nothing is not a restriction
+and an identity holding nothing can only fail. The mint route refuses the *whole* request when anything is refused
+(§2's rule 03) and its answer carries the granted set, so a caller can see that a narrowing took effect without a
+second read.
+
+Four sentences above are therefore no longer true of this build, and are corrected here rather than deleted, because
+the row is a record of what was found and when. There *is* now a caller that passes `capabilities`: the mint route, and
+the bootstrap identity `crabby gateway start` pairs first. `crabby auth pair` *does* have a flag that supplies a
+restriction, and §3.1's `[--restrict caps]` is in the registry rather than in no registry. A freshly paired identity
+does *not* hold `capabilities: []` — it holds the baseline above, which `crabby auth list` prints and §3.1's row
+promised. And the capability refusal a caller gets names §6.1 instead of pointing at `--help`, which never held the
+vocabulary. What is *unchanged* is the enforcement, for a reason about this build rather than about the rule: D-097's
+socket guard still decides `POST /auth/pair-codes`, `GET /auth/clients` and `DELETE /auth/clients/{id}`, because no
+migration gives capabilities to an identity paired before assignment existed — replacing the guard would lock such an
+owner out of their own recovery path, exactly the outage D-097 named — and because no route has a `PolicySubject` to
+ask. In v1 the two conditions agree, since §13 admits no tunnel and a caller off the loopback socket cannot be holding
+a local interface's baseline.
+
+The third question — how `capability_json` becomes `PolicySubject.grants` — is now a located absence rather than an
+open one. `packages/policy` has the function that would do it: `grantsFor(capabilities, { roots })` expands
+`scope: "none"` to the bare name, `scope: "root"` to one `name:root` grant per configured workspace root, and withholds
+*with a reason* rather than silently a root-scoped grant when no root is configured and every `net.egress` host-set
+grant in any build, because nothing in `config.json` supplies a host set. It is tested and it has no
+caller for a run, because nothing composes a runner into `POST /api/v1/tasks` — `docs/ROADMAP.md` §4's "still absent:
+the handoff" sentence. That handoff is the slice that joins the durable fact to the runtime question, and until it
+lands `auth.manage` and `task.cancel` stay cited by routes that decide on something else, which is what this row has
+said since M2j and what it will keep saying until it can stop.
+
+
 ### F-54 — §4.4's first check is a *type* check, and a schema that arrives as data cannot be type-checked
 
 **Severity: low, open, and named in the code that skips it.** `PROVIDERS_AND_TOOLS.md` §4.4 fixes the order of checks —
@@ -1122,9 +1161,11 @@ sessionId? }` with `additionalProperties: false`, so a client that sends the doc
 named-field problem. That is the right behaviour for a field this build does not have and the wrong description of a
 route that does, and the two have sat side by side since M1c.
 
-Two of the three missing fields belong to other milestones: capability narrowing is `SECURITY.md` §13's per-pairing
-removal, which nothing assigns at pairing yet (F-52 names the same absence from the other side), and `schedule` is the
-scheduler's, which `docs/ROADMAP.md` §4 lists and nothing has built. The model pin is the one D-101 sharpened, because
+Two of the three missing fields belong to other milestones: capability narrowing is `SECURITY.md` §13's removal, and
+since D-102 the *per-pairing* half of it is assigned — `--restrict` narrows an identity's baseline at the mint, and
+F-52's amendment records it — while the *per-task* half this row is about is still absent, because no field in
+`CreateTaskBody` can carry it and nothing builds a `PolicySubject` for a run; and `schedule` is the scheduler's, which
+`docs/ROADMAP.md` §4 lists and nothing has built. The model pin is the one D-101 sharpened, because
 §3.6's sentence has two halves — "The user selects a default model **and may pin a model per task** or per interface
 session; per-task pinning wins" — and M2m implemented the first. So there is now a default with nothing able to override
 it, `TaskRecord` has no `model` column, and a pin would need schema version 5 plus an answer about whether a pinned model

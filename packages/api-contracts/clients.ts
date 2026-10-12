@@ -27,6 +27,13 @@ export const PairCodeRequestBody = Type.Object(
   {
     name: Type.String({ minLength: 1, maxLength: 64 }),
     interface: Type.Union(CLIENT_INTERFACES.map((name) => Type.Literal(name))),
+    /** An optional narrowing of the baseline the interface would otherwise hold. `SECURITY.md` §5.3 makes it an
+     *  intersection and nothing else — "the interface label may only narrow capabilities" — so a name the baseline
+     *  withholds is refused rather than honoured, and `--restrict shell.run` is not a way to enable the shell (§9). The
+     *  route refuses the whole mint when any name cannot be honoured: a restriction silently dropped would hand back an
+     *  identity wider than the operator asked for, and they would only find out at a tool call that succeeded when it
+     *  should not have. */
+    restrict: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1 })),
   },
   { additionalProperties: false },
 );

@@ -19,9 +19,9 @@
 //   3. **Nothing resumes automatically in this build, and the report says so per task.** Since M2i the saved state exists
 //      — the loop commits D-065's boundary and this module reads the verdict on it — and since M2n the party that would use
 //      it exists too: `runner.ts` composes an executor, calls `loop.resume`, and holds the one-run-per-task rule. What is
-//      missing is that *nothing composes the runner into a Gateway*, because no code in this build writes
-//      `Identity.capabilities` and a run started from a route would hold no grants and be refused every tool it proposed
-//      (F-52). `ARCHITECTURE.md` §18's `packages/tools` has existed since M2k and `packages/providers`' adapter since M2l,
+//      missing is that *nothing composes the runner into a Gateway*. Identities have held capabilities since the mint
+//      route started assigning §6.1's baseline for an interface, but no code turns them into `grantsFor`'s output for a
+//      run, so a route-started task would carry no `PolicySubject` and be refused every tool it proposed (F-52). `ARCHITECTURE.md` §18's `packages/tools` has existed since M2k and `packages/providers`' adapter since M2l,
 //      which is what makes the missing piece precise rather than merely absent: not an executor or an adapter or a runner,
 //      but the handoff from an HTTP request to one. What recovery does is
 //      leave the task paused with a clear, user-visible reason (§7.2's last bullet), name the still-valid approval a runner

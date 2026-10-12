@@ -135,9 +135,14 @@ Pairing requirements:
   is still refused on the deleted token, and the frame is a courtesy on top of a control, not instead of one.
 - Unauthenticated requests are rejected before routing, including `GET /health` and event subscriptions.
   Listing and revoking identities are rejected before routing on a second condition as well — the request must come from
-  the machine the Gateway runs on (D-097). The capability this rule is supposed to rest on, `auth.manage`, cannot be the
-  check yet because no code in this build grants capabilities when an identity is created; `docs/CONSISTENCY_REVIEW.md`
-  F-52 names what has to be decided for the socket test to be replaced by the grant test.
+  the machine the Gateway runs on (D-097). `auth.manage` is assigned now: pairing gives an identity §6.1's baseline for
+  its interface, which holds this capability for `cli`, `tui` and `web` and withholds it from `telegram`, and a
+  `restrict` list may only narrow that baseline (D-054, D-102). The socket test stays anyway, for two reasons about this
+  build rather than about the rule: no migration gives capabilities to an identity paired before assignment existed, so
+  replacing the guard would lock an owner's existing CLI out of its own recovery path, and no route yet has a
+  `PolicySubject` to ask — the step `docs/CONSISTENCY_REVIEW.md` F-52's last question names. In v1 the two conditions
+  agree, because §13 admits no tunnel, so a caller that is not on the loopback socket cannot be holding a local
+  interface's baseline.
 
 Token format and lifetime are fixed by D-051 (opaque token, no expiry; revocation is the control). **O-019** is closed by D-067:
 `crabby auth pair` prints the URL and an 8-character code **each on their own line**, because selection on a phone is a

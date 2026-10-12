@@ -552,6 +552,45 @@ turned it red narrows the change to one slice, and the platform's own difference
 a link — can be reproduced deliberately rather than waited for. All 482 tests now pass under both shapes, the linked
 one and the real one.
 
+**Twenty-third slice — an identity now holds capabilities, and `--restrict` is the flag §3.1 has advertised since
+M1.** This section has said since the runner landed that the one thing absent is the handoff from an HTTP request to a
+runner, and it named F-52 as the reason rather than a missing file. F-52 asked three questions — what a restriction
+means, who may set one, and how `capability_json` becomes `PolicySubject.grants` — and this slice answers the first
+two where an identity is created, which is the only moment the build gets to decide them. The decision is D-102.
+
+The baseline is §6.1's vocabulary for the interface, less `shell.run` and `shell.privileged`, which §9 keeps off a
+fresh install because "enabling it is an explicit act", and less `auth.manage` and `tunnel.enable` for `telegram`, the
+one v1 interface whose requests do not originate on the Gateway's own host. So `cli`, `tui` and `web` hold 30 and
+`telegram` holds 28, and the remote set is a subset of the local one — §5.3's rule asserted over the wire in
+`tests/integration/gateway.test.ts` rather than argued in a comment. A restriction is an intersection and nothing else,
+which is D-054 written as code: it "removes capabilities from an identity" and "never converts them into an approval
+the same restricted client must answer", so `--restrict shell.run` is refused with the rule named instead of enabling
+the shell, an unknown name is refused with the vocabulary named, and an empty list is refused because a restriction
+that names nothing is not one. The whole mint fails rather than part of it being honoured (§2's rule 03), because a
+silently dropped name would hand back an identity other than the one asked for and the operator would find that out
+from a later tool call instead of from the answer. The refusal's fix text names §6.1 rather than `--help`, which
+prints the shape of a flag and has never held the list of names.
+
+Three things it deliberately did not do. It did not replace D-097's socket guard with a grant test, though D-097 says
+the replacement arrives "when a pairing-time grant decision exists" and one now does: no migration gives capabilities
+to an identity paired before assignment existed, so a grant test would refuse the owner's own CLI and lock them out of
+the recovery path — the outage D-097 named, now reachable rather than hypothetical — and no route has a
+`PolicySubject` to ask. It did not invent a workspace root when none is configured, nor a host set when no
+configuration field supplies one: `grantsFor` withholds both with a reason on the record, because a default-invented
+root would be a path the agent may write to that the user never chose. And it did not widen `CreateTaskBody` —
+per-task narrowing is F-57's field and needs schema version 5, so this slice assigns at pairing and says so rather
+than half-adding a field nothing reads.
+
+What the slice makes visible is stated rather than demoed. `crabby auth list` prints a set instead of nothing, which
+is what §3.1's row and `SECURITY.md` §5.1's own comment on that command asked for; `crabby auth pair --restrict
+task.read,session.read` mints an identity holding exactly those two and prints the count beside the code, so a
+narrowing is checkable at the moment it happens. The handoff still does not exist: a task created over HTTP is
+recorded and read back while nothing moves it. That is the next slice, and it is the one this section has been
+pointing at — compose a runner into `buildApp` so `POST /api/v1/tasks` can call `runner.start` with a subject built
+from the identity that asked, which is where F-52's third question gets its answer and where the grant test can
+finally replace the socket one.
+
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

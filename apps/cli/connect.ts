@@ -42,7 +42,16 @@ export function reportFailure(renderer: Renderer, error: unknown): ExitCode {
     if (code === "auth_missing" || code === "auth_invalid")
       renderer.fix("crabby auth pair --code <code> — the code the Gateway prints on its first run");
     else if (error.envelope.error.class === "validation")
-      renderer.fix("crabby <noun> <verb> --help prints the accepted shape");
+      // A capability refusal gets its own next action. §3.2's promise is that failure text names one, and here
+      // `--help` does not hold the answer: help prints the *shape* of a flag, while which names `--restrict` may carry
+      // is SECURITY.md §6.1's vocabulary and what it may do to them is §5.3's rule. Pointing at help for that
+      // would be pointing somewhere the reader cannot find the thing they were refused for.
+      renderer.fix(
+        hasCapabilityProblem(error.envelope.error.details)
+          ? "the names are SECURITY.md §6.1's vocabulary, and a restriction may only narrow what the interface " +
+              "already holds (§5.3) — leaving `--restrict` off takes the baseline"
+          : "crabby <noun> <verb> --help prints the accepted shape",
+      );
     else if (error.envelope.error.retryable) renderer.fix("this one is retryable — try again");
     return error.envelope.error.class === "validation" ? EXIT.usage : EXIT.failure;
   }
@@ -68,4 +77,14 @@ export function reportNoGateway(renderer: Renderer, state: Connection["state"]):
     default:
       return EXIT.failure;
   }
+}
+
+// Read, never guessed, in the same spirit as the discovery rule above: the envelope's `details` is an open record
+// (`packages/api-contracts/error.ts:35`), so this asks whether the shape is there rather than asserting it is. A
+// Gateway that sent no `kind` gets the generic fix, which is the honest answer for a refusal this build does not
+// recognise.
+function hasCapabilityProblem(details: Record<string, unknown> | undefined): boolean {
+  const problems = details?.problems;
+  if (!Array.isArray(problems)) return false;
+  return problems.some((row) => (row as { kind?: unknown } | null)?.kind === "capability");
 }

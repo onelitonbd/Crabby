@@ -42,6 +42,27 @@ async function runPair(
   renderer: Renderer,
 ): Promise<ExitCode> {
   const code = tail.values.code;
+  // Checked before `connect`, for the ordering `task cancel` established: §7.1's exit codes are a contract about the
+  // command, not about the process it would have talked to, so a malformed `--restrict` on a machine whose Gateway is
+  // down still exits 2 and still says what is wrong with it. The split happens here rather than in the body because a
+  // value that names nothing would otherwise reach the route, and the route refuses an empty restriction — better that
+  // the user learns it from the command that mistyped the flag than from a 400 they have to read.
+  const restrictRaw = tail.values.restrict;
+  const restrictList =
+    restrictRaw === undefined
+      ? undefined
+      : restrictRaw
+          .split(",")
+          .map((token) => token.trim())
+          .filter((token) => token.length > 0);
+  if (restrictRaw !== undefined && (restrictList === undefined || restrictList.length === 0)) {
+    renderer.line("bad --restrict", `"${restrictRaw}" names no capability`);
+    renderer.fix(
+      "a comma-separated list of names from SECURITY.md §6.1 — leaving the flag off mints the baseline set, and a " +
+        "restriction may only narrow it (§5.3)",
+    );
+    return EXIT.usage;
+  }
   const connection = await connect(layout);
   if (connection.state === "no-gateway" || connection.state === "stale-gateway")
     return reportNoGateway(renderer, connection.state);
@@ -57,8 +78,25 @@ async function runPair(
         code: string;
         expiresAt: string;
         clientId: string;
-      }>("/api/v1/auth/pair-codes", { method: "POST", body: { name, interface: iface } });
+        capabilities: readonly string[];
+      }>("/api/v1/auth/pair-codes", {
+        method: "POST",
+        body: {
+          name,
+          interface: iface,
+          ...(restrictList === undefined ? {} : { restrict: restrictList }),
+        },
+      });
       renderer.line("pair as", `${name} (${iface})`);
+      // Printed because the alternative is an operator believing a code carries the authority they asked for. §2's rule
+      // 01 is least capability, and a number the operator can check is the cheapest evidence that a narrowing took
+      // effect; `crabby auth list` prints the set itself.
+      renderer.line(
+        "capabilities",
+        `${response.body.capabilities.length} granted` +
+          (restrictList === undefined ? "" : `, narrowed from the ${iface} baseline`) +
+          " — `crabby auth list` prints the set",
+      );
       renderer.line("expires", `${response.body.expiresAt} — ${PAIRING_CODE_TTL_HINT}, single use`);
       renderer.line("", "");
       // The code alone, on its own line, so `crabby auth pair | tail -1` and a long-press paste both work.

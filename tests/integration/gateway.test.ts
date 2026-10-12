@@ -740,6 +740,101 @@ describe("gateway over http", () => {
     );
   });
 
+  // F-52's first two questions, answered over the wire rather than in a paragraph: the baseline an identity arrives
+  // holding, and what a restriction may do to it. `capability_json` had a writer in `mintPairingCode` and no caller from
+  // M1b until now, so every identity held an empty set — which is why no route could make `auth.manage` the check
+  // SECURITY.md §6.1 writes it as, and why a run started from `POST /tasks` would have been refused every tool it
+  // proposed.
+  it("gives a minted identity the baseline its interface holds, and §9's shell is not in it", async () => {
+    const minted = await h.client.request<{ clientId: string; capabilities: readonly string[] }>(
+      "/api/v1/auth/pair-codes",
+      { method: "POST", body: { name: "capability baseline", interface: "cli" } },
+    );
+    const held = minted.body.capabilities;
+    assert.ok(
+      held.length > 0,
+      "an identity that holds nothing could never drive a task, which is precisely the state F-52 described",
+    );
+    assert.ok(
+      held.includes("task.create"),
+      "§6.1's vocabulary is the baseline, narrowed only by the two sentences that withhold something",
+    );
+    assert.ok(
+      held.includes("auth.manage"),
+      "§6.1 makes it local-only by construction, and a CLI pairing against the loopback listener is local",
+    );
+    assert.ok(
+      !held.includes("shell.run") && !held.includes("shell.privileged"),
+      "§9: shell execution is never enabled by default for a fresh install, and enabling it is an explicit act",
+    );
+    const remote = await h.client.request<{ capabilities: readonly string[] }>(
+      "/api/v1/auth/pair-codes",
+      { method: "POST", body: { name: "capability remote", interface: "telegram" } },
+    );
+    assert.ok(
+      !remote.body.capabilities.includes("auth.manage"),
+      "§6.1: no remote or agent-facing path may grant `auth.manage`, and in v1 a bot's requests are the ones that do " +
+        "not originate on the Gateway's own host",
+    );
+    for (const capability of remote.body.capabilities) {
+      assert.ok(
+        held.includes(capability),
+        `§5.3: a remote client never receives a wider permission set than a local one — ${capability}`,
+      );
+    }
+  });
+
+  it("narrows on a restriction, and refuses one that would widen or that names nothing known", async () => {
+    const narrowed = await h.client.request<{ capabilities: readonly string[] }>(
+      "/api/v1/auth/pair-codes",
+      {
+        method: "POST",
+        body: { name: "narrow", interface: "cli", restrict: ["task.read", "session.read"] },
+      },
+    );
+    assert.deepEqual(
+      [...narrowed.body.capabilities],
+      ["task.read", "session.read"],
+      "the intersection and nothing else, in the order asked for",
+    );
+
+    await assert.rejects(
+      async () =>
+        await h.client.request("/api/v1/auth/pair-codes", {
+          method: "POST",
+          body: { name: "widen", interface: "cli", restrict: ["shell.run"] },
+        }),
+      (error: unknown) => {
+        const failure = error as { status: number; envelope: { error: { message: string } } };
+        assert.equal(failure.status, 400);
+        assert.match(
+          failure.envelope.error.message,
+          /only narrow/,
+          "§5.3 makes a restriction an intersection, so `--restrict` is not a way to enable the shell",
+        );
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      async () =>
+        await h.client.request("/api/v1/auth/pair-codes", {
+          method: "POST",
+          body: { name: "typo", interface: "cli", restrict: ["task.red"] },
+        }),
+      (error: unknown) => {
+        const failure = error as { status: number; envelope: { error: { message: string } } };
+        assert.equal(failure.status, 400);
+        assert.match(
+          failure.envelope.error.message,
+          /vocabulary/,
+          "§2's rule 03: an unknown capability is a refusal, not a name quietly dropped from the list",
+        );
+        return true;
+      },
+    );
+  });
+
   it("decides identity management on the socket, so no header can move it", async () => {
     const listed = await fetch(`${h.url}/api/v1/auth/clients`, {
       headers: { authorization: `Bearer ${h.token}`, "x-forwarded-for": "203.0.113.9" },

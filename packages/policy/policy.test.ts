@@ -13,12 +13,14 @@ import {
   baseOf,
   CAPABILITIES,
   type ClientKind,
+  capabilitiesFor,
   capabilityFor,
   checkPath,
   clearExtensionTools,
   DESTRUCTIVE_PATTERNS,
   type EvalContext,
   evaluate,
+  grantsFor,
   holdsGrant,
   IRREVERSIBLE_RULES,
   isIrreversible,
@@ -31,6 +33,7 @@ import {
   raiseOnly,
   registerTool,
   resolveTool,
+  restrictCapabilities,
   TIERS,
   TOOL_REGISTRY,
   tierFor,
@@ -155,6 +158,121 @@ describe("capability vocabulary (SECURITY.md §6.1)", () => {
     assert.equal(holdsGrant(["fs.read:workspace"], "fs.write"), false);
     assert.equal(holdsGrant(["fs.read:workspace"], "fs.read:secrets"), false);
     assert.equal(baseOf("net.egress:curated"), "net.egress");
+  });
+
+  // F-52's three questions, answered as code rather than as a paragraph: what a restriction means, who may set one, and
+  // how a capability reaches `PolicySubject.grants`. The first two are the baseline and its narrowing; the third is the
+  // expansion below them. Until these existed no code wrote `Identity.capabilities`, so every identity held an empty
+  // set and a run started from a route would have been refused every tool it proposed.
+  it("gives every interface one baseline, less what §9 and §5.3 withhold", () => {
+    const cli = capabilitiesFor("cli");
+    assert.deepEqual(
+      [...capabilitiesFor("tui")],
+      [...cli],
+      "D-005 keeps parity by keeping capability identical and adapting presentation, so the three local interfaces hold one set",
+    );
+    assert.deepEqual([...capabilitiesFor("web")], [...cli]);
+    for (const iface of ["cli", "tui", "web", "telegram"] as const) {
+      for (const shell of ["shell.run", "shell.privileged"]) {
+        assert.ok(
+          !capabilitiesFor(iface).includes(shell),
+          `§9: shell execution is "never enabled by default for a fresh install; enabling it is an explicit act", so ` +
+            `${iface} must not arrive holding ${shell}`,
+        );
+      }
+    }
+    assert.ok(
+      cli.includes("auth.manage"),
+      "§6.1 makes it local-only by construction, and a local identity is exactly what may hold it",
+    );
+    const telegram = capabilitiesFor("telegram");
+    assert.ok(
+      !telegram.includes("auth.manage") && !telegram.includes("tunnel.enable"),
+      "§6.1: no remote or agent-facing path may grant `auth.manage` — and in v1 a bot's requests are the ones that do " +
+        "not originate on the Gateway's own host",
+    );
+    for (const capability of telegram) {
+      assert.ok(
+        cli.includes(capability),
+        `§5.3: a remote client never receives a wider permission set than a local one — ${capability}`,
+      );
+    }
+    assert.equal(
+      cli.length,
+      CAPABILITIES.length - 2,
+      "only §9's two are withheld from a local baseline; everything else is the vocabulary itself",
+    );
+  });
+
+  it("narrows on a restriction and refuses rather than widening or guessing", () => {
+    const baseline = capabilitiesFor("cli");
+    const narrowed = restrictCapabilities(baseline, ["task.read", "session.read", "task.read"]);
+    assert.deepEqual(
+      [...narrowed.capabilities],
+      ["task.read", "session.read"],
+      "the intersection, de-duplicated, in the order asked for",
+    );
+    assert.deepEqual(narrowed.refused, []);
+    const shell = restrictCapabilities(baseline, ["shell.run"]);
+    assert.equal(shell.capabilities.length, 0);
+    assert.equal(
+      shell.refused.length,
+      1,
+      "§5.3 makes a restriction an intersection, so `--restrict` is not a way to enable the shell",
+    );
+    const typo = restrictCapabilities(baseline, ["task.read", "task.red"]);
+    assert.equal(typo.refused.length, 1);
+    assert.match(
+      typo.refused[0]?.reason ?? "",
+      /vocabulary/,
+      "§2's rule 03: an unknown capability is a refusal, not a name quietly dropped from the list",
+    );
+    const empty = restrictCapabilities(baseline, ["", " "]);
+    assert.equal(
+      empty.refused.length,
+      1,
+      "a restriction naming nothing is not a restriction, and an identity holding nothing could only ever fail",
+    );
+  });
+
+  it("expands capabilities into well-formed grants, and withholds rather than inventing a parameter", () => {
+    const first = "/data/data/com.termux/files/home/work";
+    const second = "/sdcard/crabby";
+    const expansion = grantsFor(["task.read", "fs.read", "net.egress"], { roots: [first, second] });
+    assert.deepEqual(
+      [...expansion.grants],
+      ["task.read", `fs.read:${first}`, `fs.read:${second}`],
+      "§6.1 writes `fs.read:<root>`, so one configured root is one grant and a flat capability stays flat",
+    );
+    for (const grant of expansion.grants) {
+      assert.equal(
+        isWellFormedGrant(grant).ok,
+        true,
+        `every emitted grant is well-formed: ${grant}`,
+      );
+    }
+    const egress = expansion.withheld.find((row) => row.capability === "net.egress");
+    assert.ok(
+      egress,
+      "nothing in config.json supplies a host set, so `net.egress` is withheld until something does",
+    );
+    assert.match(egress?.reason ?? "", /hostset/);
+
+    const rootless = grantsFor(["fs.write"], {});
+    assert.deepEqual(
+      [...rootless.grants],
+      [],
+      "no roots means no grant: a root invented by a default would be a path the agent may write to that the user never chose",
+    );
+    assert.equal(rootless.withheld.length, 1);
+
+    const chosen = grantsFor(["fs.read:/home/ua/one-root"], { roots: [first, second] });
+    assert.deepEqual(
+      [...chosen.grants],
+      ["fs.read:/home/ua/one-root"],
+      "a parameter somebody already chose is kept — re-expanding it against today's config would let an edit silently " +
+        "move an identity's authority",
+    );
   });
 });
 

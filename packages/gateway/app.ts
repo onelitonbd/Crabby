@@ -12,8 +12,11 @@
 // (`packages/providers`, D-100), which `crabby gateway start` composes from `config.json`'s `provider.*` entries and
 // hands to this file as `deps.providers`. The runner exists now — `packages/agent-runtime/runner.ts` (M2n) owns the one
 // rule four clients make necessary, that a task has one run — so what is still absent is not the runner but the
-// *handoff*: no code in this build writes `Identity.capabilities`, so every paired client holds none, and a run started
-// from a route would carry no grants and be refused every tool it proposed (F-52). A task created over HTTP is therefore
+// *handoff*. Identities do hold capabilities now: the mint route below assigns §6.1's baseline for the interface and
+// narrows it when the caller asks, so `auth.manage` is a real property of a client record and no longer a sentence with
+// nothing behind it. What is still absent is the step from a capability to a grant — no code calls `grantsFor` for a
+// run, so a task started from a route would carry no `PolicySubject` and be refused every tool it proposed (the third of
+// F-52's three questions). A task created over HTTP is therefore
 // still recorded and read back while nothing moves it, and that is reported rather than demoed: wiring this route to the
 // loop against the fake provider is exactly the shipment this phase has refused.
 //
@@ -39,7 +42,7 @@ import {
   createCheckpoints,
   createRecovery,
 } from "@crabby/agent-runtime";
-import type { ApprovalState, ClientInterface, ToolDeclaration } from "@crabby/api-contracts";
+import type { ApprovalState, ToolDeclaration } from "@crabby/api-contracts";
 import {
   APPROVAL_STATES,
   ApprovalDecisionBody,
@@ -60,7 +63,15 @@ import {
 import type { Logger } from "@crabby/core";
 import type { DataLayout } from "@crabby/platform";
 import { detectProcess } from "@crabby/platform";
-import { allToolRecords, CAPABILITIES, registryDigest, TIERS, TOOL_REGISTRY } from "@crabby/policy";
+import {
+  allToolRecords,
+  CAPABILITIES,
+  capabilitiesFor,
+  registryDigest,
+  restrictCapabilities,
+  TIERS,
+  TOOL_REGISTRY,
+} from "@crabby/policy";
 import type { ProviderComposition } from "@crabby/providers";
 import {
   appendEvent,
@@ -285,7 +296,11 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
 
   const bootstrap =
     listIdentities(db).length === 0
-      ? mintPairingCode(db, { name: "first client", interface: "cli" })
+      ? mintPairingCode(db, {
+          name: "first client",
+          interface: "cli",
+          capabilities: capabilitiesFor("cli"),
+        })
       : undefined;
   return { app, bus, ...(bootstrap ? { bootstrap } : {}) };
 }
@@ -449,17 +464,47 @@ function registerAuthRoutes(
     },
   );
 
-  app.post<{ Body: { name: string; interface: ClientInterface } }>(
+  app.post<{ Body: PairCodeRequestBody }>(
     MINT_PATH,
     {
       schema: { body: PairCodeRequestBody },
     },
     async (request, reply) => {
+      // F-52's first two questions, answered where an identity is created rather than in a paragraph: the baseline is
+      // what `capabilitiesFor` gives this interface (§6.1's vocabulary, less §9's two shell capabilities and, for the
+      // one interface whose requests do not originate on this host, the two §5.3 keeps local), and `restrict` narrows
+      // it. This is the writer `capability_json` has had with no caller since M1b — until it ran, every identity held
+      // an empty set, so a run started from a route would have been refused every tool it proposed and `auth.manage`
+      // could not be the check SECURITY.md §6.1 writes it as.
+      const baseline = capabilitiesFor(request.body.interface);
+      const restricted =
+        request.body.restrict === undefined
+          ? { capabilities: baseline, refused: [] as readonly { name: string; reason: string }[] }
+          : restrictCapabilities(baseline, request.body.restrict);
+      if (restricted.refused.length > 0) {
+        // Refusing the whole mint is §2's rule 03 (fail closed) rather than severity: the alternative is minting an
+        // identity that quietly holds more or less than was asked for, and the operator's only way to find out would be
+        // a later tool call.
+        throw validationError(
+          restricted.refused.map((row) => ({
+            path: "restrict",
+            message: row.reason,
+            kind: "capability",
+          })),
+          request.crabbyRequestId,
+        );
+      }
       const minted = mintPairingCode(deps.db, {
         name: request.body.name,
         interface: request.body.interface,
+        capabilities: restricted.capabilities,
       });
-      return reply.code(201).send(minted);
+      // The answer carries the set because the call that created the identity is the one place that knows it without a
+      // second read: a caller who asked for a narrowing has no other way to see that the narrowing took effect, and a
+      // caller who did not ask has just learned what a fresh identity holds. `mintPairingCode` returns the pairing
+      // record itself (`{code, clientId, expiresAt}`), which is about the code and not about the authority behind it —
+      // so the field is added here rather than by widening a storage type whose name says what it is.
+      return reply.code(201).send({ ...minted, capabilities: restricted.capabilities });
     },
   );
 
@@ -567,13 +612,14 @@ function registerTaskRoutes(
    *  has nothing in flight, so the manager settles at once and this route answers with a task that is already
    *  `cancelled`, carrying §6.2's evidence on the record (`inFlight: "none"`, `effectsUncertain: false`). A *moving*
    *  task answers `cancelling` and settles when its run stops — which needs the task handoff, and the handoff waits on
-   *  F-52: no code in this build writes `Identity.capabilities`, so a run started from a route would hold no grants and
-   *  policy would refuse every tool in it.
+   *  F-52's last question: no code turns the identity that asked into a `PolicySubject`, so a run started from a route
+   *  would hold no grants and policy would refuse every tool in it.
    *
-   *  §6.1 names `task.cancel` as the capability that decides who may stop a task, and that capability is enforceable by
-   *  nothing here — every paired client holds none. The control this route actually has is the token the guard demanded
-   *  before it ran, which is the same substitution `auth.manage` makes with the socket, and F-52 records it rather than
-   *  this comment pretending it is a check. */
+   *  §6.1 names `task.cancel` as the capability that decides who may stop a task. Since the mint route assigns §6.1's
+   *  baseline, every paired client in this build *holds* it — but holding is not checking: this route has no subject to
+   *  ask, so the control it actually has is still the token the guard demanded before it ran, which is the same
+   *  substitution `auth.manage` makes with the socket. F-52 records that gap rather than this comment pretending the
+   *  assignment is an enforcement. */
   app.post<{ Params: { id: string }; Body: CancelTaskBody | undefined }>(
     "/api/v1/tasks/:id/cancel",
     { schema: { body: CancelTaskBody } },

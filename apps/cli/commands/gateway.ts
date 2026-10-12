@@ -196,8 +196,10 @@ async function runStart(
   renderer.line(
     "tasks",
     "recorded, not driven: the runner exists (M2n) and `POST /api/v1/tasks/{id}/cancel` stops a task, but nothing " +
-      "composes the runner into `POST /api/v1/tasks`, because no code in this build writes `Identity.capabilities` and a " +
-      "run started from a route would hold no grants and be refused every tool it proposed (F-52)",
+      "composes the runner into `POST /api/v1/tasks`. Identities do hold capabilities now — a mint assigns §6.1's " +
+      "baseline for the interface, narrowed by `--restrict` when one is given, and `crabby auth list` prints the set — " +
+      "but no code turns them into a run's grants yet, so a task started from a route would carry no PolicySubject and " +
+      "be refused every tool it proposed (F-52's third question is the one still open)",
   );
   if (built.bootstrap) {
     renderer.line("", "");

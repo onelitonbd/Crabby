@@ -69,6 +69,26 @@ export const APPROVAL_REFUSAL_CLASS: Record<
   denied: "conflict",
 };
 
+/** Every code the scheduler's verbs can refuse with, mapped to a class — exhaustive over the union for the reason the
+ *  two maps above are, so that adding a refusal in `packages/agent-runtime/scheduler.ts` fails this file until somebody
+ *  says what it means over HTTP. */
+export const JOB_REFUSAL_CLASS: Record<
+  import("@crabby/agent-runtime").JobActionCode,
+  ErrorBody["class"]
+> = {
+  "not-found": "not-found",
+  // `conflict` and not `validation` for all three, for the reason the cancellation map gives: the request was
+  // well-formed and the *world* disagreed. A paused job, a run already open and an identity that was revoked are facts
+  // about the row, not mistakes in the body, and "fix what you sent" would send a client looking at a body that was
+  // never the problem.
+  paused: "conflict",
+  revoked: "conflict",
+  "in-flight": "conflict",
+  // A schedule this parser cannot read, or one with no occurrence left, is a body the caller can fix.
+  unfireable: "validation",
+  unwritable: "internal",
+};
+
 /** Every code the §6 cancellation manager can refuse with, mapped to a class — exhaustive over the union for the same
  *  reason `APPROVAL_REFUSAL_CLASS` is, so that adding a refusal in `packages/agent-runtime/cancellation.ts` makes this
  *  file fail to compile until somebody classifies it. `POST /tasks/{id}/cancel` answers through this map rather than

@@ -30,7 +30,13 @@ export interface EvalContext {
   /** §4.2's `net.fetch` row: "T1 only for a user-curated allow-list". The list is the user's, so it arrives here and
    *  never defaults to a value this module invents. */
   readonly egressAllowList?: readonly string[];
-  /** D-060's rule that a restricted client may not be pushed into an approval it cannot answer. */
+  /** What the subject already holds, so an escalation can refuse rather than ask: D-054's rule is that removing a
+   *  capability "never converts [it] into an approval the same restricted client must answer", and a prompt for
+   *  `provider.billing` opened for a client that does not hold it is exactly that — a question whose only honest answers
+   *  are "deny" and "deny", asked of somebody who cannot grant it either. (This comment cited D-060 until the
+   *  twenty-eighth slice checked it; D-060 is the toolchain row, which is the kind of wrong a citation gets when nothing
+   *  reads it back — F-27's reason for making citations greppable is only half the rule, because a citation that resolves
+   *  can still resolve to the wrong thing.) */
   readonly grants: readonly string[];
   /** The resolver §8's re-check-after-resolution rule needs. Without it a symlink hop is invisible, so `file.*`
    *  writes are refused rather than allowed on a half-check — the fail-closed direction. */

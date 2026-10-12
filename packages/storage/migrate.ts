@@ -150,6 +150,74 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // The scheduler's two tables (D-046, D-057, and F-57's third field: `schedule` is the scheduler's, and this is the
+    // schema version 5 that finding said a schedule would need). Two tables rather than one because §4.5 makes the *runs*
+    // the auditable half — "every execution of a scheduled job is a fresh policy evaluation", and a run that could not get
+    // approval "stops and records" why — and a job row that carried only its last outcome would be a standing authority
+    // whose history nobody could review a month later (W16-09's "approval trail per run").
+    //
+    // `client_id` deliberately has no `REFERENCES client_identity`: a revocation deletes the identity row (O-071), and a
+    // cascade would erase the record of who authorised a timer that may already have run work. §4.5's sentence is that a
+    // job "runs under the identity that created it, so audit records name a person rather than 'cron'", and a person's
+    // name has to outlive their credential. The scheduler refuses to *fire* a job whose identity is gone, which is the
+    // enforcement; this table keeps the attribution.
+    //
+    // `task_id` does cascade — as a `SET NULL`, not a delete: `docs/DATA_AND_MEMORY.md` §7 removes a conversation's tasks,
+    // and a run row that vanished with its task would take the outcome of work that already happened with it.
+    //
+    // The column is triggered_by and not trigger, because TRIGGER is a SQLite keyword and a column that needs quoting in
+    // every statement is a column somebody will eventually write without them.
+    version: 5,
+    name: "jobs",
+    up(db) {
+      db.exec(`
+        CREATE TABLE job (
+          id                 TEXT PRIMARY KEY,
+          name               TEXT NOT NULL,
+          schedule           TEXT NOT NULL,
+          objective          TEXT NOT NULL,
+          state              TEXT NOT NULL CHECK (state IN ('active','paused')),
+          session_id         TEXT NOT NULL,
+          client_id          TEXT NOT NULL,
+          client_name        TEXT NOT NULL,
+          client_interface   TEXT NOT NULL CHECK (client_interface IN ('cli','tui','web','telegram')),
+          capability_json    TEXT NOT NULL,
+          utc_offset_minutes INTEGER NOT NULL,
+          created_at         TEXT NOT NULL,
+          updated_at         TEXT NOT NULL,
+          next_run_at        TEXT,
+          last_run_at        TEXT,
+          missed             INTEGER NOT NULL DEFAULT 0
+        );
+        -- The tick's one question is "what is active and due", so that is the index. A phone holds a handful of timers
+        -- and the scan would be cheap anyway; the index exists so the query the scheduler runs every thirty seconds is
+        -- the query the file is organised around.
+        CREATE INDEX job_state_next ON job (state, next_run_at);
+
+        CREATE TABLE job_run (
+          id              TEXT PRIMARY KEY,
+          job_id          TEXT NOT NULL REFERENCES job (id) ON DELETE CASCADE,
+          due_at          TEXT NOT NULL,
+          recorded_at     TEXT NOT NULL,
+          settled_at      TEXT,
+          outcome         TEXT NOT NULL CHECK (outcome IN
+                            ('fired','waiting_on_approval','skipped','missed','refused',
+                             'completed','failed','cancelled','interrupted')),
+          triggered_by    TEXT NOT NULL CHECK (triggered_by IN ('schedule','run-now','backlog')),
+          task_id         TEXT REFERENCES task (id) ON DELETE SET NULL,
+          reason          TEXT,
+          occurrences     INTEGER NOT NULL DEFAULT 1,
+          acknowledged_at TEXT
+        );
+        -- One missed row stands for many occurrences, and the occurrences column says how many: §4.5's rule against a
+        -- burst needs the count, and a phone does not need ten thousand rows to carry it.
+        CREATE INDEX job_run_job     ON job_run (job_id, due_at);
+        CREATE INDEX job_run_open    ON job_run (outcome);
+        CREATE INDEX job_run_backlog ON job_run (job_id, outcome, acknowledged_at);
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

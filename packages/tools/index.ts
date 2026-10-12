@@ -37,6 +37,13 @@ import { assertRegistrable, fileToolDeclarations } from "./declare.ts";
 import { type FileToolEnv, fileFacts, runFileTool } from "./fs.ts";
 import { defaultNonce } from "./untrusted.ts";
 
+export {
+  createSchedulerTools,
+  SCHEDULER_TOOL,
+  type SchedulerToolExecutor,
+  type SchedulerToolOptions,
+  schedulerToolDeclarations,
+} from "./cron.ts";
 export { assertRegistrable, fileToolDeclarations } from "./declare.ts";
 export { type FileToolEnv, fileFacts, runFileTool } from "./fs.ts";
 export {
@@ -138,5 +145,68 @@ export function createFileTools(options: FileToolOptions): FileToolExecutor {
     declarations: () => declarations,
     facts: (call) => fileFacts(call, env),
     declares: (tool) => byName.get(tool),
+  };
+}
+
+/** One executor made of several, and the reason it is a function rather than a convention: the loop holds a single
+ *  `ToolSurface`, so a composition with a file executor and a scheduler executor has to answer `specs`, `run`, `facts`
+ *  and `declares` as one party — and four hand-written merges in four composition roots would be four places for the
+ *  routing rule to drift. The rule is the one §4.1 already states: a tool belongs to the surface that *declares* it, so
+ *  the map below is built from `specs()` and a call for a name nobody declares is refused rather than broadcast to every
+ *  surface in turn (which would let two executors answer one call and leave the outcome to whichever promise settled).
+ *
+ *  `assertRegistrable` runs over the merged declarations for the same reason it runs inside each one: §4.1 makes a
+ *  duplicate id fatal at startup, and a duplicate across two executors is the same defect with a wider blast radius. */
+export interface CombinedToolExecutor extends ToolSurface {
+  readonly declarations: () => readonly ToolDeclaration[];
+  readonly declares: (tool: string) => ToolDeclaration | undefined;
+  readonly facts: (call: ToolCall) => Record<string, unknown>;
+}
+
+export function combineToolSurfaces(surfaces: readonly ToolSurface[]): CombinedToolExecutor {
+  const owner = new Map<string, ToolSurface>();
+  for (const surface of surfaces)
+    for (const spec of surface.specs()) {
+      if (owner.has(spec.name))
+        throw new Error(
+          `tool '${spec.name}' is declared by two executors in one composition; §4.1 makes a duplicate id fatal at ` +
+            "startup rather than a last-one-wins registry",
+        );
+      owner.set(spec.name, surface);
+    }
+  const declarations = (): readonly ToolDeclaration[] => [
+    ...surfaces.flatMap((surface) => {
+      const declared = surface as { declarations?: () => readonly ToolDeclaration[] };
+      return declared.declarations === undefined ? [] : [...declared.declarations()];
+    }),
+  ];
+  const merged = declarations();
+  assertRegistrable(merged);
+  const byName = new Map(
+    merged.map((declaration) => [declaration.name, declaration] as [string, ToolDeclaration]),
+  );
+  return {
+    specs: () => surfaces.flatMap((surface) => [...surface.specs()]),
+    run: async (call, ctx) => {
+      const surface = owner.get(call.tool);
+      if (surface === undefined)
+        return {
+          ok: false,
+          output:
+            `'${call.tool}' is not declared by any executor in this composition; the ones it has are ` +
+            `${[...owner.keys()].join(", ")}`,
+          code: "not-declared",
+        };
+      return surface.run(call, ctx);
+    },
+    declarations,
+    declares: (tool) => byName.get(tool),
+    facts: (call) => {
+      // Merged rather than first-answer-wins, because §4.3's escalations ask different executors about different
+      // arguments and a fact answered by one surface must not be hidden by another that has nothing to say.
+      const merged: Record<string, unknown> = {};
+      for (const surface of surfaces) Object.assign(merged, surface.facts?.(call) ?? {});
+      return merged;
+    },
   };
 }

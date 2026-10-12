@@ -16,6 +16,16 @@ interface Diagnostics {
    *  handoff, and a Gateway started from an older checkout does not send it: the screen asks the process rather than
    *  asserting a property of the build, which is the discipline this file's own comments argue for. */
   runs?: { composed: boolean; inFlight: number };
+  /** The scheduler's own facts, optional for the reason `runs` is: a Gateway started from an older checkout does not
+   *  send them, and this screen asks the process rather than asserting a property of the build. */
+  jobs?: {
+    composed: boolean;
+    rows: number;
+    armed: boolean;
+    openRuns: number;
+    missedUnacknowledged: number;
+    nextRunAt?: string;
+  };
   streams: { subscribers: number };
 }
 
@@ -59,6 +69,26 @@ export async function runStatus(layout: DataLayout, renderer: Renderer): Promise
             : `composed · ${runs.inFlight} in flight`
           : "not composed — a task is recorded and nothing in this process drives it",
     );
+    // D-057 makes scheduled work a first-class surface, and "at a glance" is where a user looks first: a timer is
+    // standing authority, so its count and whether anything is armed belong on the same screen as the runs it creates.
+    const jobs = diagnostics.jobs;
+    renderer.line(
+      "jobs",
+      jobs === undefined
+        ? "not reported — this Gateway predates the scheduler, so nothing fires on a schedule"
+        : jobs.composed
+          ? `${jobs.rows} recorded · ${
+              jobs.armed ? "timer armed" : "nothing due to arm for"
+            } · next ${jobs.nextRunAt ?? "none scheduled"}`
+          : `${jobs.rows} recorded, not driven — this process composed no runner, so no timer is armed`,
+    );
+    // §4.5's sixth rule on the screen the user actually opens in the morning: occurrences that passed while the device
+    // was down are recorded and never fired in a burst, and "never fired" is only honest if somebody is told.
+    if (jobs !== undefined && jobs.missedUnacknowledged > 0)
+      renderer.fix(
+        `${jobs.missedUnacknowledged} missed run(s) nobody has answered for: \`crabby job ls\` names the job, and ` +
+          "`crabby job backlog <id> --latest` or `--skip` records the answer (§4.5)",
+      );
     renderer.line("streams", `${diagnostics.streams.subscribers} connected`);
     const total = Object.values(diagnostics.tasks).reduce((a, b) => a + b, 0);
     if (total === 0) {

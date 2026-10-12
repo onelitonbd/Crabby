@@ -185,9 +185,10 @@ describe("gateway over http", () => {
     // on?" answerable by someone holding a phone and a backup.
     assert.equal(
       body.storage.schemaVersion,
-      4,
-      "M2's `approval` table advanced the ledger from 1 to 2, §6.2's cancellation column (D-091) from 2 to 3, and " +
-        "D-065's checkpoint table (D-095) from 3 to 4 — and this literal is why a migration cannot land quietly",
+      5,
+      "M2's `approval` table advanced the ledger from 1 to 2, §6.2's cancellation column (D-091) from 2 to 3, D-065's " +
+        "checkpoint table (D-095) from 3 to 4, and §4.5's `job` and `job_run` tables (D-046, D-057) from 4 to 5 — and " +
+        "this literal is why a migration cannot land quietly",
     );
   });
 
@@ -207,7 +208,23 @@ describe("gateway over http", () => {
     assert.equal(
       body.ready,
       false,
-      "four of the five do not exist yet, and saying so is the point of a readiness route",
+      "four of the five are absent in *this composition* — the scheduler because there is no runner for a fired job to " +
+        "reach, the providers because nothing is configured, extensions and tunnel because no slice has built them — and " +
+        "saying which is the point of a readiness route",
+    );
+    // The scheduler row is answered from the composition rather than from a milestone, and that is a change worth pinning:
+    // it used to say the subsystem arrives with M2's runtime, a sentence that outlived its subject when §4.5 was built.
+    // What this Gateway lacks is not the scheduler but the half a fired job needs, so the reason names that half.
+    assert.equal(body.subsystems.scheduler?.state, "absent");
+    assert.match(
+      body.subsystems.scheduler?.reason ?? "",
+      /composed no runner/,
+      "an absent scheduler names the missing party rather than the milestone that will build it, because the subsystem exists",
+    );
+    assert.match(
+      body.subsystems.scheduler?.reason ?? "",
+      /no timer is armed/,
+      "and says what the absence costs, so a reader knows a job would be recorded and never fired",
     );
     for (const [name, row] of Object.entries(body.subsystems)) {
       if (row.state === "absent")

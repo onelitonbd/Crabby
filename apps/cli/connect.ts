@@ -52,7 +52,23 @@ export function reportFailure(renderer: Renderer, error: unknown): ExitCode {
               "already holds (§5.3) — leaving `--restrict` off takes the baseline"
           : "crabby <noun> <verb> --help prints the accepted shape",
       );
+    else if (error.envelope.error.class === "platform-unsupported")
+      // §7.1's exit `4` rather than `1`, and the fix is a configuration rather than a retry: this class is what the
+      // Gateway answers with when the subsystem the verb needs was not composed in this process at all — a scheduler on a
+      // Gateway that drives no tasks, a vault that does not exist yet. Nothing the caller sent is wrong, so `1` would
+      // report a failure of the work when the truth is that this Gateway cannot do that here.
+      renderer.fix(
+        "the subsystem this verb needs is not composed in that Gateway — a scheduler on one that drives no tasks, a vault " +
+          "that does not exist yet; `crabby status` and `GET /api/v1/diagnostics` say which, and what composing it takes",
+      );
     else if (error.envelope.error.retryable) renderer.fix("this one is retryable — try again");
+    // Three classes and not the four `exitCodeForErrorClass` maps, and the one left out is deliberate. `policy` is *not*
+    // exit `3` here even though the shared table says it is: §7.1's approval row promises "a refusal prints the arbiter's
+    // own sentence and exits `1`", and exit `3` is reserved for the other shape — a run *this command is blocking on*
+    // parked at a prompt nobody can answer (`task run`, `job run-now`). A D-085 refusal is a refusal of the command
+    // itself, so it is a failure; a parked run is an unanswered question, so it is `3`. Both readings are in §7.1 and
+    // collapsing them would tell a script that its `approval approve` was waiting on a human.
+    if (error.envelope.error.class === "platform-unsupported") return EXIT.platformUnsupported;
     return error.envelope.error.class === "validation" ? EXIT.usage : EXIT.failure;
   }
   renderer.line("request failed", error instanceof Error ? error.message : String(error));

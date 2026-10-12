@@ -13,6 +13,7 @@ export * from "./events.ts";
 export * from "./exit-codes.ts";
 export * from "./formats.ts";
 export * from "./ids.ts";
+export * from "./job.ts";
 export * from "./task.ts";
 export * from "./tools.ts";
 export * from "./validate.ts";

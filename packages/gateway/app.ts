@@ -51,8 +51,15 @@ import {
   createCheckpoints,
   createRecovery,
   createRunner,
+  createScheduler,
+  DEFAULT_RUN_HISTORY,
+  type JobActionCode,
+  type JobStore,
   type LoopSubject,
+  localStamp,
   type Runner,
+  type Scheduler,
+  type StartResult,
   type ToolSurface,
 } from "@crabby/agent-runtime";
 import type { ApprovalState, ToolDeclaration } from "@crabby/api-contracts";
@@ -61,15 +68,27 @@ import {
   ApprovalDecisionBody,
   ApprovalListQuery,
   CancelTaskBody,
+  type ClientInterface,
   CreateTaskBody,
   type Event,
   errorEnvelope,
+  isJobState,
+  JOB_STATES,
+  type JobActionBody,
+  JobBacklogBody,
+  type JobDetailBody,
+  type JobListBody,
+  type JobRecord,
+  type JobRow,
+  jobRow,
   ListQuery,
   newId,
   PairCodeRequestBody,
   PairRequestBody,
+  PatchJobBody,
   SCHEMA_VERSION,
   TaskId,
+  type TaskRecord,
   type TaskState,
   validate,
 } from "@crabby/api-contracts";
@@ -96,8 +115,10 @@ import {
   authenticate,
   createSqliteApprovalStore,
   createSqliteCheckpointStore,
+  createSqliteJobStore,
   createSqliteJournal,
   createTask,
+  getIdentity,
   getTask,
   type Identity,
   listIdentities,
@@ -124,6 +145,7 @@ import {
   authError,
   CANCEL_REFUSAL_CLASS,
   GatewayError,
+  JOB_REFUSAL_CLASS,
   notFound,
   validationError,
 } from "./errors.ts";
@@ -191,6 +213,15 @@ export interface BuiltApp {
    *  SQLite does, and a run still writing when the database closes is a crash wearing a drain's clothes. Absent means
    *  nothing in this process can move a task, which the banner reports rather than hides. */
   readonly runner?: Runner | undefined;
+  /** The process's one scheduler, when a runner exists to fire into. Exposed for the same reason as the runner and with
+   *  the same rule about ordering: `shutdown()` is the manager whose arm has to stop *before* the runs settle and before
+   *  SQLite closes, because an arm that fires after the drain began would create a task nobody is going to watch
+   *  (`packages/core/shutdown.ts`). Absent means the jobs table is read-only in this process, which `GET /api/v1/status`
+   *  reports and the banner prints rather than leaving a caller to discover at the next fire. */
+  readonly scheduler?: Scheduler | undefined;
+  /** The job table itself, read by the routes either way. Handed back so the composition root can answer `job ls`
+   *  questions from the same rows the routes answer them from, instead of opening a second reader. */
+  readonly jobStore: JobStore;
 }
 
 const REDEEM_PATH = "/api/v1/auth/pair";
@@ -276,6 +307,67 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
     // the startup log can carry and a task record cannot.
     log.info("no runner composed", {
       reason: "POST /api/v1/tasks will record a task and nothing in this process will drive it",
+    });
+
+  /** The job table is read by the routes whether or not anything is composed to drive them, so it is built here rather
+   *  than inside the scheduler's `then`: D-057 makes scheduled work a first-class surface, and a surface that only exists
+   *  when a provider is configured would hide the jobs a user already has (and hide them best exactly when the provider
+   *  broke, which is when a paused list matters). */
+  const jobStore = createSqliteJobStore(db);
+
+  // The scheduler is composed beside the runner and for the same reason: a fired job *is* a task handoff, so it has to
+  // reach the same runner, the same journal and the same arbiter — and a scheduler built by the caller would have to be
+  // handed all four, which is how two compositions end up disagreeing about which manager a stop goes through. It is
+  // absent exactly when the runner is, because a timer that creates tasks nothing drives is a queue that grows on a
+  // schedule: work nobody asked for yet, arriving at a minute nobody chose (docs/ROADMAP.md §4's "recorded, not driven",
+  // applied to work the process cannot do at all).
+  const scheduler: Scheduler | undefined =
+    runner === undefined
+      ? undefined
+      : createScheduler({
+          store: jobStore,
+          fire: (request) => {
+            const driven = recordAndDriveTask(deps, bus, runner, {
+              objective: request.job.objective,
+              // A fresh session per fire rather than the job's own. A job that appended every run to one conversation
+              // would grow it without bound, and the session a job belongs to stays on the job row, which is what ties
+              // the timer back to the conversation that authorised it (§4.5: "no ambient authority").
+              origin: {
+                clientId: request.job.createdBy.clientId,
+                clientName: request.job.createdBy.name,
+                interface: request.job.createdBy.interface,
+                capabilities: request.capabilities,
+              },
+              source: "job",
+            });
+            if (driven.started === undefined)
+              return {
+                ok: false,
+                code: "no-drive",
+                reason:
+                  "this Gateway composed no runner, so a fired job would create a task that nothing moves",
+              };
+            if (!driven.started.ok)
+              return { ok: false, code: driven.started.code, reason: driven.started.reason };
+            return { ok: true, taskId: driven.task.id };
+          },
+          identityOf: (clientId) => {
+            const identity = getIdentity(db, clientId);
+            return identity === undefined
+              ? undefined
+              : {
+                  name: identity.name,
+                  interface: identity.interface,
+                  capabilities: identity.capabilities,
+                };
+          },
+          taskStateOf: (taskId) => getTask(db, taskId)?.state,
+          log,
+        });
+  if (scheduler === undefined)
+    log.info("no scheduler composed", {
+      reason:
+        "GET /api/v1/jobs answers from the table and nothing fires: a job is a task that runs later, and this process drives no tasks",
     });
 
   // §7.1's recovery, at the same place the retention prune runs: a restart is one operation, and both halves are about
@@ -371,10 +463,11 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
       .send(errorEnvelope(error.body));
   });
 
-  registerSystemRoutes(app, deps, bus, runner);
+  registerSystemRoutes(app, deps, bus, runner, scheduler, jobStore);
   registerPolicyRoutes(app, deps, platform);
   registerAuthRoutes(app, deps, bus);
   registerTaskRoutes(app, deps, bus, checkpoints, cancellation, runner);
+  registerJobRoutes(app, deps, jobStore, scheduler);
   registerApprovalRoutes(app, deps, bus, approvals);
   registerEventStream(app, deps, bus);
 
@@ -391,6 +484,8 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
     bus,
     ...(bootstrap ? { bootstrap } : {}),
     ...(runner === undefined ? {} : { runner }),
+    ...(scheduler === undefined ? {} : { scheduler }),
+    jobStore,
   };
 }
 
@@ -444,6 +539,144 @@ function providersRow(
   };
 }
 
+// ------------------------------------------------------------------ the handoff, as one act rather than two copies
+
+/** Recording a task and handing it to the runner, in one function because two callers need it to be the *same* act:
+ *  `POST /api/v1/tasks` for a task a client asked for, and the scheduler's `fire` for a task a job asked for. §4.5's
+ *  "every execution of a scheduled job is a fresh policy evaluation" is only true if a fired run is built the way an
+ *  asked-for one is, and two copies of this sequence would be two opinions about where a run's grants come from — the
+ *  second one being the place a timer quietly gained authority its creator never held.
+ *
+ *  What it owns, in the order §5.1's pairing rule requires: the task row, the `task.created` event appended through the
+ *  journal's own writer (which advances `task.last_seq`, so nothing here touches that counter), the publish *after* the
+ *  commit, and — when this process has a runner — the `PolicySubject` built from the identity's recorded capabilities.
+ *  The withheld half of that expansion is logged rather than dropped, and a `start` that refuses is logged rather than
+ *  retried, because the task row is already the truth and §7.1's recovery marks it `interrupted` on the next start.
+ *
+ *  `origin` is the audit half, and it is why this function takes a person rather than a subject: `RunOrigin` travels to
+ *  every tool the run executes, which is what lets `cron.schedule` write a job naming whoever asked for it instead of
+ *  naming the process (§4.5's "audit records name a person rather than 'cron'"). */
+export interface DriveTaskInput {
+  readonly objective: string;
+  readonly sessionId?: string | undefined;
+  readonly origin: {
+    readonly clientId: string;
+    readonly clientName: string;
+    readonly interface: ClientInterface;
+    /** The §6.1 names recorded on the identity — not the grants they expand into, which are computed here. */
+    readonly capabilities: readonly string[];
+  };
+  readonly correlationId?: string | undefined;
+  /** Which caller asked, for the log line: a client over HTTP or a job on its schedule. The two are the same act and
+   *  different stories, and §14's audit records are only useful if a reader can tell them apart. */
+  readonly source: "client" | "job";
+}
+
+export interface DrivenTask {
+  readonly task: TaskRecord;
+  /** The capabilities this identity holds that produced no grant, each with the reason. Returned rather than only logged
+   *  so a caller that owes the user an answer — `crabby task run`, or a job's `refused` run row — can give one. */
+  readonly withheld: readonly { readonly capability: string; readonly reason: string }[];
+  readonly started: StartResult | undefined;
+}
+
+function recordAndDriveTask(
+  deps: GatewayDeps,
+  bus: ReturnType<typeof createEventBus>,
+  runner: Runner | undefined,
+  input: DriveTaskInput,
+): DrivenTask {
+  const created = createTask(deps.db, {
+    objective: input.objective,
+    ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+  });
+  const event: Event = {
+    id: newId("evt"),
+    schemaVersion: SCHEMA_VERSION,
+    type: "task.created",
+    ts: new Date().toISOString(),
+    sessionId: created.sessionId,
+    taskId: created.id,
+    seq: 0,
+    payload: { objective: created.objective, state: created.state },
+  };
+  // `appendEvent` advances `task.last_seq` itself, so nothing here duplicates that bookkeeping: two writers of one
+  // counter is how a counter starts lying.
+  const appended = appendEvent(deps.db, {
+    event,
+    scratchDir: taskScratch(deps.layout, created.id),
+  });
+  bus.publish({ ...event, seq: appended.seq });
+  const task = getTask(deps.db, created.id) ?? created;
+  if (runner === undefined) return { task, withheld: [], started: undefined };
+
+  const expansion = grantsFor(input.origin.capabilities, {
+    roots: deps.drive?.ctx.paths?.roots ?? [],
+  });
+  // Withheld rather than dropped, and logged rather than silent: an identity that holds `fs.write` and can write nowhere
+  // is a fact an operator should be able to find, instead of having to read a denied tool call backwards and wonder
+  // whether the capability or the configuration was missing.
+  for (const withheld of expansion.withheld)
+    deps.log.info("capability held, no grant emitted", {
+      task: created.id,
+      capability: withheld.capability,
+      reason: withheld.reason,
+      source: input.source,
+    });
+  const started = runner.start({
+    taskId: created.id,
+    subject: {
+      grants: expansion.grants,
+      // The other half of `PolicySubject`, and the reason a narrowed client gets §13's sentence instead of a denial that
+      // reads as repairable: what a restriction removed is not discoverable from `grants`, because an absent grant and a
+      // removed one are the same absence. Only the party that knows which interface the identity was paired for can
+      // compute the difference.
+      removedGrants: removedGrantsFor(input.origin.capabilities, input.origin.interface),
+      // `ClientInterface` is a subset of policy's `ClientKind` — the same four names — so the kind arrives as the
+      // interface that was paired rather than as a guess about the transport. That matters beyond bookkeeping: the kind
+      // is what decides whether a T3 prompt may be answered from here at all (D-085).
+      clientKind: input.origin.interface satisfies ClientKind,
+    } satisfies LoopSubject,
+    origin: {
+      clientId: input.origin.clientId,
+      clientName: input.origin.clientName,
+      interface: input.origin.interface,
+      capabilities: input.origin.capabilities,
+      sessionId: created.sessionId,
+    },
+    ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+  });
+  if (!started.ok)
+    // Reachable while the process is draining, and for a fired job also when the runner has one run per task and this
+    // task somehow already has one. The task stays `queued`, which is the truth rather than a shrug — §7.1's recovery
+    // marks it `interrupted` on the next start, and the caller's own record says so beside this line.
+    deps.log.warn("run not started", {
+      task: created.id,
+      code: started.code,
+      reason: started.reason,
+      source: input.source,
+    });
+  // Not awaited, because the caller's answer is the record it just wrote and the run moves the task on its own clock. A
+  // handler is attached anyway: a rejection nobody owns takes the Gateway down with it, and a dead Gateway is a worse
+  // answer than a failed task — the runner's own rule, kept at its caller too.
+  else
+    void started.run.then(
+      (outcome) =>
+        deps.log.info("run settled", {
+          task: created.id,
+          kind: outcome.kind,
+          source: input.source,
+        }),
+      (error: unknown) =>
+        deps.log.error("run rejected", {
+          task: created.id,
+          reason: error instanceof Error ? error.message : String(error),
+          source: input.source,
+        }),
+    );
+  return { task, withheld: expansion.withheld, started };
+}
+
 // ------------------------------------------------------------------ system (§4.1)
 
 function registerSystemRoutes(
@@ -451,6 +684,8 @@ function registerSystemRoutes(
   deps: GatewayDeps,
   bus: ReturnType<typeof createEventBus>,
   runner: Runner | undefined,
+  scheduler: Scheduler | undefined,
+  jobStore: JobStore,
 ): void {
   app.get("/api/v1/health", async (_request, reply) => {
     const listener = boundAddress(app);
@@ -469,7 +704,15 @@ function registerSystemRoutes(
   app.get("/api/v1/status", async (_request, reply) => {
     const subsystems = {
       storage: { state: "ready", schemaVersion: schemaVersion(deps.db) },
-      scheduler: { state: "absent", reason: "arrives with M2's runtime" },
+      scheduler:
+        scheduler === undefined
+          ? {
+              state: "absent" as const,
+              reason:
+                "this process composed no runner, so nothing drives a fired job: GET /api/v1/jobs answers from the table " +
+                "and no timer is armed (POST /api/v1/tasks would record a task and drive it to nothing either)",
+            }
+          : { state: "ready" as const },
       providers: providersRow(deps.providers, runner !== undefined),
       extensions: { state: "absent", reason: "arrives with M-Extensions" },
       tunnel: { state: "absent", reason: "arrives with the tunnel slice" },
@@ -481,6 +724,9 @@ function registerSystemRoutes(
   });
 
   app.get("/api/v1/diagnostics", async (_request, reply) => {
+    // Read once rather than per field: `facts()` counts rows, and a diagnostics answer whose four numbers came from four
+    // passes over the table could disagree with itself about a job that fired in between.
+    const jobFacts = scheduler?.facts();
     // §10's paste-safe view: whatever is in the state dir is fair game, and anything secret-shaped is filtered by the
     // same text scrub the logger uses, which `tests/integration/gateway.test.ts` proves rather than assumes.
     return reply.send({
@@ -493,6 +739,17 @@ function registerSystemRoutes(
        *  disagree and the disagreement is the fact an operator needs: a task can sit `queued` in a Gateway that
        *  composed no runner, and `crabby task run` asks this before it agrees to block on a task nothing will move. */
       runs: { composed: runner !== undefined, inFlight: runner?.outstanding() ?? 0 },
+      /** The scheduler's own facts rather than a row count, because the case a user hits after an overnight kill is not
+       *  "no jobs" but "an armed timer whose identity was revoked mid-job" — and `missedUnacknowledged` is §4.5's sixth
+       *  rule as a number: occurrences that passed while nothing was watching and nobody has answered for yet. */
+      jobs: {
+        composed: scheduler !== undefined,
+        rows: jobStore.all().length,
+        armed: jobFacts?.armed ?? false,
+        openRuns: jobFacts?.openRuns ?? 0,
+        missedUnacknowledged: jobFacts?.missedUnacknowledged ?? 0,
+        ...(jobFacts?.nextRunAt === undefined ? {} : { nextRunAt: jobFacts.nextRunAt }),
+      },
       streams: { subscribers: bus.subscriberCount },
     });
   });
@@ -691,88 +948,27 @@ function registerTaskRoutes(
       // is `POST /auth/pair`, and this is not it.
       const client = request.crabbyClient;
       if (client === undefined) throw authError("missing", request.crabbyRequestId);
-      const created = createTask(deps.db, {
+      const driven = recordAndDriveTask(deps, bus, runner, {
         objective: body.objective,
         ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
+        // The identity the guard resolved, which is the only party that knows who asked. F-52's third question — how
+        // `capability_json` becomes a run's grants — is answered inside the shared act rather than here, so that a task a
+        // job fires is built the same way as a task a client asks for (§4.5's "every execution is a fresh policy
+        // evaluation", D-102).
+        origin: {
+          clientId: client.id,
+          clientName: client.name,
+          interface: client.interface,
+          capabilities: client.capabilities,
+        },
+        ...(request.crabbyRequestId === undefined
+          ? {}
+          : { correlationId: request.crabbyRequestId }),
+        source: "client",
       });
-      const event: Event = {
-        id: newId("evt"),
-        schemaVersion: SCHEMA_VERSION,
-        type: "task.created",
-        ts: new Date().toISOString(),
-        sessionId: created.sessionId,
-        taskId: created.id,
-        seq: 0,
-        payload: { objective: created.objective, state: created.state },
-      };
-      // `appendEvent` advances `task.last_seq` itself, so the route does not duplicate the bookkeeping: two writers
-      // of one counter is how a counter starts lying.
-      const appended = appendEvent(deps.db, {
-        event,
-        scratchDir: taskScratch(deps.layout, created.id),
-      });
-      const record = getTask(deps.db, created.id) ?? created;
+      const record = driven.task;
       remember(deps.db, { key, route: "POST /api/v1/tasks", requestHash: hash, response: record });
-      bus.publish({ ...event, seq: appended.seq });
-
-      // The handoff. F-52's third question — how `capability_json` becomes `PolicySubject.grants` — is answered here
-      // rather than in the runner, because the grants belong to the identity that asked and only this route knows which
-      // one that was. `client.capabilities` are the ones D-102 assigned at pairing, and `grantsFor` expands them
-      // against the roots this install configured: a run started anywhere else would have to guess its caller, and a
-      // guess about authority is the one thing §2's rule 01 cannot absorb.
-      if (runner !== undefined) {
-        const expansion = grantsFor(client.capabilities, {
-          roots: deps.drive?.ctx.paths?.roots ?? [],
-        });
-        // Withheld rather than dropped, and logged rather than silent: an identity that holds `fs.write` and can write
-        // nowhere is a fact an operator should be able to find, instead of having to read a denied tool call backwards
-        // and wonder whether the capability or the configuration was missing.
-        for (const withheld of expansion.withheld)
-          deps.log.info("capability held, no grant emitted", {
-            task: created.id,
-            capability: withheld.capability,
-            reason: withheld.reason,
-          });
-        const started = runner.start({
-          taskId: created.id,
-          subject: {
-            grants: expansion.grants,
-            // The other half of `PolicySubject`, and the reason a narrowed client gets §13's sentence instead of a
-            // denial that reads as repairable: what a restriction removed is not discoverable from `grants`, because an
-            // absent grant and a removed one are the same absence. The route is the only party that knows which
-            // interface the identity was paired for, which is what makes the difference computable at all.
-            removedGrants: removedGrantsFor(client.capabilities, client.interface),
-            // `ClientInterface` is a subset of policy's `ClientKind` — the same four names — so the kind arrives as the
-            // interface that was paired rather than as a guess about the transport. That matters beyond bookkeeping:
-            // the kind is what decides whether a T3 prompt may be answered from here at all (D-085).
-            clientKind: client.interface satisfies ClientKind,
-          } satisfies LoopSubject,
-          correlationId: request.crabbyRequestId,
-        });
-        if (!started.ok)
-          // Reachable only while the process is draining: a task this route just created cannot already be in flight or
-          // parked, and the journal has been written, so it cannot be missing. The task stays `queued`, which is the
-          // truth rather than a shrug — §7.1's recovery marks it `interrupted` on the next start, and the runner's own
-          // sentence says so in the log beside this one.
-          deps.log.warn("run not started", {
-            task: created.id,
-            code: started.code,
-            reason: started.reason,
-          });
-        // Not awaited, because the route's answer is the record it just wrote and the run moves the task on its own
-        // clock. A handler is attached anyway: a rejection nobody owns takes the Gateway down with it, and a dead
-        // Gateway is a worse answer than a failed task — the runner's own rule, kept at its caller too.
-        else
-          void started.run.then(
-            (outcome) => deps.log.info("run settled", { task: created.id, kind: outcome.kind }),
-            (error: unknown) =>
-              deps.log.error("run rejected", {
-                task: created.id,
-                reason: error instanceof Error ? error.message : String(error),
-              }),
-          );
-      }
-      return reply.code(201).header("location", `/api/v1/tasks/${created.id}`).send(record);
+      return reply.code(201).header("location", `/api/v1/tasks/${record.id}`).send(record);
     },
   );
 
@@ -943,6 +1139,257 @@ function sweepApprovals(
   });
   for (const event of staged) bus.publish(event);
   return staged.length;
+}
+
+// ------------------------------------------------------------------ jobs (§4.3, PROVIDERS_AND_TOOLS.md §4.5, D-046/D-057)
+
+/** Which of the four verbs a request asked for. A union rather than four near-identical handlers because they differ in
+ *  the act and not in the shape of the answer, and the shape is what C12-03 and C12-04 print. */
+type JobVerb = "pause" | "resume" | "run" | "backlog";
+
+const JOB_VERB_LOGGED: Record<JobVerb, string> = {
+  pause: "job paused",
+  resume: "job resumed",
+  run: "job run outside its schedule",
+  backlog: "job backlog answered",
+};
+
+/** §4.5's surface over HTTP, and the read half of D-057's "first-class": a Web `Scheduled` pane, a sixth TUI pane and
+ *  Telegram's `/jobs` all answer from these six paths rather than each opening the database.
+ *
+ *  Six paths and no seventh, and the missing one is the one a reader looks for first: there is no `POST /api/v1/jobs`.
+ *  Creation is `cron.schedule`, a T2 tool call whose arguments the user read and approved, and a route that created a job
+ *  would be a second creation path with no approval anywhere in it — the shape C12-09 refuses for `crabby job create` and
+ *  the reason F-57's `schedule` field on `POST /api/v1/tasks` is still unbuilt instead of quietly built here.
+ *
+ *  What these routes may change is priced by §4.5's first rule. Name and schedule are the non-material half, so `PATCH`
+ *  takes exactly those two and `packages/storage/jobs.ts`'s `JobPatch` has no `objective` field to take: the material half
+ *  (steps, targets, recipients, model or provider) "crosses into re-approval", and nothing outside the loop can open one
+ *  (D-084), so the honest surface is one that cannot perform the change rather than one that performs it and calls it
+ *  reviewed.
+ *
+ *  Authority is the token the guard demanded and nothing else. `SECURITY.md` §6.1's table names no job capability, so
+ *  there is no name to check — and inventing one here would build a Gateway that refuses its own paired owner's
+ *  `crabby job ls`. That is the same substitution `auth.manage` makes with the socket, and F-52 records the gap rather
+ *  than this comment pretending the absence is an enforcement.
+ *
+ *  No `job.*` events are published. `Event.taskId` is required (O-070) and a pause is not a task, so the link a client
+ *  needs is the one the record already carries: `job_run.taskId`, from which W16's pane opens the task stream that does
+ *  exist. A pane that wants to notice a pause without polling waits on the taskless-envelope question O-070 asks.
+ *
+ *  Reads answer from the store whether or not a scheduler was composed, and say so in the payload. A list that 501'd
+ *  because no provider is configured would hide the jobs a user has exactly when they most need to see what is paused. */
+function registerJobRoutes(
+  app: FastifyInstance,
+  deps: GatewayDeps,
+  jobs: JobStore,
+  scheduler: Scheduler | undefined,
+): void {
+  const NOT_DRIVEN =
+    "recorded, not driven: this Gateway composed no runner, so no timer is armed and nothing fires. " +
+    "`GET /api/v1/diagnostics` reports `runs.composed` and `jobs.composed`, which is the fact that explains these rows";
+
+  /** 501 rather than 503: the missing party is a composition this process does not have, not a service that is down, and
+   *  `platform-unsupported` is §6's class for "this Gateway cannot do that here". A client that treated it as transient
+   *  would retry forever. */
+  const absent = (requestId: string | undefined) =>
+    new GatewayError({
+      code: "scheduler_absent",
+      message:
+        "this Gateway composed no scheduler, because it composed no runner, and a job is a task that runs later: nothing " +
+        "here drives tasks. `GET /api/v1/jobs` still answers from the table, and `GET /api/v1/diagnostics` reports " +
+        "`runs.composed:false`. A provider and a workspace root configured together are what `crabby gateway start` " +
+        "composes a runner from",
+      class: "platform-unsupported",
+      retryable: false,
+      ...(requestId === undefined ? {} : { requestId }),
+    });
+
+  /** The scheduler's own sentence, verbatim, for the reason the cancellation route gives: it already names the rule that
+   *  refused and what the caller can do about it, and a route that rephrased it would be a second voice explaining one
+   *  denial. The class comes from the exhaustive map, so a new refusal fails `errors.ts` until somebody says what it
+   *  means over HTTP. */
+  const refusal = (
+    result: { readonly code: JobActionCode; readonly reason: string },
+    requestId: string | undefined,
+  ) =>
+    new GatewayError({
+      code: `job_${result.code}`,
+      message: result.reason,
+      class: JOB_REFUSAL_CLASS[result.code],
+      retryable: false,
+      ...(requestId === undefined ? {} : { requestId }),
+    });
+
+  /** The row every read answers with, through `jobRow` rather than by hand: the wall-clock stamp and the state word are
+   *  each a claim about two records at once, and four clients deriving them separately would derive four answers (D-103). */
+  const row = (job: JobRecord): JobRow => {
+    const at = job.nextRunAt === undefined ? Number.NaN : Date.parse(job.nextRunAt);
+    return jobRow(job, jobs.lastRun(job.id), Number.isNaN(at) ? undefined : localStamp(at));
+  };
+
+  /** §14's audit fields for a write no loop performed. Logged as well as returned, because a pause asked for from a phone
+   *  at two in the morning has to be findable in the log by whoever reads it, not remembered by whoever asked. */
+  const audit = (
+    what: string,
+    jobId: string,
+    request: FastifyRequest,
+    extra: Record<string, unknown> = {},
+  ): void => {
+    const client = request.crabbyClient;
+    deps.log.info(what, {
+      job: jobId,
+      ...(client === undefined ? {} : { by: client.id, via: client.interface }),
+      ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      ...extra,
+    });
+  };
+
+  app.get<{ Querystring: Record<string, string> }>("/api/v1/jobs", async (request, reply) => {
+    const wanted = request.query.state;
+    if (wanted !== undefined && !isJobState(wanted))
+      throw validationError(
+        [
+          {
+            path: "state",
+            kind: "enum",
+            message: `must be one of ${JOB_STATES.join(", ")} — a filter nobody can spell is a list nobody can trust`,
+          },
+        ],
+        request.crabbyRequestId,
+      );
+    const items = jobs
+      .all()
+      .filter((job) => wanted === undefined || job.state === wanted)
+      .map(row);
+    const facts = scheduler?.facts();
+    // `satisfies` rather than a bare literal: the body is a contract four interfaces read (`JobListBody`), and a route
+    // that drifted from it would still typecheck, because `reply.send` accepts anything.
+    return reply.send({
+      items,
+      count: items.length,
+      driven: scheduler !== undefined,
+      ...(scheduler === undefined ? { note: NOT_DRIVEN } : {}),
+      // §4.5's sixth rule is about *telling* the user, and a list is where a user looks: one total here saves C12-01 a
+      // request per job, and a job whose overnight occurrences nobody answered for is the row that needs the sentence.
+      missedUnacknowledged: items.reduce((total, job) => total + job.missed, 0),
+      ...(facts?.nextRunAt === undefined ? {} : { nextRunAt: facts.nextRunAt }),
+    } satisfies JobListBody);
+  });
+
+  app.get<{ Params: { id: string } }>("/api/v1/jobs/:id", async (request, reply) => {
+    const { id } = request.params;
+    const job = jobs.get(id);
+    if (job === undefined) throw notFound(`job ${id}`, request.crabbyRequestId);
+    const lastRun = jobs.lastRun(id);
+    return reply.send({
+      job: row(job),
+      ...(lastRun === undefined ? {} : { lastRun }),
+      // The same limit the scheduler's own `get` uses, imported rather than repeated: two numbers for one history is how
+      // a pane ends up rendering a list the API called complete.
+      runs: jobs.runsFor(id, DEFAULT_RUN_HISTORY),
+      // C12-06's subject and W16-08's sheet, on the answer that already carries the history: a user deciding what to do
+      // about a backlog should not have to ask twice, and these are the rows `backlog` will acknowledge.
+      missedUnacknowledged: jobs.unacknowledgedMissed(id),
+      driven: scheduler !== undefined,
+      ...(scheduler === undefined ? { note: NOT_DRIVEN } : {}),
+    } satisfies JobDetailBody);
+  });
+
+  app.patch<{ Params: { id: string }; Body: PatchJobBody | undefined }>(
+    "/api/v1/jobs/:id",
+    { schema: { body: PatchJobBody } },
+    async (request, reply) => {
+      if (scheduler === undefined) throw absent(request.crabbyRequestId);
+      const body = request.body ?? {};
+      const result = scheduler.edit(request.params.id, body);
+      if (!result.ok) throw refusal(result, request.crabbyRequestId);
+      audit("job edited", result.job.id, request, {
+        ...(body.name === undefined ? {} : { name: body.name }),
+        ...(body.schedule === undefined ? {} : { schedule: body.schedule }),
+      });
+      // `driven: true` on every write answer rather than only on reads, because a client that patched a job is about to
+      // tell the user when it fires next — and the row it prints is only a promise if a timer is armed to keep it.
+      return reply.send({
+        job: row(result.job),
+        note: result.note,
+        driven: true,
+      } satisfies JobActionBody);
+    },
+  );
+
+  /** One handler for the four verbs. They differ in the act and not in the answer, and the answer is what C12-03 and
+   *  C12-04 print: one id in, one refusal mapped by `JOB_REFUSAL_CLASS`, one audit line, one row back with the
+   *  scheduler's own sentence beside it. */
+  const act = (
+    verb: JobVerb,
+    request: FastifyRequest<{ Params: { id: string }; Body: JobBacklogBody | undefined }>,
+    reply: FastifyReply,
+    managed: Scheduler,
+  ): FastifyReply => {
+    const id = request.params.id;
+    const result =
+      verb === "pause"
+        ? managed.pause(id)
+        : verb === "resume"
+          ? managed.resume(id)
+          : verb === "run"
+            ? managed.runNow(id)
+            : // No default action. `latest` fires work, so a body that forgot to choose would fire work the user did not
+              // ask for — and §4.5's sixth rule is precisely that a backlog must not run without being announced.
+              // The schema makes `action` required, so a missing one is a 400 from the validator before this line.
+              managed.backlog(id, (request.body as JobBacklogBody | undefined)?.action ?? "latest");
+    if (!result.ok) throw refusal(result, request.crabbyRequestId);
+    audit(JOB_VERB_LOGGED[verb], result.job.id, request, {
+      ...(verb === "backlog"
+        ? { action: (request.body as JobBacklogBody | undefined)?.action }
+        : {}),
+      ...(result.taskId === undefined ? {} : { task: result.taskId }),
+      ...(result.acknowledged === undefined ? {} : { acknowledged: result.acknowledged }),
+    });
+    const payload = {
+      job: row(result.job),
+      note: result.note,
+      driven: true,
+      ...(result.run === undefined ? {} : { run: result.run }),
+      ...(result.taskId === undefined ? {} : { taskId: result.taskId }),
+      ...(result.acknowledged === undefined ? {} : { acknowledged: result.acknowledged }),
+      ...(result.openRunTaskId === undefined ? {} : { openRunTaskId: result.openRunTaskId }),
+    } satisfies JobActionBody;
+    // 201 with a location when the verb created a task, because that is what `POST /api/v1/tasks` answers with and a
+    // client that means to follow the run should not have to guess which verb made one: `run` and `backlog --latest` do.
+    if (result.taskId !== undefined)
+      return reply.code(201).header("location", `/api/v1/tasks/${result.taskId}`).send(payload);
+    return reply.send(payload);
+  };
+
+  const withScheduler =
+    (verb: JobVerb) =>
+    (
+      request: FastifyRequest<{ Params: { id: string }; Body: JobBacklogBody | undefined }>,
+      reply: FastifyReply,
+    ): FastifyReply => {
+      if (scheduler === undefined) throw absent(request.crabbyRequestId);
+      return act(verb, request, reply, scheduler);
+    };
+
+  app.post<{ Params: { id: string }; Body: JobBacklogBody | undefined }>(
+    "/api/v1/jobs/:id/pause",
+    withScheduler("pause"),
+  );
+  app.post<{ Params: { id: string }; Body: JobBacklogBody | undefined }>(
+    "/api/v1/jobs/:id/resume",
+    withScheduler("resume"),
+  );
+  app.post<{ Params: { id: string }; Body: JobBacklogBody | undefined }>(
+    "/api/v1/jobs/:id/run",
+    withScheduler("run"),
+  );
+  app.post<{ Params: { id: string }; Body: JobBacklogBody | undefined }>(
+    "/api/v1/jobs/:id/backlog",
+    { schema: { body: JobBacklogBody } },
+    withScheduler("backlog"),
+  );
 }
 
 // ------------------------------------------------------------------ approvals (§4.3, SECURITY.md §6.3)

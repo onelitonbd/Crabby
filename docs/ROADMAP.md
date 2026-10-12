@@ -742,6 +742,94 @@ all. `crabby gateway start --data-dir <a directory that does not exist>` still d
 instead of a shaped error naming `crabby init`, and that one stays recorded and unfixed, because who creates the state
 dir is a question §5's setup steps have not made explicit. The scheduler D-046 and D-057 remain what §4's list names
 next.
+**The scheduler (twenty-eighth slice).** §4's list ended with the scheduler and with two decisions that had already
+priced it: D-046 put `cron.schedule` at **T2** with an empty capability list, and D-057 made scheduled work a first-class
+surface in all four interfaces with `GET /jobs` and the pause verb shipping beside the subsystem rather than after it.
+What landed is the subsystem minus the two things a route cannot do, and the minus is the interesting part.
+`packages/agent-runtime/cron.ts` owns the grammar and the clock; `packages/agent-runtime/scheduler.ts` owns the decisions
+and defines `JobStore` as the seam it reads through (`ARCHITECTURE.md` §19's direction, the same split `approvals.ts` set);
+schema version 5 adds `job` and `job_run`; `packages/tools/cron.ts` is the executor half of §4.2's row and the only way a
+job comes into existence in this build; §4.3's seven paths answer over HTTP; and `crabby job` gains the six verbs C12
+describes, with `edit` left planned for the reason C12-05 gives. `/status`'s scheduler row and a `jobs` block in
+`/diagnostics` report the subsystem from the composition, and `crabby status` prints both plus the fix line for a backlog
+nobody has answered.
+
+Seven things about a schedule were undecided, because §4.2 says "cron expression" and stops, and a timer is standing
+authority: an expression that comes to mean something other than what the user approved is a grant nobody gave. **D-103**
+records them — five fields at minute resolution with seconds refused rather than truncated, `@daily` and `L W #` and `a/n`
+and a reversed range refused with the grammar in the sentence; the device's own wall clock, so `utc_offset_minutes` is
+written at creation and every rendering of a next fire carries the stamp beside the instant, rendered by the Gateway
+because the Gateway is the party that reads the clock; a local minute the zone skips is **skipped, never moved, and records
+nothing**; Vixie's OR when both day fields are restricted, with a bare `*` unrestricted and `*/2` a restriction; a `7` in
+the day-of-week column refused rather than read as Sunday; the forward search bounded at 1500 days, the bound arriving as
+a `no_occurrence` refusal at creation; missed occurrences capped at 1000 with the cap reported beside the count; and the
+tick interval internal, because §5.2's limits table prices no scheduler row and a knob no document priced is a knob that
+changes behaviour no document describes.
+
+§4.5's seven rules are kept by shape rather than by promise, and the shape is worth stating because it is the part a
+later slice would otherwise rebuild. A fire goes through the *same* `recordAndDriveTask` a `POST /api/v1/tasks` reaches,
+extracted in this slice so that one act has one implementation: that is what makes "every execution is a fresh policy
+evaluation" true rather than intended, and what stops a timer from gaining an authority its creator never held. A run that
+cannot get an approval stops and is recorded as `waiting_on_approval` from the state the loop already moved the task into
+— the scheduler reads the fact instead of forming an opinion — and the run stays open, which is also what keeps the job
+from firing another run beside a prompt nobody answered. The capabilities a run gets are the intersection of the job's
+recorded set and what its creator's identity holds *now*, computed at every fire and again at every resume (D-054), and
+the narrowing is written to the row so it outlives the run. A revoked creator is refused with the person's name in the
+record and the job paused, because O-071 deletes the identity row and a job that cannot name a person cannot be audited.
+A pause is not a cancellation and says so in as many words, naming `crabby task cancel <id>` for the run already in
+flight. And a device killed overnight comes back to one `missed` row per job standing for a counted number of
+occurrences, printed by the startup banner and by `crabby status`, answered by `crabby job backlog <id> --latest|--skip`
+and recorded either way — with the rows keeping their outcome and gaining the moment the user answered, because D-065's
+rule about not quietly editing the past applies to a timer's history too.
+
+The questions a reviewer would ask, and the answers this slice committed to. **Why is there no `POST /api/v1/jobs`?**
+Because a route cannot open an approval — only the loop does, and only from `policy.evaluate`'s verdict (D-084) — so a
+creation route would either write a job nobody reviewed or refuse after accepting the request. That is C12-09's reasoning
+for refusing `crabby job create`, and it is why F-57's `schedule` field on `POST /tasks` stays absent: amended in this
+slice, its absence stopped being an unbuilt milestone and became a decision with a closing condition (give the route a way
+to open the T2 approval the field implies, which is also what `job edit` waits on). **Why does `GET /api/v1/jobs` answer
+on a Gateway that composed no runner?** Because the rows belong to the install rather than to the process, and a list that
+501'd would hide them exactly when a provider broke — which is when a paused list matters most. Reads therefore answer from
+the table with `driven: false` and the sentence that explains it; writes answer `501 platform-unsupported`, the class §6
+gives "this Gateway cannot do that here", because a client that read it as transient would retry forever. **Why is the
+scheduler composed inside `buildApp` while `cron.schedule`'s sink is bound after it returns?** A fired job needs the
+runner, the journal and the arbiter that `buildApp` owns, and a scheduler built by the caller would have to be handed all
+four — which is how two compositions end up disagreeing about which manager a stop goes through. The two parties need each
+other, so one of them is a holder. **Why does `cron.schedule` appear in `GET /api/v1/tools` only when a runner exists?**
+§5.1's "hidden is better than failing" applied to a subsystem rather than to a permission: a row advertising a timer
+nothing would ever fire is a promise the process cannot keep, so F-55's count is 8 where a runner was composed and 7 where
+it was not, and `combineToolSurfaces` makes a duplicate name fatal at composition instead of last-one-wins. **Why has
+`job.client_id` no foreign key?** A cascade would delete standing authority the user can no longer see, and `SET NULL`
+would leave a job that runs as nobody; what has to survive a revocation is the job, so that it can be refused with a name
+in the record. `job_run.task_id` does cascade — to `SET NULL` — because §7 deletes a conversation's tasks and a run row
+that vanished with its task would take the outcome of work that already happened with it. **Why has `JobPatch` no
+`objective` and no `createdBy`?** So that no code path in the repository can perform a material change: the `SET` list has
+no column to perform it with, and the test smuggles one past the type to prove the statement refuses it. **Why are there no
+`job.*` events?** `Event.taskId` is required, so `POST /jobs/{id}/pause` has nothing to publish under; O-070 is amended
+with the two closers (a taskless `sys_` envelope, or a session-scoped `job.*` broadcast) and a Scheduled pane polls until
+one of them lands.
+
+One defect the tests found and the slice fixed, recorded because the shape of the mistake is the reason it survived until
+now: `parseTail` puts a boolean flag in `tail.booleans` *with its `--` prefix*, so `crabby job backlog <id> --latest`
+looked for `latest`, found nothing, and told a user who had answered the question that they had not answered it. A Set
+whose keys carry a prefix is not discoverable by reading the verb; it is discoverable by running it, which is what the
+nine CLI tests in `tests/unit/cli.test.ts` now do for every usage path this noun has.
+
+Deliberately not here: `crabby job edit` and the re-approval it implies (C12-05, D-084); any creation path outside
+`cron.schedule` (C12-09); a per-job model pin, which needs a `modelId` column and schema version 6 (F-57); deferral for a
+paused or locked vault, whose state word exists in the vocabulary and which no code in this build can produce because
+there is no vault (F-56); a `limits.*` key for the tick; an `--each` answer to a backlog, which is the burst §4.5 forbids;
+Telegram's `/jobs` (§7.4) and the TUI's sixth pane (P-010 gates Ink 8) and the Web `Scheduled` pane, all three being M3's
+parallel surfaces over the routes that now exist; and a `job.*` event, for the reason O-070 now carries. Documents moved
+beside the code: `docs/INTERFACES_AND_API.md` §4.1's two rows, §4.3's job row rewritten around the seven paths, §7.1's
+inventory and a new behaviour row for all six verbs, and §8 regenerated to 25 rows; `docs/DATA_AND_MEMORY.md` §2's
+`crabby.sqlite3` row at version 5 and a Job repository bullet in §5; `DECISIONS.md` with D-103, O-070 amended, §4A's map
+and the counter at 103; `docs/CONSISTENCY_REVIEW.md` with F-55 and F-57 amended rather than closed; and `scripts/parity.ts`'
+matrix row for "Review scheduled jobs", which is what makes §8 say the same thing as the routes. Gates: `typecheck`,
+`lint`, `format:check`, `npm test` 561/561 (62 new: 9 cron, 21 scheduler, 8 storage, 5 tool-and-composition, 10 route, 9
+CLI), `test:security` 138/138, `test:parity` and `docs:check` green.
+
+
 
 
 ## 5. Phase M3 — Four interfaces in parallel

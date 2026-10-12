@@ -29,6 +29,7 @@ import {
   type LoopLimits,
   type LoopOutcome,
   type LoopSubject,
+  type RunOrigin,
   type SuspendedRun,
   type ToolSurface,
 } from "./loop.ts";
@@ -62,6 +63,10 @@ export interface StartInput {
   readonly taskId: string;
   readonly subject: LoopSubject;
   readonly correlationId?: string | undefined;
+  /** The identity the run belongs to, handed to every tool this run executes (`RunOrigin`). Optional for the reason the
+   *  loop's own field is: a harness has no identity to record, and a run started by the scheduler carries the job's
+   *  creator rather than the process's. */
+  readonly origin?: RunOrigin | undefined;
 }
 
 export type StartCode = "in-flight" | "parked" | "not-found" | "failed";
@@ -228,6 +233,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         // that something is in flight — which is what lets it tell "nothing to stop" from "a step is moving".
         signal: deps.cancellation.signalFor(input.taskId),
         ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+        ...(input.origin === undefined ? {} : { origin: input.origin }),
       }),
     );
     return { ok: true, taskId: input.taskId, run };

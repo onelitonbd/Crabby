@@ -376,50 +376,67 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "job",
     verb: "ls",
-    summary: "scheduled jobs and their next run",
-    flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (the scheduler, D-046)",
+    summary: "scheduled jobs: name, schedule, next run, last outcome, state word (C12-01)",
+    flags: ["--state S", "--quiet", "--json"],
+    // `ready` because the route behind it is: `GET /api/v1/jobs` answers from the job table whether or not this Gateway
+    // composed a scheduler, and says which of those it is (`driven`) instead of listing rows that cannot fire. `--quiet`
+    // is ids only, for §10's scripting contract.
+    status: "ready",
   },
   {
     noun: "job",
     verb: "show",
-    summary: "one job's plan and last runs",
+    summary: "one job: the capability set it holds, who it runs as, its last runs (C12-02)",
     flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (the scheduler)",
+    status: "ready",
   },
   {
     noun: "job",
     verb: "pause",
-    summary: "stop a job firing until resumed",
-    flags: [],
-    status: "planned",
-    milestone: "M2 (the scheduler; a job you cannot pause is standing authority, D-057)",
+    summary: "stop a job firing until resumed; takes effect before the next tick (C12-03)",
+    flags: ["--json"],
+    status: "ready",
   },
   {
     noun: "job",
     verb: "resume",
-    summary: "start a paused job again",
-    flags: [],
-    status: "planned",
-    milestone: "M2 (the scheduler)",
+    summary:
+      "start a paused job again, re-evaluating the grants rather than trusting the last evaluation (C12-03)",
+    flags: ["--json"],
+    status: "ready",
   },
   {
     noun: "job",
     verb: "run-now",
-    summary: "trigger one run without changing the schedule",
-    flags: [],
-    status: "planned",
-    milestone: "M2 (the scheduler)",
+    summary:
+      "one run outside the schedule, followed to its end; exit 3 if it stops at an approval (C12-04)",
+    flags: ["--json", "--detach"],
+    status: "ready",
+  },
+  {
+    noun: "job",
+    verb: "backlog",
+    summary:
+      "answer for the runs that passed while the host was down: --latest or --skip, recorded either way (C12-06)",
+    flags: ["--latest", "--skip", "--json"],
+    // Not in §7.1's inventory row when it was written, and added to it by the slice that built it: C12-06 documents the
+    // verb, `POST /api/v1/jobs/{id}/backlog` answers it, and §4.5's sixth rule is the reason it exists. A noun whose
+    // documented behaviour no interface can perform is the parity rule broken in the direction nobody notices.
+    status: "ready",
   },
   {
     noun: "job",
     verb: "edit",
     summary: "change what a job runs",
     flags: [],
+    // Planned and not missing, and the distinction is the whole row. C12-05's content is "schedule, objective, model,
+    // recipients" — the material half — which §4.5 prices as re-approval, and no route in this build can open an approval
+    // (D-084): a verb that wrote the objective would be a material change riding on the old authorisation, exactly what
+    // C12-05 says cannot happen. The non-material half does have a route, `PATCH /api/v1/jobs/{id}` (name and schedule,
+    // with `objective` absent from the body schema so the refusal is structural), which W16-06's edit sheet uses; the verb
+    // arrives when an edit can carry a re-approval with it rather than implying one happened.
     status: "planned",
-    milestone: "M2 (the scheduler; T2/T3 by what changes)",
+    milestone: "the first release that can re-approve a material change (§4.5, D-084)",
   },
   {
     noun: "logs",

@@ -280,18 +280,19 @@ describe("upgrading", () => {
     // §2.6 is "upgrade = re-install", and on a phone that means losing the task history that outlives an approval.
     const { db, close } = fileDb();
     // Undoing *this* milestone's migration means undoing every migration after it too: a real v1 file has no `approval`
-    // table, no `cancellation_json` column and no `checkpoint` table, and a fixture that left them in place would fail a
-    // later migration's CREATE or ALTER for a reason no upgrade would ever meet.
+    // table, no `cancellation_json` column, no `checkpoint` table and no job pair, and a fixture that left them in place
+    // would fail a later migration's CREATE or ALTER for a reason no upgrade would ever meet. `job_run` goes before `job`
+    // because it is the one holding the foreign key.
     db.exec(
       "DELETE FROM schema_migration; DROP TABLE approval; DROP TABLE checkpoint; " +
-        "ALTER TABLE task DROP COLUMN cancellation_json",
+        "DROP TABLE job_run; DROP TABLE job; ALTER TABLE task DROP COLUMN cancellation_json",
     );
     db.prepare("INSERT INTO schema_migration (version, name, applied_at) VALUES (1, ?, ?)").run(
       MIGRATIONS[0]?.name ?? "v1",
       new Date(0).toISOString(),
     );
     const task = createTask(db, { objective: "survives the upgrade" });
-    assert.deepEqual(migrate(db), { applied: [2, 3, 4], version: 4 });
+    assert.deepEqual(migrate(db), { applied: [2, 3, 4, 5], version: 5 });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,
       1,

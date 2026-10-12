@@ -222,7 +222,11 @@ export const MATRIX: readonly FeatureRow[] = [
   },
   {
     capability: "Review scheduled jobs",
-    api: "`GET /jobs`, `PATCH /jobs/{id}`, `POST /jobs/{id}/pause`",
+    // Six paths and no `POST /jobs`, and the absence is the decision C12-09 records: creation is `cron.schedule`, a T2
+    // call the user approved, so a route that created a job would be a second creation path with no approval in it.
+    api:
+      "`GET /jobs?state=`, `GET /jobs/{id}`, `PATCH /jobs/{id}`, `POST /jobs/{id}/pause`, " +
+      "`POST /jobs/{id}/resume`, `POST /jobs/{id}/run`, `POST /jobs/{id}/backlog`",
     cli: "`job …`",
     tui: "jobs pane",
     web: "Scheduled screen",

@@ -739,3 +739,205 @@ test("`crabby auth pair --restrict task.read` is accepted rather than reported a
     "it fails after accepting the flag, on the absent Gateway and not on the flag",
   );
 });
+
+// `crabby job` is D-057's third surface — the CLI's handle on a subsystem the other three interfaces render as a pane, a
+// sheet and a command. What is asserted here is the half §7.1 promises about a *process*: that the verbs are listed as
+// what they are, that a question the command can answer locally is answered locally at the usage code, and that a verb
+// with no Gateway fails instead of printing an answer it did not get. The rows themselves — the columns a list prints, the
+// two lines before a follow, the backlog sheet — are asserted against a live Gateway in tests/integration/jobs.test.ts.
+test("`crabby job` lists six verbs as ready and `edit` as planned, once each", () => {
+  const run = crabby(["--help"]);
+  assert.equal(run.code, 0, run.err);
+  const lines = run.out.split("\n");
+  for (const verb of ["ls", "show", "pause", "resume", "run-now", "backlog"]) {
+    const rows = lines.filter((line) => line.includes(`crabby job ${verb}`));
+    assert.equal(
+      rows.length,
+      1,
+      `two entries for \`job ${verb}\` is help that contradicts itself, and \`findCommand\` would resolve to whichever came first`,
+    );
+    assert.ok(
+      !(rows[0] ?? "").includes("planned"),
+      `\`job ${verb}\` has a route behind it (§4.3), so the row must not advertise a milestone that already delivered it`,
+    );
+    assert.match(
+      rows[0] ?? "",
+      /C12-0\d/,
+      "and the summary names the contract element the behaviour comes from",
+    );
+  }
+  const edit = lines.filter((line) => line.includes("crabby job edit"));
+  assert.equal(edit.length, 1);
+  assert.match(
+    edit[0] ?? "",
+    /planned for/,
+    "`job edit` is planned rather than missing, and says so",
+  );
+  assert.match(
+    edit[0] ?? "",
+    /§4\.5|D-084/,
+    "and names the section that defers it: a material change is re-approval, and no route in this build can open one",
+  );
+  assert.ok(
+    !lines.some((line) => line.includes("crabby job create")),
+    "C12-09: there is deliberately no `job create`, and a help row for one would be the second creation path the " +
+      "decision exists to refuse — a job is created by `cron.schedule` inside an approved run",
+  );
+});
+
+test("`crabby job show` with no id asks which job, and says where a job comes from", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["job", "show"], state);
+  assert.equal(
+    run.code,
+    2,
+    "§7.1 makes 2 the usage code, and no id is a usage question answered before any request",
+  );
+  assert.match(run.out, /which job/);
+  assert.match(run.out, /crabby job ls/, "the fix points at the verb that prints the ids");
+  assert.match(
+    run.out,
+    /cron\.schedule/,
+    "and at the only way a job comes to exist, because the absence of `job create` is a decision a user will otherwise " +
+      "read as a bug (C12-09)",
+  );
+});
+
+test("`crabby job backlog <id>` with no answer names both answers, and with two refuses to guess between them", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const neither = crabby(["job", "backlog", "job_1"], state);
+  assert.equal(
+    neither.code,
+    2,
+    "there is deliberately no default: one of the two answers fires work, and §4.5's sixth rule is that a backlog must " +
+      "not run without the user being told",
+  );
+  assert.match(neither.out, /which answer/);
+  assert.match(neither.out, /--latest/);
+  assert.match(neither.out, /--skip/);
+  assert.match(
+    neither.out,
+    /recorded/,
+    "and says the answer is recorded either way, which is the point of the verb",
+  );
+  assert.ok(
+    !neither.out.includes("--each"),
+    "`each` is not offered: firing every missed occurrence is the burst §4.5 forbids, and a flag that appears in a fix " +
+      "line is a flag a user will try",
+  );
+
+  const both = crabby(["job", "backlog", "job_1", "--latest", "--skip"], state);
+  assert.equal(both.code, 2);
+  assert.match(
+    both.out,
+    /two different answers/,
+    'two flags is not a missing flag, and a refusal that said "one is required" to a user who gave two would be ' +
+      "arguing for a rule they did not break",
+  );
+});
+
+test("`crabby job backlog --latest` is accepted rather than reported as an unknown flag", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  // The registry entry has to name the flag for `parseTail` to put it in `booleans` rather than in `unknown`, and the key
+  // it puts there carries the `--`: a verb that looked for `latest` would find neither and would report a missing answer
+  // to a user who gave one. This assertion is the reason that mistake cannot come back quietly.
+  for (const flag of ["--latest", "--skip"]) {
+    const run = crabby(["job", "backlog", "job_1", flag], state);
+    assert.ok(
+      !run.out.includes("unknown flag") && !run.out.includes("which answer"),
+      `${flag} must be accepted by the verb, got ${JSON.stringify(run.out)}`,
+    );
+    assert.equal(
+      run.code,
+      1,
+      "it fails after accepting the flag, on the absent Gateway and not on the flag",
+    );
+    assert.match(run.out, /gateway/i);
+  }
+});
+
+test("`crabby job ls --state running` is refused locally, naming the vocabulary it does accept", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["job", "ls", "--state", "running"], state);
+  assert.equal(
+    run.code,
+    2,
+    "a task state is not a job state, and the command knows the difference without asking anybody",
+  );
+  assert.match(run.out, /bad --state/);
+  assert.match(run.out, /active \| paused/, "the fix names the two states a job can be in");
+  assert.ok(
+    !run.out.includes("gateway"),
+    "and it is answered before the Gateway is asked about, so the sentence is about the flag rather than about a " +
+      "connection the user does not have",
+  );
+});
+
+test("`crabby job ls --quiet` and `run-now --detach` are accepted flags, not unknown ones", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  for (const args of [
+    ["job", "ls", "--quiet"],
+    ["job", "run-now", "job_1", "--detach"],
+  ]) {
+    const run = crabby(args, state);
+    assert.ok(
+      !run.out.includes("unknown flag"),
+      `${args.join(" ")} must be accepted, got ${JSON.stringify(run.out)}`,
+    );
+    assert.equal(run.code, 1, "and fails on the absent Gateway rather than on the flag");
+  }
+});
+
+test("`crabby job pause --force` is an unknown flag, not silently ignored", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["job", "pause", "job_1", "--force"], state);
+  assert.equal(run.code, 2);
+  assert.match(run.out, /unknown flag/);
+  assert.ok(
+    !run.out.includes("paused"),
+    "the one lie this verb must never print: that a job stopped when nothing was asked",
+  );
+});
+
+test("`crabby job ls` with no Gateway says so rather than printing an empty list", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["job", "ls"], state);
+  assert.equal(
+    run.code,
+    1,
+    "a missing Gateway is a failure, not a usage question — the command was well formed",
+  );
+  assert.match(run.out, /gateway/i);
+  assert.match(run.out, /crabby gateway start/, "and names the command that ends the absence");
+  assert.ok(
+    !run.out.includes("no jobs"),
+    '"no jobs" is an answer about a Gateway that is running, and printing it here would be the difference between ' +
+      "nothing scheduled and nothing reachable",
+  );
+});
+
+test("`crabby job edit` names the release that brings it, at the usage exit code", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["job", "edit", "job_1"], state);
+  assert.equal(
+    run.code,
+    2,
+    "a planned command is a usage answer rather than a silent success, because C12-05's content is the material half of " +
+      "an edit and §4.5 prices that as re-approval",
+  );
+  assert.match(run.out, /not implemented yet/);
+  assert.match(
+    run.out,
+    /re-approve a material change/,
+    "and says what has to exist first, not merely that it is absent",
+  );
+  assert.match(run.out, /crabby --help/);
+});

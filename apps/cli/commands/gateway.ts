@@ -23,7 +23,14 @@ import {
 import { type DataLayout, homeDirectory } from "@crabby/platform";
 import { composeProviders, selectDefaultModel } from "@crabby/providers";
 import { DB_FILE_NAME, migrate, openDatabase, schemaVersion, taskScratch } from "@crabby/storage";
-import { createFileTools, defaultRealpathOf } from "@crabby/tools";
+import {
+  combineToolSurfaces,
+  createFileTools,
+  createSchedulerTools,
+  defaultRealpathOf,
+  SCHEDULER_TOOL,
+  type SchedulerToolOptions,
+} from "@crabby/tools";
 import { parseTail, unknownFlagMessage } from "../args.ts";
 import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
@@ -117,11 +124,42 @@ async function runStart(
    *  one of them exists, and a Gateway with an executor but no model would be a Gateway that accepts a task and then
    *  fails it at the first provider call, which is a worse answer than refusing to drive at all. Absent means
    *  `POST /api/v1/tasks` records a task and nothing moves it, and the `tasks` line below says so in as many words. */
-  const drive =
+  /** `cron.schedule`'s sink, bound after `buildApp` returns, because the two parties need each other and one of them has
+   *  to be a holder: the runner needs an executor to run with, and the scheduler is composed *inside* `buildApp` because a
+   *  fired job needs the runner, the journal and the arbiter it composes. The refusal below is unreachable in a Gateway
+   *  that declared the tool at all — the surface is composed only when a runner is, and a runner means a scheduler — and
+   *  reachable in a test that composes the tools on their own, which is the case it exists to answer rather than hang. */
+  let scheduleSink: SchedulerToolOptions["schedule"] | undefined;
+  const schedulerTools = createSchedulerTools({
+    schedule: (input) =>
+      scheduleSink === undefined
+        ? {
+            ok: false,
+            code: "unavailable",
+            reason:
+              "this process composed no scheduler, so there is nothing to create a job in: a job is a task that runs " +
+              "later, and `cron.schedule` is declared only beside a runner that can run it",
+          }
+        : scheduleSink(input),
+    limits: loaded.limits,
+  });
+  /** The one executor the runner is given, which is a *combination* rather than the file tools alone: §4.1 registers a
+   *  tool by name across the whole composition and `combineToolSurfaces` makes a duplicate fatal at startup instead of
+   *  last-one-wins. Composed only when a runner will exist, for the reason `createSchedulerTools`'s own header gives —
+   *  §5.1's "hidden is better than failing" applied to a subsystem: a Gateway that drives no tasks must not advertise a
+   *  way to create a timer nothing would ever fire, because the row it creates would read as "soon" forever. */
+  const composed =
     executor === undefined || !selected.ok
       ? undefined
+      : combineToolSurfaces([executor, schedulerTools]);
+  // Both halves of the condition are named again here, for the reason the banner below names them: `composed` is built
+  // from `selected`, so "there is an executor" and "a model was selected" are the same fact seen from two places, and
+  // TypeScript narrows the second only from a test that mentions it.
+  const drive =
+    composed === undefined || !selected.ok
+      ? undefined
       : {
-          tools: executor,
+          tools: composed,
           provider: selected.provider,
           modelId: selected.modelId,
           // §8's resolver, and the *same* one the executor defaults to: a policy that resolved a symlink and an
@@ -141,7 +179,14 @@ async function runStart(
     startedAt,
     listenerMode: "local",
     providers,
-    ...(executor === undefined ? {} : { declares: executor.declares }),
+    // The declarations `GET /api/v1/tools` merges §4.1's runtime fields from: the combined surface when a runner exists,
+    // so `cron.schedule` is reported as implemented exactly when a job could fire, and the file executor alone when it
+    // does not — a count that rose on a Gateway that drives nothing would be F-55's number lying.
+    ...(composed === undefined
+      ? executor === undefined
+        ? {}
+        : { declares: executor.declares }
+      : { declares: composed.declares }),
     ...(drive === undefined ? {} : { drive }),
   });
 
@@ -219,8 +264,15 @@ async function runStart(
   } else {
     renderer.line(
       "tools",
-      `${executor.declarations().length} declared by the file executor over ${roots.length} root(s); ` +
-        "the rows nothing implements still name their runtime fields as pending (F-55)",
+      `${executor.declarations().length} declared by the file executor over ${roots.length} root(s)` +
+        (composed === undefined
+          ? ", and nothing else: a Gateway that drives no tasks declares no way to create a timer"
+          : `, plus ${SCHEDULER_TOOL} from the scheduler it drives jobs through — the only path that creates one, ` +
+            "because a route or a verb that made a job would be a creation path with no approval in it (C12-09)"),
+    );
+    renderer.line(
+      "tools",
+      "the rows nothing implements still name their runtime fields as pending (F-55)",
     );
   }
   // Both halves of the condition are named because TypeScript cannot infer one from the other, and neither can a
@@ -250,6 +302,50 @@ async function runStart(
       "`POST /api/v1/tasks` still answers 201 and the task stays `queued`, which is the truth rather than a shrug: " +
         "§7.1's recovery marks it `interrupted` on the next start",
     );
+  }
+  // Started here rather than inside `buildApp`, and the reason is the timer: `start()` arms one, and a composition that
+  // armed it on behalf of every caller would hang every test that builds an app (`node --test` waits for the event loop
+  // to empty). Whoever owns the process's exit path owns the arm, and that is this command.
+  if (built.scheduler === undefined) {
+    renderer.line(
+      "scheduler",
+      "not composed: a job is a task that runs later, and this process drives no tasks, so no timer is armed",
+    );
+    renderer.fix(
+      "`GET /api/v1/jobs` still answers from the table with `driven:false` beside the rows, and `crabby job ls` reads it",
+    );
+  } else {
+    const managed = built.scheduler;
+    // Bound before `start()`, not after: the first tick can fire 250 ms later, and a fire that found no sink would be a
+    // job that ran and created nothing — the one failure §4.5's sixth rule exists to prevent.
+    scheduleSink = (input) => managed.schedule(input);
+    const startup = managed.start();
+    renderer.line(
+      "scheduler",
+      `${startup.active} active job(s), ${startup.paused} paused` +
+        `, next fire ${startup.nextRunAt ?? "none scheduled"}` +
+        (startup.reconciled > 0
+          ? `, ${startup.reconciled} run(s) the previous process left open are now closed against the state §7.1 gave them`
+          : ""),
+    );
+    // §4.5's sixth rule, printed rather than logged: after an overnight kill the occurrences that passed are recorded as
+    // `missed` rows and *not* fired, and the rule's whole content is that the user is told. A line per job, with the verb
+    // that answers it, is the telling — and the answer is recorded either way (C12-06).
+    for (const missed of startup.missed) {
+      renderer.line(
+        "missed runs",
+        `${missed.name} (${missed.jobId}): ${missed.occurrences} occurrence(s) passed while nothing was watching` +
+          (missed.capped ? ", counted to the cap rather than to the last one" : ""),
+      );
+      renderer.fix(
+        `crabby job backlog ${missed.jobId} --latest   (one run for the most recent, the rest acknowledged)`,
+      );
+      renderer.fix(`crabby job backlog ${missed.jobId} --skip   (acknowledge them, fire nothing)`);
+    }
+    if (startup.active > 0)
+      renderer.fix(
+        "a run stops and records `waiting on approval` if it cannot get one; nobody is answered on its behalf (§4.5)",
+      );
   }
   if (built.bootstrap) {
     renderer.line("", "");
@@ -284,6 +380,20 @@ async function runStart(
   // reconnecting to a cursor nothing will advance. D-066's budget is spent waiting rather than killing, and what is
   // still moving when the budget ends is printed rather than dropped, because §7.1's recovery owns it next and an
   // operator who does not know a task was cut off cannot tell an interruption from a hang.
+  // Registered before `runs`, and the order is the point: a tick that fired while the runner was already draining would
+  // create a task nobody is left to watch, and §4.5's "cancellable like a task" presumes a party there to cancel it.
+  // Stopping the arm first is what makes "runs settle, then streams drain, then SQLite closes" true rather than nearly.
+  shutdown.onShutdown("scheduler", async () => {
+    if (built.scheduler === undefined) return;
+    const report = built.scheduler.shutdown();
+    log.info("scheduler stopped", { ...report });
+    if (report.openRuns > 0)
+      renderer.line(
+        "scheduler",
+        `${report.openRuns} job run(s) were still open when the timer stopped; a run is a task, and ` +
+          "`crabby task cancel <taskId>` is how one is stopped (§4.5)",
+      );
+  });
   shutdown.onShutdown("runs", async () => {
     if (built.runner === undefined) return;
     // D-066's budget read out of `limits.*` and defaulted from `LIMITS_DEFAULTS` rather than restated here: a second

@@ -57,6 +57,7 @@
 import {
   type CheckpointBoundary,
   type CheckpointPending,
+  type ClientInterface,
   type ErrorClass,
   type Event,
   isTerminal,
@@ -181,6 +182,26 @@ export interface ToolRunContext {
    *  rather than merely asked. */
   readonly signal: AbortSignal;
   readonly deadlineMs: number | undefined;
+  /** Who the run belongs to, when the party that started it recorded one. An executor reads it and can never invent it,
+   *  which is why it arrives through this context rather than as a tool argument: `cron.schedule` writes a job that
+   *  §4.5 requires to name "a person rather than 'cron'" and to carry only the capability set that person held, and a
+   *  field the model could write would be a field the model could widen. Absent means the run has no recorded identity —
+   *  a harness, or a composition that predates the field — and a tool that needs one refuses instead of guessing. */
+  readonly origin?: RunOrigin;
+}
+
+/** The identity a run belongs to, as five facts rather than as a `PolicySubject`: policy decides with *grants*, and this
+ *  is the audit half §4.5 asks a scheduled job to carry. The two are kept apart on purpose, because an executor that
+ *  could read a subject's grants would be able to reason about authority it does not hold, and a job that recorded grants
+ *  instead of capability names would record an expansion that only made sense against the roots of the install that
+ *  created it. */
+export interface RunOrigin {
+  readonly clientId: string;
+  readonly clientName: string;
+  readonly interface: ClientInterface;
+  /** The §6.1 names as recorded on the identity, not the grants they expanded into. */
+  readonly capabilities: readonly string[];
+  readonly sessionId: string;
 }
 
 /** The seam `packages/tools` will fill (`ARCHITECTURE.md` §18, and §19's "the Agent Orchestrator depends on provider,
@@ -224,6 +245,9 @@ export interface RunInput {
   readonly ctx: EvalContext;
   readonly signal?: AbortSignal | undefined;
   readonly correlationId?: string | undefined;
+  /** Carried through to every `ToolRunContext` this run produces, and through a `SuspendedRun` into its resume, because
+   *  the identity a run belongs to does not change when a human answers a prompt in the middle of it. */
+  readonly origin?: RunOrigin | undefined;
 }
 
 /** A run stopped at a prompt. Process memory, not durable state — the header says why, and §7.1/§7.2 own the restart. */
@@ -721,6 +745,7 @@ export function createLoop(deps: LoopDeps): Loop {
     call: ToolCall,
     taskId: string,
     outer: AbortSignal | undefined,
+    origin: RunOrigin | undefined,
   ): Promise<{ outcome: ToolOutcome; abandoned: boolean }> {
     const priced = deadlineFor(call.tool, limits);
     // D-090: an `immediate` request is §6.2's safety-critical override, so the runtime stops waiting for a step that will
@@ -738,7 +763,12 @@ export function createLoop(deps: LoopDeps): Loop {
     const { value, abandoned } = await withDeadline(
       async (signal) => {
         try {
-          return await tools.run(call, { taskId, signal, deadlineMs });
+          return await tools.run(call, {
+            taskId,
+            signal,
+            deadlineMs,
+            ...(origin === undefined ? {} : { origin }),
+          });
         } catch (error) {
           // An executor that throws is a failed step, not a crashed task. Without this the promise `start()` returned
           // would reject with the task still in `running` and nobody left to drive it, which is a state with no terminal
@@ -842,7 +872,12 @@ export function createLoop(deps: LoopDeps): Loop {
     });
     if (begun.refusal !== undefined) return { ...begun, abandoned: false };
 
-    const ran = await runTool(input.call, state.input.taskId, state.input.signal);
+    const ran = await runTool(
+      input.call,
+      state.input.taskId,
+      state.input.signal,
+      state.input.origin,
+    );
     const outcome = ran.outcome;
     const doneAt = now();
     const next = [...input.messages, toolMessage(input.toolCallId, outcome.output)];

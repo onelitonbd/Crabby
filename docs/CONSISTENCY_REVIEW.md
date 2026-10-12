@@ -1159,6 +1159,34 @@ happened; the third did not, and the difference is worth stating rather than rou
 Still open, therefore: `outputSchema` is answered by nothing, `file.stat` is declared but unclassified, and the thirty-eight
 rows no executor implements are as silent as they were. The remaining work is not a merge but an executor for them.
 
+**Amendment (twenty-eighth slice): an eighth row is implemented, and it is the scheduler's.** `crabby gateway start` now
+composes a second surface beside the file executor — `createSchedulerTools`, which declares `cron.schedule` and nothing
+else — and hands `combineToolSurfaces`'s merged `declares` to `buildApp`, so a Gateway that composes a runner answers
+`runtime: {implemented: 8, described: 0, pending: 37}` where the amendment above answers 7 and 38. Three properties of
+that count are decisions rather than arithmetic, and each is the kind of thing a later slice would otherwise rediscover
+by reading a number and believing it:
+
+1. **The eighth row is declared only where a job can fire.** The combined surface is composed exactly when `drive` is —
+   an executor and a selected model, which is what makes a runner — and a Gateway with no runner keeps the file executor
+   alone and answers `implemented: 7`. §5.1's "hidden is better than failing" is about permissions, but it applies to a
+   subsystem for the same reason: a row advertising a timer nothing would ever fire is a promise the process cannot keep,
+   and `cron.schedule` called on such a Gateway would write a job whose next fire is a lie.
+2. **`described` stays 0, and the new row is why the count is still honest rather than merely unchanged.** The declaration
+   carries `inputSchema`, `limits` (D-074's `sqliteBusyTimeoutMs`, because §5.2 prices no `cron.*` class and the tool's
+   whole cost is two statements against the job table), `idempotent: false` — calling it twice creates two jobs that both
+   fire — and `sideEffects: "local"`, and no `outputSchema`. So `cron.schedule` joins the rows naming `["outputSchema"]`
+   alone, and the eighth implementation raises `implemented` without touching `described`, which is the difference the two
+   counts exist to keep visible.
+3. **A duplicate name is fatal at composition rather than last-one-wins.** `combineToolSurfaces` builds its owner map from
+   `specs()`, throws on a second declaration of one name, and runs `assertRegistrable` over the merge — §4.1's
+   registration rule applied to a *composition* of surfaces instead of to one, which is the point where two executors would
+   otherwise begin silently shadowing each other and a `run` would reach whichever was registered last.
+4. **Nine declarations now answer eight rows, and item 3's drift is unchanged rather than fixed.** `file.stat` still has
+   no row in §4.2's table, so the gap between what executors declare and what policy classifies is one row wide exactly
+   where the sixteenth slice measured it. The count moved and the drift did not, which is worth saying because a reader
+   who saw `implemented` go 7 → 8 and declarations go 8 → 9 could otherwise conclude the two numbers had been reconciled.
+   Nothing in this build classifies `file.stat`, and F-20's shape is still open.
+
 ### F-56 — §3.7 gives an adapter a vault handle, and nothing in the build resolves one
 
 **Severity: medium, open, and the same shape as F-52.** §3.7 is specific: provider credentials "are supplied once, stored
@@ -1205,15 +1233,32 @@ Two of the three missing fields belong to other milestones: capability narrowing
 since D-102 the *per-pairing* half of it is assigned — `--restrict` narrows an identity's baseline at the mint, and
 F-52's amendment records it — while the *per-task* half this row is about is still absent, because no field in
 `CreateTaskBody` can carry it and nothing builds a `PolicySubject` for a run; and `schedule` is the scheduler's, which
-`docs/ROADMAP.md` §4 lists and nothing has built. The model pin is the one D-101 sharpened, because
+`docs/ROADMAP.md` §4 lists and nothing has built. (Both halves of that last clause have since moved: D-102 gives a run a
+`PolicySubject`, and the twenty-eighth slice built the scheduler — see the amendment below, which is also where the
+`schedule` field's absence stops being an unbuilt milestone and becomes a decision.) The model pin is the one D-101 sharpened, because
 §3.6's sentence has two halves — "The user selects a default model **and may pin a model per task** or per interface
 session; per-task pinning wins" — and M2m implemented the first. So there is now a default with nothing able to override
-it, `TaskRecord` has no `model` column, and a pin would need schema version 5 plus an answer about whether a pinned model
+it, `TaskRecord` has no `model` column, and a pin would need schema version 6 — M2x spent 5 on §4.5's `job` and `job_run`
+tables — plus an answer about whether a pinned model
 survives a restart (D-065's checkpoint already carries `modelId`, which is the same fact recorded from the other side).
 
 **Closing condition:** the row loses the fields this build refuses, or the contract gains them — and for the model pin the
 second is the honest one, because a runner needs a `modelId` and §3.6 says where it comes from. Until then a runner takes
 the model from composition rather than from the task, and says so.
+
+**Amendment (twenty-eighth slice): `schedule` has a scheduler behind it, and the field stays out of `POST /tasks` on
+purpose.** The subsystem this row named as unbuilt now exists — `packages/agent-runtime/scheduler.ts` over schema version
+5's `job` and `job_run` tables, with `GET /jobs` and the pause verb shipped alongside it as `docs/ROADMAP.md` §4 required —
+and a schedule can be created today, through `cron.schedule`. That is a T2 tool call, so the expression, the name and the
+objective a job will run are shown to the user and approved before the row is written (D-046). What `POST /tasks`'s
+`schedule` field would be is a *second* creation path with no approval anywhere in it: a route cannot open an approval,
+because only the loop does that and only from `policy.evaluate`'s verdict (D-084), so a body field would either write a
+job nobody reviewed or refuse after accepting the request. The same reasoning is why C12-09 refuses `crabby job create`
+and why W16-12's "teach `crabby task run --schedule`" is deferred with this field rather than built beside it. The row in
+§4.3 therefore keeps documenting a field this build refuses, and the honest closing condition for that one is not "add the
+field" but "give the route a way to open the T2 approval the field implies" — which is the same condition `job edit`
+(C12-05) waits on. The other two fields are unchanged: capability narrowing per task still has no carrier, and the model
+pin still needs a `modelId` column and version 6.
 
 ## 3. Checks That Passed
 

@@ -70,7 +70,7 @@ function event(taskId: string, sessionId: string, payload: Record<string, unknow
 }
 
 describe("migrations", () => {
-  it("creates the six M1 tables, M2's approval queue and checkpoint, and a ledger row per migration", () => {
+  it("creates the six M1 tables, M2's approval queue, checkpoint and job pair, and a ledger row per migration", () => {
     const { db, close } = tempDb();
     const names = (
       db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]
@@ -82,13 +82,15 @@ describe("migrations", () => {
       "checkpoint",
       "client_identity",
       "idempotency",
+      "job",
+      "job_run",
       "pairing_code",
       "schema_migration",
       "task",
       "task_event",
     ])
       assert.ok(names.includes(wanted), `missing table ${wanted}`);
-    assert.equal(schemaVersion(db), 4);
+    assert.equal(schemaVersion(db), 5);
     // One row per migration, in order, and never an update to an old one: that is what `docs/DATA_AND_MEMORY.md`
     // §2.6's "configuration migrations must be considered when upgrading" means for this file — a v1 database gains a
     // table on the next start rather than being rebuilt, so an upgrade cannot silently drop a pending approval.
@@ -105,6 +107,7 @@ describe("migrations", () => {
         { version: 2, name: "approvals" },
         { version: 3, name: "task-cancellation" },
         { version: 4, name: "checkpoints" },
+        { version: 5, name: "jobs" },
       ],
       "one row per migration and never an update to an old one, so a file can say which version it is on",
     );
@@ -115,7 +118,7 @@ describe("migrations", () => {
     const { db, close } = tempDb();
     const second = migrate(db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 4);
+    assert.equal(second.version, 5);
     close();
   });
 

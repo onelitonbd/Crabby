@@ -369,7 +369,7 @@ export async function runTask(
  *  keeps streaming through a prompt because its whole job is to show what happens, while `run` exits 3 at one because
  *  its contract is to block until the task ends and `--wait-approval <n>` — the opt-in that would make blocking
  *  legitimate — is in no registry. */
-interface FollowInput {
+export interface FollowInput {
   readonly url: string;
   readonly client: GatewayClient;
   readonly layout: DataLayout;
@@ -397,7 +397,7 @@ function exitForState(state: TaskRecord["state"] | undefined): ExitCode | undefi
   return undefined;
 }
 
-async function followTask(input: FollowInput): Promise<ExitCode> {
+export async function followTask(input: FollowInput): Promise<ExitCode> {
   const { url, client, layout, renderer, taskId, types, stopAtApproval, exitOnOutcome } = input;
   // The task is read once before the stream opens, for a reason that is about hanging rather than about convenience: a
   // task that already reached a terminal state will never publish another event, so opening a stream for it would block

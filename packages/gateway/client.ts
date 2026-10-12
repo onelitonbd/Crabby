@@ -13,6 +13,8 @@ import {
   type CreateTaskBody,
   ErrorEnvelope,
   errorEnvelope,
+  type JobBacklogBody,
+  type PatchJobBody,
   type TaskState,
   validate,
 } from "@crabby/api-contracts";
@@ -170,6 +172,28 @@ export interface GatewayClient {
     body: { decision: "approve" | "deny"; scope?: string },
     idempotencyKey?: string,
   ): Promise<Response<unknown>>;
+  /** §4.5's list, and the read half of D-057's first-class surface: the rows every interface's `Scheduled` view answers
+   *  from. `state` is passed through as text so a typo is refused by the Gateway rather than answered with an empty list
+   *  that reads as "you have no jobs". */
+  jobs(options?: { state?: string }): Promise<Response<unknown>>;
+  /** One job with its run history, its unacknowledged `missed` rows and the wall-clock stamp beside the UTC instant
+   *  (D-103) — the whole of C12-02's fifteen lines and W16-08's sheet, in one request. */
+  job(id: string): Promise<Response<unknown>>;
+  /** The non-material half of an edit: a name and a schedule. `objective` is not a field of `PatchJobBody` at all,
+   *  because changing what a job does crosses into re-approval (§4.5) and no route can open one (D-084). */
+  patchJob(id: string, body: PatchJobBody): Promise<Response<unknown>>;
+  /** C12-03's pause, which takes effect before the next tick. A run already in flight keeps going and is stopped through
+   *  `cancelTask` — the same act §4.5 says a job is cancellable by. */
+  pauseJob(id: string): Promise<Response<unknown>>;
+  /** C12-03's resume. It re-evaluates the creating identity's *current* grants rather than restoring the ones recorded at
+   *  creation (D-054), and refuses when they no longer cover the job, so a revoked client cannot be revived by a timer. */
+  resumeJob(id: string): Promise<Response<unknown>>;
+  /** C12-04's explicit run outside the schedule, which changes nothing about the schedule. A fresh policy evaluation, so
+   *  it can stop at an approval — §7.1's exit `3` and not a silent nothing. */
+  runJob(id: string): Promise<Response<unknown>>;
+  /** C12-06's answer to §4.5's backlog. `action` is required on the wire for the reason the CLI asks rather than defaults:
+   *  one of the two choices fires work, and §4.5's sixth rule is that a backlog must not run unannounced. */
+  jobBacklog(id: string, body: JobBacklogBody): Promise<Response<unknown>>;
   authList(): Promise<Response<unknown>>;
   authRevoke(id: string): Promise<Response<unknown>>;
 }
@@ -280,6 +304,21 @@ export function createClient(input: {
         body,
         ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
       }),
+    jobs: (options = {}) =>
+      request(
+        `/api/v1/jobs${options.state === undefined ? "" : `?state=${encodeURIComponent(options.state)}`}`,
+      ),
+    job: (id) => request(`/api/v1/jobs/${encodeURIComponent(id)}`),
+    patchJob: (id, body) =>
+      request(`/api/v1/jobs/${encodeURIComponent(id)}`, { method: "PATCH", body }),
+    pauseJob: (id) =>
+      request(`/api/v1/jobs/${encodeURIComponent(id)}/pause`, { method: "POST", body: {} }),
+    resumeJob: (id) =>
+      request(`/api/v1/jobs/${encodeURIComponent(id)}/resume`, { method: "POST", body: {} }),
+    runJob: (id) =>
+      request(`/api/v1/jobs/${encodeURIComponent(id)}/run`, { method: "POST", body: {} }),
+    jobBacklog: (id, body) =>
+      request(`/api/v1/jobs/${encodeURIComponent(id)}/backlog`, { method: "POST", body }),
     authList: () => request("/api/v1/auth/clients"),
     authRevoke: (id) =>
       request(`/api/v1/auth/clients/${encodeURIComponent(id)}`, { method: "DELETE" }),

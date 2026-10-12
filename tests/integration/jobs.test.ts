@@ -37,18 +37,24 @@ import { dataLayout, homeDirectory } from "@crabby/platform";
 import { capabilitiesFor } from "@crabby/policy";
 import { composeProviders, FAKE_TOOL_MODEL_ID, type FakeStep } from "@crabby/providers";
 import {
+  getSession,
+  listSessions,
   migrate,
   mintPairingCode,
   openDatabase,
+  patchSession,
   redeemPairingCode,
   revoke,
   type SqliteDb,
+  sessionRowOf,
+  sessionRows,
   taskScratch,
 } from "@crabby/storage";
 import {
   combineToolSurfaces,
   createFileTools,
   createSchedulerTools,
+  createSessionTools,
   defaultRealpathOf,
   SCHEDULER_TOOL,
   type SchedulerToolOptions,
@@ -107,7 +113,29 @@ async function boot(options: BootOptions): Promise<Harness> {
           }
         : scheduleSink(input),
   });
-  const composed = options.noRunner ? undefined : combineToolSurfaces([files, schedulerTools]);
+  const composed = options.noRunner
+    ? undefined
+    : combineToolSurfaces([
+        files,
+        schedulerTools,
+        // The third surface the CLI composes, so that this harness is the composition `crabby gateway start` makes rather
+        // than two thirds of it — and so that the `GET /api/v1/tools` count below is a fact about a real install and not
+        // about a fixture that happens to omit a tool.
+        createSessionTools({
+          list: () => sessionRows(handle.db, listSessions(handle.db)),
+          rename: ({ id, title }) => {
+            const current = getSession(handle.db, id);
+            if (current === undefined)
+              return { ok: false as const, code: "not-found" as const, reason: `no session ${id}` };
+            const patched = patchSession(handle.db, id, {
+              title,
+              expectedRevision: current.revision,
+            });
+            if (!patched.ok) return patched;
+            return { ok: true as const, session: sessionRowOf(handle.db, patched.session) };
+          },
+        }),
+      ]);
   const drive =
     composed === undefined
       ? undefined
@@ -866,8 +894,9 @@ describe("the job routes on a Gateway that drives", () => {
       };
       assert.equal(
         body.runtime.implemented,
-        8,
-        "seven rows the file executor declares plus `cron.schedule`, which this Gateway can really run",
+        10,
+        "seven §4.2 rows the file executor declares, plus `cron.schedule`, plus the two conversation rows — the count a " +
+          "real `crabby gateway start` answers with, because this harness composes the same three surfaces it does",
       );
       assert.equal(
         body.runtime.described,

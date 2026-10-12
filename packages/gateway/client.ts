@@ -10,11 +10,13 @@ import path from "node:path";
 import process from "node:process";
 import {
   type CancelTaskBody,
+  type CreateSessionBody,
   type CreateTaskBody,
   ErrorEnvelope,
   errorEnvelope,
   type JobBacklogBody,
   type PatchJobBody,
+  type PatchSessionBody,
   type TaskState,
   validate,
 } from "@crabby/api-contracts";
@@ -194,6 +196,15 @@ export interface GatewayClient {
   /** C12-06's answer to §4.5's backlog. `action` is required on the wire for the reason the CLI asks rather than defaults:
    *  one of the two choices fires work, and §4.5's sixth rule is that a backlog must not run unannounced. */
   jobBacklog(id: string, body: JobBacklogBody): Promise<Response<unknown>>;
+  /** C11-01's list: conversations in last-activity order, each with the state word and title a list line prints. */
+  sessions(options?: { origin?: string }): Promise<Response<unknown>>;
+  /** One conversation with the tasks in it, and the `etag` that a rename has to send back as `If-Match`. */
+  session(id: string): Promise<Response<unknown>>;
+  /** W15-03's creation: `{}` is a valid body, because a new session starts empty and un-named. */
+  createSession(body?: CreateSessionBody): Promise<Response<unknown>>;
+  /** W15-04 and T16-05's one write path. The token is required by §2's concurrency row, so it is a parameter rather than
+   *  an option: a client that could forget it would be a client that silently overwrites another interface's rename. */
+  patchSession(id: string, body: PatchSessionBody, ifMatch: number): Promise<Response<unknown>>;
   authList(): Promise<Response<unknown>>;
   authRevoke(id: string): Promise<Response<unknown>>;
 }
@@ -319,6 +330,18 @@ export function createClient(input: {
       request(`/api/v1/jobs/${encodeURIComponent(id)}/run`, { method: "POST", body: {} }),
     jobBacklog: (id, body) =>
       request(`/api/v1/jobs/${encodeURIComponent(id)}/backlog`, { method: "POST", body }),
+    sessions: (options = {}) =>
+      request(
+        `/api/v1/sessions${options.origin === undefined ? "" : `?origin=${encodeURIComponent(options.origin)}`}`,
+      ),
+    session: (id) => request(`/api/v1/sessions/${encodeURIComponent(id)}`),
+    createSession: (body = {}) => request("/api/v1/sessions", { method: "POST", body }),
+    patchSession: (id, body, ifMatch) =>
+      request(`/api/v1/sessions/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body,
+        headers: { "if-match": `"${ifMatch}"` },
+      }),
     authList: () => request("/api/v1/auth/clients"),
     authRevoke: (id) =>
       request(`/api/v1/auth/clients/${encodeURIComponent(id)}`, { method: "DELETE" }),

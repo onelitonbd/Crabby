@@ -69,6 +69,7 @@ import {
   ApprovalListQuery,
   CancelTaskBody,
   type ClientInterface,
+  CreateSessionBody,
   CreateTaskBody,
   type Event,
   errorEnvelope,
@@ -86,7 +87,17 @@ import {
   PairCodeRequestBody,
   PairRequestBody,
   PatchJobBody,
+  PatchSessionBody,
+  parseIfMatch,
   SCHEMA_VERSION,
+  SESSION_ORIGINS,
+  type SessionActionBody,
+  type SessionActionCode,
+  type SessionDetailBody,
+  type SessionListBody,
+  type SessionTaskFacts,
+  sessionETag,
+  sessionRow,
   TaskId,
   type TaskRecord,
   type TaskState,
@@ -113,17 +124,22 @@ import type { Provider, ProviderComposition } from "@crabby/providers";
 import {
   appendEvent,
   authenticate,
+  createSession,
   createSqliteApprovalStore,
   createSqliteCheckpointStore,
   createSqliteJobStore,
   createSqliteJournal,
   createTask,
+  ensureSession,
   getIdentity,
+  getSession,
   getTask,
   type Identity,
   listIdentities,
+  listSessions,
   listTasks,
   mintPairingCode,
+  patchSession,
   pruneEvents,
   REPLAY_WINDOW_EVENTS,
   readEvents,
@@ -134,6 +150,10 @@ import {
   revoke,
   type SqliteDb,
   schemaVersion,
+  sessionTaskCount,
+  sessionTaskFacts,
+  sessionTaskFactsFor,
+  sessionTasks,
   stateCounts,
   taskScratch,
   transact,
@@ -147,6 +167,7 @@ import {
   GatewayError,
   JOB_REFUSAL_CLASS,
   notFound,
+  SESSION_REFUSAL_CLASS,
   validationError,
 } from "./errors.ts";
 import { comment, frame, gapFrame, HEARTBEAT_MS, openStream, type StreamState } from "./sse.ts";
@@ -468,6 +489,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   registerAuthRoutes(app, deps, bus);
   registerTaskRoutes(app, deps, bus, checkpoints, cancellation, runner);
   registerJobRoutes(app, deps, jobStore, scheduler);
+  registerSessionRoutes(app, deps);
   registerApprovalRoutes(app, deps, bus, approvals);
   registerEventStream(app, deps, bus);
 
@@ -589,6 +611,18 @@ function recordAndDriveTask(
   const created = createTask(deps.db, {
     objective: input.objective,
     ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+  });
+  // The conversation record behind the id, written in the same act as the task rather than left to a route: `createTask`
+  // has minted `ses_…` values since schema version 1 and nothing owned them, so an install could hold forty conversations
+  // that no list could print (C11-01) and no sidebar could render (W15-01). `ensureSession` creates the row when nothing
+  // owns the id, names an un-named one from this objective — W15-03's "the title becomes the first question asked in it",
+  // and in a build with no message store the first question is the first task's — and records the activity either way. It
+  // never overwrites a title the user chose.
+  ensureSession(deps.db, {
+    id: created.sessionId,
+    titleFrom: input.objective,
+    origin: input.origin.interface,
+    now: created.createdAt,
   });
   const event: Event = {
     id: newId("evt"),
@@ -1153,6 +1187,188 @@ const JOB_VERB_LOGGED: Record<JobVerb, string> = {
   run: "job run outside its schedule",
   backlog: "job backlog answered",
 };
+
+/** §4.3's conversation paths — four of the nine it lists, and the five that are not here are absent for a reason a client
+ *  can see rather than for want of a file.
+ *
+ *  What exists: `GET /api/v1/sessions` (C11-01's list, W15-01's rows), `POST /api/v1/sessions` (W15-03's "starts empty and
+ *  un-named"), `GET /api/v1/sessions/{id}` and `PATCH /api/v1/sessions/{id}` (W15-04 and T16-05's one write path with two
+ *  entry points). What does not, and why: `DELETE /api/v1/sessions/{id}` is `history.deleteConversation` at **T3** (§4.2),
+ *  which C11-05 keeps as the one command that destroys history and W15-07 prices with a typed confirmation — a delete this
+ *  route could reach would be a second path to the same irreversible act with no confirmation on it; and `messages`,
+ *  `compact`, `export`, `context` and `pin` all read a message store and D-027's context manager, neither of which exists,
+ *  so `GET /api/v1/sessions/{id}` names them in its `absent` list instead of answering `0 turns` for a conversation that
+ *  has forty.
+ *
+ *  `PATCH` requires an `If-Match` token and answers with an `ETag`, because §2's concurrency row asks for exactly that on
+ *  session mutations: a title is the one field four interfaces can edit inline at the same moment (W1-02 in the status bar,
+ *  W15-04 in the sidebar, T16-05 in the switcher), and last-write-wins there is a rename that silently disappears. The
+ *  token is the row's `revision`, which counts edits and not activity: a task moving in a conversation touches
+ *  `last_activity_at` without spending the token a phone is holding, so an inline rename does not fail because the agent
+ *  answered a question while the user was typing. */
+function registerSessionRoutes(app: FastifyInstance, deps: GatewayDeps): void {
+  /** A session with no tasks yet, which is what W15-03 creates: the facts are zeroes rather than an absent lookup, so the
+   *  state word is `idle` and a client has nothing to guess about. */
+  const NO_TASKS: SessionTaskFacts = { tasks: 0, running: 0, waitingApproval: 0 };
+
+  /** C11-03's columns this build cannot answer, named rather than omitted: turns need a message store, budget and pinned
+   *  items need D-027's context manager. A detail body that left them out would let a client render a zero for something
+   *  it never asked about, and `crabby session show` stays planned for the same reason. */
+  const ABSENT = ["messages", "context", "pins"] as const;
+  /** The bound on the tasks a detail answer carries, with the true total beside it — the same shape a job's run history
+   *  uses, because a conversation kept for a month holds more tasks than a phone should render in one response. */
+  const TASK_LIMIT = 20;
+
+  const refusal = (
+    result: { readonly code: SessionActionCode; readonly reason: string },
+    requestId: string | undefined,
+  ): GatewayError =>
+    new GatewayError({
+      code: `session_${result.code}`,
+      message: result.reason,
+      class: SESSION_REFUSAL_CLASS[result.code],
+      retryable: false,
+      ...(requestId === undefined ? {} : { requestId }),
+    });
+
+  app.get<{ Querystring: Record<string, string> }>("/api/v1/sessions", async (request, reply) => {
+    const wanted = request.query.origin;
+    if (wanted !== undefined && !(SESSION_ORIGINS as readonly string[]).includes(wanted))
+      throw validationError(
+        [
+          {
+            path: "origin",
+            kind: "enum",
+            message:
+              `must be one of ${SESSION_ORIGINS.join(", ")} — W15-11's attribution is the four interfaces, and a ` +
+              "filter nobody can spell is a list nobody can trust",
+          },
+        ],
+        request.crabbyRequestId,
+      );
+    const records = listSessions(deps.db, {
+      ...(wanted === undefined ? {} : { origin: wanted as ClientInterface }),
+    });
+    // One aggregate query for the page rather than one per row: C11-01's list is what a phone renders on a pull-down,
+    // and a list that cost one query per line would not survive the render.
+    const facts = sessionTaskFacts(deps.db);
+    const items = records.map((record) => sessionRow(record, facts.get(record.id) ?? NO_TASKS));
+    const body = {
+      items,
+      count: items.length,
+      sortedBy: "lastActivity",
+    } as const satisfies SessionListBody;
+    return reply.send(body);
+  });
+
+  app.post<{ Body: CreateSessionBody }>(
+    "/api/v1/sessions",
+    { schema: { body: CreateSessionBody } },
+    async (request, reply) => {
+      const client = request.crabbyClient;
+      const record = createSession(deps.db, {
+        ...(request.body.title === undefined ? {} : { title: request.body.title }),
+        ...(request.body.model === undefined ? {} : { model: request.body.model }),
+        // W15-11's attribution comes from the credential and never from the body: an interface a caller declares is a
+        // claim, and the list this row appears in is where a user notices "this appeared on its own".
+        ...(client === undefined ? {} : { origin: client.interface }),
+      });
+      deps.log.info("session created", {
+        session: record.id,
+        ...(client === undefined ? {} : { by: client.id, via: client.interface }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        ...(record.title === undefined
+          ? { title: "un-named, per W15-03 — it becomes the first question asked in it" }
+          : { title: record.title }),
+      });
+      const body = {
+        session: sessionRow(record, NO_TASKS),
+        note:
+          record.title === undefined
+            ? "created empty and un-named: the title becomes the first question asked in it (W15-03), and until then " +
+              "`crabby session ls` prints `un-named`"
+            : `created as '${record.title}'`,
+      } satisfies SessionActionBody;
+      return reply
+        .code(201)
+        .header("location", `/api/v1/sessions/${record.id}`)
+        .header("etag", sessionETag(record.revision))
+        .send(body);
+    },
+  );
+
+  app.get<{ Params: { id: string } }>("/api/v1/sessions/:id", async (request, reply) => {
+    const record = getSession(deps.db, request.params.id);
+    if (record === undefined)
+      throw notFound(`session ${request.params.id}`, request.crabbyRequestId);
+    const body = {
+      session: sessionRow(record, sessionTaskFactsFor(deps.db, record.id)),
+      tasks: sessionTasks(deps.db, record.id, TASK_LIMIT),
+      taskCount: sessionTaskCount(deps.db, record.id),
+      absent: ABSENT,
+    } satisfies SessionDetailBody;
+    return reply.header("etag", sessionETag(record.revision)).send(body);
+  });
+
+  app.patch<{ Params: { id: string }; Body: PatchSessionBody }>(
+    "/api/v1/sessions/:id",
+    { schema: { body: PatchSessionBody } },
+    async (request, reply) => {
+      const header = request.headers["if-match"];
+      const token = parseIfMatch(typeof header === "string" ? header : undefined);
+      if (token === undefined)
+        // A distinct code rather than `validation_failed`, because the fix is not in the body and a client that reads the
+        // code can act: fetch the row, take its `etag`, send it back.
+        throw new GatewayError({
+          code: "if_match_required",
+          message:
+            'a session mutation carries the revision it read, as `If-Match: "3"` for a row whose `revision` is 3 — ' +
+            "§2's concurrency rule, so two interfaces editing one title do not silently overwrite each other. " +
+            "`GET /api/v1/sessions/{id}` answers with the token in its `etag`, and every list row carries `revision`",
+          class: "validation",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      if (!token.ok)
+        throw validationError(
+          [{ path: "if-match", kind: "invalid", message: token.reason }],
+          request.crabbyRequestId,
+        );
+      const result = patchSession(deps.db, request.params.id, {
+        ...(request.body.title === undefined ? {} : { title: request.body.title }),
+        ...(request.body.model === undefined ? {} : { model: request.body.model }),
+        expectedRevision: token.revision,
+      });
+      if (!result.ok) throw refusal(result, request.crabbyRequestId);
+      const client = request.crabbyClient;
+      deps.log.info("session edited", {
+        session: result.session.id,
+        revision: result.session.revision,
+        ...(request.body.title === undefined ? {} : { title: request.body.title }),
+        ...(request.body.model === undefined
+          ? {}
+          : { model: request.body.model ?? "install default (override cleared)" }),
+        ...(client === undefined ? {} : { by: client.id, via: client.interface }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      const titled =
+        request.body.title === undefined ? "" : `the title is now '${request.body.title}'`;
+      const model =
+        request.body.model === undefined
+          ? ""
+          : request.body.model === null
+            ? "the model override is cleared, so the session uses the install's default again"
+            : `the model override is now ${request.body.model}`;
+      const body = {
+        session: sessionRow(result.session, sessionTaskFactsFor(deps.db, result.session.id)),
+        note:
+          `${titled}${titled !== "" && model !== "" ? " and " : ""}${model}` +
+          ` — revision ${result.session.revision}, which is the token the next edit carries`,
+      } satisfies SessionActionBody;
+      return reply.header("etag", sessionETag(result.session.revision)).send(body);
+    },
+  );
+}
 
 /** §4.5's surface over HTTP, and the read half of D-057's "first-class": a Web `Scheduled` pane, a sixth TUI pane and
  *  Telegram's `/jobs` all answer from these six paths rather than each opening the database.

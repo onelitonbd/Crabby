@@ -830,6 +830,77 @@ matrix row for "Review scheduled jobs", which is what makes §8 say the same thi
 CLI), `test:security` 138/138, `test:parity` and `docs:check` green.
 
 
+**Conversations become records (twenty-ninth slice).** §4's tool bullet names `session.*` next after the scheduler, and
+§4.2 prices exactly two rows for it — `session.list` at **T0** and `session.rename` at **T1**. What the slice found
+before it built anything is that the two tools were the small half: `createTask` has minted `ses_…` ids since schema
+version 1 and `task.session_id` is `NOT NULL`, so every install already held conversations that nothing owned — no title
+for C11-01 to print, no origin for W15-11 to attribute, no last activity to sort by, and no token for §2's concurrency row
+to compare. A tool that read that table would have been the mock this build refuses to ship, so the record came first:
+schema version 6 adds `session`, `packages/storage/sessions.ts` is the conversation repository §5 proposed,
+`packages/api-contracts/session.ts` holds the shapes four interfaces read, four of §4.2's nine session paths answer over
+HTTP, `crabby session ls|new|rename` runs, and both tools join the composition a runner is given.
+
+**D-104** records the six properties the documents had not decided, and three of them are worth repeating here because
+they are the kind a later slice would otherwise rediscover by reading a column and guessing. The title is nullable and
+its absence is a fact — W15-03's "the new session starts empty and un-named, and the title becomes the first question
+asked in it" — so the first task in a conversation names it, clipped to eighty *code points* because a Bengali objective's
+fortieth character is not at byte forty, and no later task renames it, because a name the user chose is not a
+placeholder. The origin is nullable with no foreign key: the rows the migration backfills were minted by whatever created
+their first task in a build that did not write the fact down, and `unknown` is the honest rendering while a guess would
+read as an attribution. And there are **two clocks**, which is the decision the whole `If-Match` question turns on:
+`last_activity_at` moves when a task is created or changes state, because that is what C11-01 sorts by, while `updated_at`
+and `revision` move only on an edit — so a rename does not push a conversation to the top of a list somebody is working
+from, and a task finishing does not spend the token a phone is holding.
+
+The questions a reviewer would ask. **Why is the backfill part of the migration rather than a repair at startup?**
+Because a database that has been upgraded and a database that has been repaired are two different facts about the same
+file, and only the first is recorded in the ledger: a startup repair would run on every start, would be invisible in
+`crabby doctor`'s schema line, and would leave a backup taken between the two looking like an install with tasks and no
+conversations. **Why does the repository prepare no `DELETE` at all?** Destroying a conversation is
+`history.deleteConversation` at **T3** (§4.2), which C11-05 keeps as the one command that does it and W15-07 prices with
+the title typed back rather than "yes". A `DELETE /sessions/{id}` would be a second route to the same irreversible act
+with no confirmation on it, so the absence is in the code where a test can see it, and the CLI test that asserts it reads
+the help rather than a refusal: one destructive verb in the whole grammar, under `history`, and none under `session`.
+**Why is `If-Match` required rather than honoured when present?** §2's concurrency row exists because a title is the one
+field four interfaces can edit inline at the same moment (W1-02, W15-04, T16-05), and an optional token is a token the
+client that most needs it forgets. So `crabby session rename` makes two requests — read the row, then write with the
+revision it read — and a race answers `409` with both numbers in the sentence rather than silently overwriting. The
+comparison is inside the `UPDATE`'s `WHERE` rather than a read followed by a write, because two saves in the same instant
+must not both pass. **Why do the session routes answer on a Gateway that composed no runner?** A conversation is a record
+and not a privilege, and a list that 501'd would hide a user's conversations exactly when their provider broke — the same
+reasoning that keeps `GET /jobs` answering from the table. The integration tests assert the routes on a Gateway with no
+runner on purpose, so that property is pinned rather than incidental. **Why is the state word derived and not stored?**
+It is a claim about two tables at once, and `sessionRowOf` computes it in one place so a route and a tool cannot disagree
+about whether a parked task makes a conversation `waiting-approval` — W16-02's rule, that work stalled on a human is the
+state that must never be hidden, applied to a list of conversations. **Why are five of §4.2's nine session paths still
+unbuilt, and why does the detail route say so?** `messages`, `compact`, `export`, `context` and `pin` read a message store
+and D-027's context manager, and neither exists. So `GET /sessions/{id}` answers `absent: ["messages", "context", "pins"]`
+instead of `0 turns` for a conversation that has forty, `crabby session show` stays planned with that reason in its
+registry row, and §4.2's table now says which paths answer and what each of the others is waiting for.
+
+One defect the slice caught before it shipped, recorded because the shape of it is the reason to write the decoder once:
+the conversation repository needed a session's tasks, and the first version of that read carried its own row-to-record
+mapping — which disagreed with `tasks.ts`'s about §6.2's error shape (`errorCode` and `errorMessage` as siblings rather
+than one `error` object) and about the cancellation column entirely. Neither copy had run yet, so nothing failed; the fix
+was to export the column list and the decoder from `tasks.ts` and delete the second one, which is F-20's shape at the
+scale of a single function.
+
+Deliberately not here: a message store, so no `messages`, `compact`, `context`, `pin` or `export` path and no
+`session show` verb (D-027 and D-065 own those); any deletion of a conversation (T3, C11-05); a per-session capability
+set or a session-scoped grant, since §6.1 has no capability for a conversation and F-52's assignment question is about
+identities; `session.create` as a *tool*, because a model that could open conversations at will would fill the list C11
+exists to keep readable; and a `session.*` event, for the reason O-070 carries — `Event.taskId` is required and a rename
+is not a task. Documents moved beside the code: `docs/INTERFACES_AND_API.md` §2's concurrency row, §4.2 rewritten to say
+which four paths answer and what the other five wait for, §7.1's Sessions inventory row and a new behaviour row for the
+three verbs, and §8 regenerated; `docs/DATA_AND_MEMORY.md` §2.1's new "Decided (D-104)" paragraph, §4.1's
+`crabby.sqlite3` row at version 6 and §5's conversation repository; `DECISIONS.md` with D-104, §4A's map on four rows and
+the counter at 104; `docs/CONSISTENCY_REVIEW.md` with F-55 amended a second time for the two new rows; and
+`scripts/parity.ts`' matrix row for "List/switch sessions", which is what makes §8 name the four paths and the four verbs.
+Gates: `typecheck`, `lint`, `format:check`, `npm test` 592/592 (31 new: 10 storage, 7 route and tool-over-HTTP, 5
+executor and composition, 9 CLI), `test:security` 138/138, `test:parity` (24 routes, 45 tools, 32 capabilities, 25
+features) and `docs:check` (104 accepted decisions) green.
+
+
 
 
 ## 5. Phase M3 — Four interfaces in parallel

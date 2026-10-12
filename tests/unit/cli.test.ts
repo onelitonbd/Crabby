@@ -941,3 +941,228 @@ test("`crabby job edit` names the release that brings it, at the usage exit code
   );
   assert.match(run.out, /crabby --help/);
 });
+
+// `crabby session` is C11's answer to a problem the CLI created: "`chat --session <id>` continues a session but cannot
+// *find* one. Without `session ls` the only way to resume on a phone is to remember an id, which is how people end up with
+// forty sessions they cannot tell apart." What is asserted here is the half §7.1 promises about a process — the help rows,
+// the questions answered locally at the usage code, and the verbs this noun deliberately does not have. The rows a list
+// prints and the `If-Match` round trip are asserted against a live Gateway in tests/integration/sessions.test.ts.
+test("`crabby session ls|new|rename` are each listed once and ready, `show` and `compact` once each as planned", () => {
+  const run = crabby(["--help"]);
+  assert.equal(run.code, 0, run.err);
+  const lines = run.out.split("\n");
+  for (const verb of ["ls", "new", "rename"]) {
+    const rows = lines.filter((line) => line.includes(`crabby session ${verb}`));
+    assert.equal(
+      rows.length,
+      1,
+      `two entries for \`session ${verb}\` is help that contradicts itself`,
+    );
+    assert.ok(
+      !(rows[0] ?? "").includes("planned"),
+      `\`session ${verb}\` has a route behind it (§4.3), so the row must not advertise a milestone that delivered it`,
+    );
+    assert.match(
+      rows[0] ?? "",
+      /C11-0\d/,
+      "and the summary names the contract element the behaviour comes from",
+    );
+  }
+  for (const verb of ["show", "compact"]) {
+    const rows = lines.filter((line) => line.includes(`crabby session ${verb}`));
+    assert.equal(rows.length, 1);
+    assert.match(
+      rows[0] ?? "",
+      /planned for/,
+      `\`session ${verb}\` is planned rather than missing, and says so`,
+    );
+    assert.match(
+      rows[0] ?? "",
+      /M\d|§/,
+      "and names the phase or the section that defers it: a planned row that says only 'planned' is a row a user cannot plan around",
+    );
+  }
+  assert.ok(
+    !lines.some((line) => line.includes("crabby session delete")),
+    "C11-05: there is deliberately no `session delete`, so exactly one command destroys history — `crabby history " +
+      "delete-session` — and one place to look for it",
+  );
+});
+
+test("`crabby session show` is answered by the registry's milestone, not by a verb that prints zeroes", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["session", "show", "ses_1"], state);
+  assert.equal(
+    run.code,
+    2,
+    "a planned verb is a usage answer rather than a silent success, and it is answered before any request is made",
+  );
+  assert.match(run.out, /not implemented yet/);
+  assert.match(
+    run.out,
+    /stores messages/,
+    "C11-03's content is five fields and three of them need a message store, so the milestone names the release that " +
+      "brings it rather than merely the absence",
+  );
+  assert.match(
+    run.out,
+    /§4\.3/,
+    "and cites the section whose `messages` paths are the thing that does not exist",
+  );
+  assert.ok(
+    !run.out.includes("turns") && !run.out.includes("budget"),
+    "the one screen this verb must never print: zeroes for the three fields nothing stores",
+  );
+});
+
+test("`crabby session rename` asks which session, and then asks for a title", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const noId = crabby(["session", "rename"], state);
+  assert.equal(noId.code, 2);
+  assert.match(noId.out, /which session/);
+  assert.match(noId.out, /crabby session ls/, "the fix points at the verb that prints the ids");
+
+  const noTitle = crabby(["session", "rename", "ses_1"], state);
+  assert.equal(noTitle.code, 2);
+  assert.match(noTitle.out, /title is required/);
+  assert.match(
+    noTitle.out,
+    /crabby session rename <id> "the title"/,
+    "with the whole command in the fix, because a title with spaces in it has to be quoted and that is not obvious",
+  );
+
+  const blank = crabby(["session", "rename", "ses_1", "   "], state);
+  assert.equal(
+    blank.code,
+    2,
+    "a title of whitespace is no title, and the refusal is answered locally",
+  );
+});
+
+test("`crabby session new --title` with nothing in it is a usage error that explains the alternative", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["session", "new", "--title", "  "], state);
+  assert.equal(run.code, 2);
+  assert.match(run.out, /bad --title/);
+  assert.match(
+    run.out,
+    /un-named/,
+    "W15-03's alternative: with no title the session is created un-named and takes its title from the first question " +
+      "asked in it, so the flag is optional rather than required",
+  );
+});
+
+test("`crabby session ls --origin` is checked locally, and a value it accepts reaches the Gateway", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const bad = crabby(["session", "ls", "--origin", "shell"], state);
+  assert.equal(
+    bad.code,
+    2,
+    "§7.1 makes 2 the usage code, and an interface that does not exist is a usage question",
+  );
+  assert.match(bad.out, /bad --origin/);
+  assert.match(bad.out, /cli \| tui \| web \| telegram/, "the fix names W15-11's four");
+  assert.ok(
+    !bad.out.includes("gateway"),
+    "answered before any request, so the sentence is about the flag",
+  );
+
+  for (const origin of ["cli", "tui", "web", "telegram"]) {
+    const accepted = crabby(["session", "ls", "--origin", origin], state);
+    assert.ok(
+      !accepted.out.includes("bad --origin"),
+      `${origin} is one of the four and must be accepted`,
+    );
+    assert.equal(accepted.code, 1, "and fails on the absent Gateway rather than on the flag");
+  }
+});
+
+test("`crabby session ls --quiet` and `rename --json` are accepted flags, not unknown ones", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  for (const args of [
+    ["session", "ls", "--quiet"],
+    ["session", "rename", "ses_1", "a title", "--json"],
+    ["session", "new", "--title", "a title", "--json"],
+  ]) {
+    const run = crabby(args, state);
+    assert.ok(
+      !run.out.includes("unknown flag"),
+      `${args.join(" ")} must be accepted, got ${JSON.stringify(run.out)}`,
+    );
+    assert.equal(run.code, 1, "and fails on the absent Gateway rather than on the flag");
+  }
+});
+
+test("`crabby session ls --wide` is an unknown flag for this verb, not silently ignored", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["session", "ls", "--wide"], state);
+  assert.equal(run.code, 2);
+  assert.match(run.out, /unknown flag/);
+  assert.match(run.out, /--origin I --quiet --json/, "and the fix lists what the verb does accept");
+});
+
+test("`crabby session ls` with no Gateway says so rather than printing an empty list", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["session", "ls"], state);
+  assert.equal(
+    run.code,
+    1,
+    "a missing Gateway is a failure, not a usage question — the command was well formed",
+  );
+  assert.match(run.out, /gateway/i);
+  assert.match(run.out, /crabby gateway start/);
+  assert.ok(
+    !run.out.includes("sessions"),
+    '"no conversations" is an answer about a Gateway that is running; printing it here would erase the difference ' +
+      "between an empty list and an unreachable one",
+  );
+});
+
+test("there is no `crabby session delete`: the destructive verb lives under `history`, once", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  // C11-05 and §4.2's T3 for `history.deleteConversation`: exactly one command destroys a conversation, and it is not
+  // reachable from a noun whose other verbs are harmless. Asserted through the help rather than through a refusal,
+  // because the absence is the decision — a `session delete` that existed and refused would still be a second place to
+  // look.
+  const help = crabby(["--help"]);
+  assert.equal(help.code, 0, help.err);
+  const destructive = help.out
+    .split("\n")
+    .filter((line) => /delete|destroy|forget/i.test(line))
+    .map((line) => line.trim().split(/\s+/).slice(0, 3).join(" "))
+    .sort();
+  assert.deepEqual(
+    destructive,
+    ["crabby history delete-session", "crabby memory forget"].sort(),
+    `two destructive verbs in the grammar and exactly one of them destroys a conversation; found ${JSON.stringify(destructive)}`,
+  );
+  assert.ok(
+    !destructive.some((line) => line.startsWith("crabby session")),
+    "and neither lives under the `session` noun, which is C11-05's actual rule: `memory forget` is §2.3's long-term " +
+      "memory with its own T2/T3 pricing, a different subject from a conversation, so the count that matters is the " +
+      "number of commands that destroy *history* — one",
+  );
+  assert.match(
+    help.out,
+    /history delete-session.*one destructive session verb/s,
+    "and its own summary says why it is the only one",
+  );
+
+  const attempted = crabby(["session", "delete", "ses_1"], state);
+  assert.ok(
+    attempted.code !== 0,
+    "reaching for the wrong noun does not destroy anything, whatever else it prints",
+  );
+  assert.ok(
+    !attempted.out.includes("deleted"),
+    "and it never prints the one lie this noun must not: that a conversation was destroyed when nothing was asked",
+  );
+});

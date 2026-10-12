@@ -8,6 +8,7 @@ import {
   type TaskState,
 } from "@crabby/api-contracts";
 import type { SqliteDb } from "./db.ts";
+import { touchSession } from "./sessions.ts";
 
 export interface CreateTaskInput {
   readonly objective: string;
@@ -23,9 +24,13 @@ export interface ListTasksOptions {
   readonly sessionId?: string | undefined;
 }
 
-const SELECT = `SELECT id, session_id, state, objective, created_at, updated_at, last_seq, error_code, error_message, cancellation_json FROM task`;
+/** The columns every task query selects, exported with the decoder below so a second reader of the table — `sessions.ts`,
+ *  which answers `GET /api/v1/sessions/{id}` with the tasks in one conversation — cannot form a second opinion about what a
+ *  row means. Two decoders drift the first time §6.2 adds a column, and the drift shows up as a record with a field missing
+ *  in one route and present in another. */
+export const TASK_SELECT = `SELECT id, session_id, state, objective, created_at, updated_at, last_seq, error_code, error_message, cancellation_json FROM task`;
 
-type Row = {
+export type TaskRow = {
   id: string;
   session_id: string;
   state: string;
@@ -57,8 +62,8 @@ export function createTask(db: SqliteDb, input: CreateTaskInput): TaskRecord {
 }
 
 export function getTask(db: SqliteDb, id: string): TaskRecord | undefined {
-  const row = db.prepare(`${SELECT} WHERE id = ?`).get(id) as Row | undefined;
-  return row && toRecord(row);
+  const row = db.prepare(`${TASK_SELECT} WHERE id = ?`).get(id) as TaskRow | undefined;
+  return row && taskRecordFromRow(row);
 }
 
 /** §2's pagination: ordered by stable id, cursor is "give me everything after this id", so a list cannot shift under
@@ -81,12 +86,12 @@ export function listTasks(
     where.push("id > @cursor");
     params.cursor = options.cursor;
   }
-  const sql = `${SELECT}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY id ASC LIMIT @limit`;
-  const rows = db.prepare(sql).all(params) as Row[];
+  const sql = `${TASK_SELECT}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY id ASC LIMIT @limit`;
+  const rows = db.prepare(sql).all(params) as TaskRow[];
   const page = rows.slice(0, options.limit);
   const last = page[page.length - 1];
   return {
-    items: page.map(toRecord),
+    items: page.map(taskRecordFromRow),
     ...(rows.length > options.limit && last ? { nextCursor: last.id } : {}),
   };
 }
@@ -107,8 +112,10 @@ export interface SetStateOptions {
 export function tasksInStates(db: SqliteDb, states: readonly TaskState[]): TaskRecord[] {
   if (states.length === 0) return [];
   const placeholders = states.map(() => "?").join(", ");
-  const rows = db.prepare(`${SELECT} WHERE state IN (${placeholders})`).all(...states) as Row[];
-  return rows.map(toRecord);
+  const rows = db
+    .prepare(`${TASK_SELECT} WHERE state IN (${placeholders})`)
+    .all(...states) as TaskRow[];
+  return rows.map(taskRecordFromRow);
 }
 
 export function setState(
@@ -133,7 +140,17 @@ export function setState(
       id,
       state,
     );
-  return result.changes > 0;
+  const changed = result.changes > 0;
+  if (changed) {
+    // The conversation's last activity, written in the same statement that moved the task: a task changing state *is*
+    // something happening in a session, and C11-01 sorts by exactly that ("last activity, not creation, because that is
+    // the order a person remembers in"). Left to a caller it would be a fact four writers had to remember to write.
+    const row = db.prepare("SELECT session_id FROM task WHERE id = ?").get(id) as
+      | { session_id: string }
+      | undefined;
+    if (row !== undefined) touchSession(db, row.session_id, now);
+  }
+  return changed;
 }
 export function setLastSeq(db: SqliteDb, id: string, seq: number): void {
   db.prepare("UPDATE task SET last_seq = ?, updated_at = ? WHERE id = ? AND last_seq < ?").run(
@@ -152,7 +169,7 @@ export function stateCounts(db: SqliteDb): Record<string, number> {
   return Object.fromEntries(rows.map((row) => [row.state, row.n]));
 }
 
-function toRecord(row: Row): TaskRecord {
+export function taskRecordFromRow(row: TaskRow): TaskRecord {
   return {
     id: row.id,
     sessionId: row.session_id,

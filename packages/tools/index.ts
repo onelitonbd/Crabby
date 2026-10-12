@@ -47,6 +47,15 @@ export {
 export { assertRegistrable, fileToolDeclarations } from "./declare.ts";
 export { type FileToolEnv, fileFacts, runFileTool } from "./fs.ts";
 export {
+  createSessionTools,
+  SESSION_LIST_TOOL,
+  SESSION_RENAME_TOOL,
+  type SessionRenameResult,
+  type SessionToolExecutor,
+  type SessionToolOptions,
+  sessionToolDeclarations,
+} from "./session.ts";
+export {
   capWrapped,
   cutAtByteBoundary,
   EXTERNAL_CONTENT_TAG,

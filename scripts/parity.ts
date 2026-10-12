@@ -100,8 +100,13 @@ export const MATRIX: readonly FeatureRow[] = [
   },
   {
     capability: "List/switch sessions",
-    api: "`GET /sessions`",
-    cli: "`chat --session`",
+    // All four paths schema version 6 made answerable, and not the five beside them: `messages`, `compact`, `export`,
+    // `context` and `pin` read a message store and D-027's context manager that do not exist, so listing them here would
+    // put a route in the matrix that nothing answers (F-11's rule is presence, and presence that lies is worse than
+    // absence). `DELETE /sessions/{id}` is absent by decision, not by sequence: destroying a conversation is
+    // `history.deleteConversation` at T3 and is the row below this one's neighbour in §4.2.
+    api: "`GET /sessions`, `POST /sessions`, `GET /sessions/{id}`, `PATCH /sessions/{id}`",
+    cli: "`session ls`, `session new`, `session rename`, `chat --session`",
     tui: "session switcher",
     web: "sidebar",
     telegram: "`/sessions`",

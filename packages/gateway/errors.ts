@@ -89,6 +89,24 @@ export const JOB_REFUSAL_CLASS: Record<
   unwritable: "internal",
 };
 
+/** Every code a session write can refuse with, mapped to a class — exhaustive over the union for the reason the two
+ *  above are, so a new refusal in `packages/api-contracts/session.ts` makes this file fail to compile until somebody says
+ *  what it means over HTTP. */
+export const SESSION_REFUSAL_CLASS: Record<
+  import("@crabby/api-contracts").SessionActionCode,
+  ErrorBody["class"]
+> = {
+  "not-found": "not-found",
+  // `conflict` and not `validation` for a stale token: the request was well-formed and the *world* moved, which is the
+  // distinction the cancellation map draws for the same reason. §2's concurrency row exists so that two interfaces editing
+  // one title do not silently overwrite, and the loser of that race has to be told it lost — a `400` would send it looking
+  // for a body that was never wrong.
+  stale: "conflict",
+  // A patch carrying neither a title nor a model is a body the caller can fix.
+  "no-change": "validation",
+  unwritable: "internal",
+};
+
 /** Every code the §6 cancellation manager can refuse with, mapped to a class — exhaustive over the union for the same
  *  reason `APPROVAL_REFUSAL_CLASS` is, so that adding a refusal in `packages/agent-runtime/cancellation.ts` makes this
  *  file fail to compile until somebody classifies it. `POST /tasks/{id}/cancel` answers through this map rather than

@@ -38,6 +38,7 @@ import { runDoctor } from "./commands/doctor.ts";
 import { type GatewayVerb, runGateway } from "./commands/gateway.ts";
 import { runInit } from "./commands/init.ts";
 import { type JobVerb, runJob } from "./commands/job.ts";
+import { runSession, type SessionVerb } from "./commands/session.ts";
 import { runStatus } from "./commands/status.ts";
 import { runTask, type TaskVerb } from "./commands/task.ts";
 import { runTools } from "./commands/tools.ts";
@@ -238,6 +239,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     case "job": {
       return runJob(verb as JobVerb | undefined, rest, layout, renderer);
+    }
+    case "session": {
+      return runSession(verb as SessionVerb | undefined, rest, layout, renderer);
     }
     case "diagnostics": {
       return runDiagnostics(rest, layout, renderer);

@@ -5,7 +5,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { EXIT, type ExitCode } from "@crabby/api-contracts";
+import { type ClientInterface, EXIT, type ExitCode } from "@crabby/api-contracts";
 import {
   createLogger,
   createShutdown,
@@ -22,14 +22,28 @@ import {
 } from "@crabby/gateway";
 import { type DataLayout, homeDirectory } from "@crabby/platform";
 import { composeProviders, selectDefaultModel } from "@crabby/providers";
-import { DB_FILE_NAME, migrate, openDatabase, schemaVersion, taskScratch } from "@crabby/storage";
+import {
+  DB_FILE_NAME,
+  getSession,
+  listSessions,
+  migrate,
+  openDatabase,
+  patchSession,
+  schemaVersion,
+  sessionRowOf,
+  sessionRows,
+  taskScratch,
+} from "@crabby/storage";
 import {
   combineToolSurfaces,
   createFileTools,
   createSchedulerTools,
+  createSessionTools,
   defaultRealpathOf,
   SCHEDULER_TOOL,
   type SchedulerToolOptions,
+  SESSION_LIST_TOOL,
+  SESSION_RENAME_TOOL,
 } from "@crabby/tools";
 import { parseTail, unknownFlagMessage } from "../args.ts";
 import type { Renderer } from "../output.ts";
@@ -143,6 +157,36 @@ async function runStart(
         : scheduleSink(input),
     limits: loaded.limits,
   });
+  /** §4.2's two conversation rows, composed beside the scheduler's. Unlike `cron.schedule` these need no late binding:
+   *  they read and write the session table, which this process opened before `buildApp` and which exists whether or not a
+   *  runner does. The revision comparison lives in the sink rather than in the tool's schema, because a token a model could
+   *  choose is a token a model could reuse — §2's concurrency rule is about two interfaces, and the executor's job is to
+   *  read the row it is about to write. */
+  const sessionTools = createSessionTools({
+    list: (origin) =>
+      sessionRows(
+        handle.db,
+        listSessions(handle.db, {
+          ...(origin === undefined ? {} : { origin: origin as ClientInterface }),
+        }),
+      ),
+    rename: ({ id, title }) => {
+      const current = getSession(handle.db, id);
+      if (current === undefined)
+        return {
+          ok: false as const,
+          code: "not-found" as const,
+          reason: `no session ${id} — \`${SESSION_LIST_TOOL}\` prints the conversations this install holds`,
+        };
+      const patched = patchSession(handle.db, id, {
+        title,
+        expectedRevision: current.revision,
+      });
+      if (!patched.ok) return patched;
+      return { ok: true as const, session: sessionRowOf(handle.db, patched.session) };
+    },
+    limits: loaded.limits,
+  });
   /** The one executor the runner is given, which is a *combination* rather than the file tools alone: §4.1 registers a
    *  tool by name across the whole composition and `combineToolSurfaces` makes a duplicate fatal at startup instead of
    *  last-one-wins. Composed only when a runner will exist, for the reason `createSchedulerTools`'s own header gives —
@@ -151,7 +195,7 @@ async function runStart(
   const composed =
     executor === undefined || !selected.ok
       ? undefined
-      : combineToolSurfaces([executor, schedulerTools]);
+      : combineToolSurfaces([executor, schedulerTools, sessionTools]);
   // Both halves of the condition are named again here, for the reason the banner below names them: `composed` is built
   // from `selected`, so "there is an executor" and "a model was selected" are the same fact seen from two places, and
   // TypeScript narrows the second only from a test that mentions it.
@@ -266,9 +310,11 @@ async function runStart(
       "tools",
       `${executor.declarations().length} declared by the file executor over ${roots.length} root(s)` +
         (composed === undefined
-          ? ", and nothing else: a Gateway that drives no tasks declares no way to create a timer"
+          ? ", and nothing else: a Gateway that drives no tasks declares no way to create a timer and no way to read a " +
+            "conversation, because both belong to the runner's one surface (§5.1)"
           : `, plus ${SCHEDULER_TOOL} from the scheduler it drives jobs through — the only path that creates one, ` +
-            "because a route or a verb that made a job would be a creation path with no approval in it (C12-09)"),
+            "because a route or a verb that made a job would be a creation path with no approval in it (C12-09) — and " +
+            `${SESSION_LIST_TOOL} and ${SESSION_RENAME_TOOL} for the conversations schema version 6 gave a record`),
     );
     renderer.line(
       "tools",

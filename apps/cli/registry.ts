@@ -336,34 +336,46 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "session",
     verb: "ls",
-    summary: "list conversations",
-    flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (the session manager)",
+    summary: "conversations: id, title, last activity, state word, model, origin (C11-01)",
+    flags: ["--origin I", "--quiet", "--json"],
+    // `ready` because the record behind it is: schema version 6 gave a conversation a row of its own, so
+    // `GET /api/v1/sessions` answers with titles, state words and last activity instead of ids that nothing owns — which
+    // is C11's whole reason for the noun, "without `session ls` the only way to resume on a phone is to remember an id".
+    // Sorted by last activity and not by creation, because C11-01 says that is "the order a person remembers in", and
+    // `--quiet` is ids alone for the pipe §10 promises.
+    status: "ready",
   },
   {
     noun: "session",
     verb: "new",
-    summary: "start a conversation, optionally titled",
-    flags: ["--title T"],
-    status: "planned",
-    milestone: "M2 (the session manager)",
+    summary: "start a conversation, optionally titled (C11-02)",
+    flags: ["--title T", "--json"],
+    // W15-03's shape: with no `--title` the session is created un-named and takes its title from the first question asked
+    // in it, so the flag is optional rather than required. The verb prints the id *and* the command that uses it, because
+    // C11-02's own sentence is "a created thing you cannot address is a bug".
+    status: "ready",
   },
   {
     noun: "session",
     verb: "show",
-    summary: "one conversation with its tail",
+    summary: "one conversation: title, turns, tasks, budget, pinned items (C11-03)",
     flags: ["--json"],
+    // Planned and not missing, and the distinction is the whole row. C11-03's content is five fields and three of them —
+    // turns, budget, pinned items — need a message store and D-027's context manager. `GET /api/v1/sessions/{id}` answers
+    // the two that exist and names the other three in its `absent` list, so the route is honest about it; a verb that
+    // printed the same zeroes at a person would be printing a screen full of nothing.
     status: "planned",
-    milestone: "M2 (the session manager)",
+    milestone: "the release that stores messages (§4.3's `messages` paths, C11-03, D-027)",
   },
   {
     noun: "session",
     verb: "rename",
-    summary: "change a conversation's title",
-    flags: [],
-    status: "planned",
-    milestone: "M2 (the session manager)",
+    summary: "change a conversation's title (C11-04)",
+    flags: ["--json"],
+    // Writes through `PATCH /api/v1/sessions/{id}` with the revision the read carried, so the Web title and the TUI list
+    // change with it rather than after it (C11-04) and two interfaces editing one title cannot silently overwrite each
+    // other (§2's concurrency row, W1-02, W15-04, T16-05).
+    status: "ready",
   },
   {
     noun: "session",

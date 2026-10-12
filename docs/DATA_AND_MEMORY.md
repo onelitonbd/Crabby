@@ -23,6 +23,18 @@ The design must support local-first operation, Android through Termux, safe reco
 - Generated summaries must not silently replace or destroy original conversation records.
 - Data deletion must define how related summaries, indexes, and derived memory are handled.
 
+**Decided (D-104).** The conversation itself is a record from schema version 6, and three of the bullets above are
+answered by it rather than by a message store that does not exist yet. History persists across restarts because a
+conversation now has a row that survives one, with the title W15-03 describes ("the new session starts empty and un-named,
+and the title becomes the first question asked in it"), the interface that created it (W15-11), and the moment something
+last happened in it — which is a task being created or changing state, the only activity this build records. Users can
+delete their conversation history through one command and one tier (`history.deleteConversation`, T3), and the repository
+prepares no `DELETE` statement so a second path cannot appear quietly. What is *not* decided here is the message half:
+"messages must retain their role, ordering, relevant timestamps" has no table yet, so `GET /sessions/{id}` names
+`messages`, `context` and `pins` in an `absent` list rather than answering `0 turns`, and a task's events remain the only
+per-turn record that exists (§2.5). Deletion's derived-data question — "how related summaries, indexes, and derived memory
+are handled" — is still D-065's answer, and still unreachable in a build with no summaries and no memory store.
+
 **Decided (D-065).** Export is one artifact for all four interfaces (the per-session export W14-05, `crabby history export` and the memory export share a serializer), so "my export" is one thing to reason about. Retention is 30 days or 5 000 events per task, whichever comes first, with the count visible in the task record — a phone has the least free storage and a runaway job must not be able to fill it. Backup is `db.backup()` plus the config directory into a timestamped archive; restore is a documented manual step behind an integrity check.
 
 ### 2.2 Task State and Checkpoints
@@ -153,7 +165,7 @@ The names are here because a name that lives only in code is a name an interface
 | File | Mode | What it is |
 | --- | --- | --- |
 | `config.json` | `0644` | Overrides only; the defaults stay in code (D-074). Since D-101 it also holds three things that are configuration rather than overrides and have no default to override — `provider.<id>` entries (§3.7's namespace, a `vault://` key reference at most and never a value), `defaultModel` (§3.6's selection), and `workspace.roots` (§8's containment, recorded by `crabby init` as the path it created). `AGENTS.md` names this file, so it is listed for completeness. |
-| `crabby.sqlite3` | `0600` dir-inherited | One database: tasks (including §6.2's cancellation evidence, schema version 3), events, client identities, pairing codes, idempotency records, the approval queue (§6.3, schema version 2), D-065's checkpoint — one row per task, replaced at each committed step boundary, redacted on write (schema version 4), and §4.5's scheduled jobs with their run history, including the UTC offset each job was created under (schema version 5, D-103). `journal_mode = WAL`, `busy_timeout` from `limits.sqliteBusyTimeoutMs` (D-074). |
+| `crabby.sqlite3` | `0600` dir-inherited | One database: tasks (including §6.2's cancellation evidence, schema version 3), events, client identities, pairing codes, idempotency records, the approval queue (§6.3, schema version 2), D-065's checkpoint — one row per task, replaced at each committed step boundary, redacted on write (schema version 4), §4.5's scheduled jobs with their run history, including the UTC offset each job was created under (schema version 5, D-103), and the conversations §2.1's history is associated with, including each one's title, origin interface, last activity and the revision a rename has to carry (schema version 6, D-104 — backfilled from the `session_id` values the task table already held). `journal_mode = WAL`, `busy_timeout` from `limits.sqliteBusyTimeoutMs` (D-074). |
 | `crabby.sqlite3-wal`, `crabby.sqlite3-shm` | — | SQLite's own siblings, present while a writer is open. Online backup takes a checkpoint first. |
 | `scratch/<taskId>/` | `0700` | Overflow for a payload past D-064's 64 KiB inline cap, named `<eventId>.json`, pruned at startup past 24 h with the removal logged. One directory per task so a completed task's bytes leave as a unit. Since M2k it holds two more kinds of bytes, both under the same lifetime (D-098): a tool result past §4.4's output cap, written whole with its path printed in the label the model receives, and `trash/`, where `file.delete` renames a target instead of hard-deleting it (`SECURITY.md` §8) — so the file a task deleted leaves with the rest of that task's scratch, and the 24 h is a courtesy with an expiry rather than an undo the runtime may promise. |
 | `vault/` | `0700` | D-066's secret store; the only directory whose contents may be referenced by name and never by value in a log line. |
@@ -167,7 +179,18 @@ The architecture should separate data access from the database engine.
 
 Proposed repository boundaries:
 
-- Conversation repository.
+- Conversation repository — implemented as `packages/storage/sessions.ts` over the `session` table at schema version 6
+  (D-104). It is the one repository here that owns no abstraction in the runtime, because nothing in
+  `packages/agent-runtime` needs to read a conversation: a task carries its `session_id` and the loop never asks what the
+  conversation is called. What it does own is three rules the interfaces would otherwise each invent — the order a list is
+  read in (`last_activity_at DESC`, C11-01's "the order a person remembers in"), the derivation of a state word from task
+  counts (`sessionRowOf`/`sessionRows`, so a route and a tool cannot disagree about whether a parked task makes a
+  conversation `waiting-approval`), and the revision comparison §2's concurrency row asks for, performed inside the
+  `UPDATE`'s `WHERE` rather than as a read followed by a write. It also prepares no `DELETE` statement at all: destroying a
+  conversation is `history.deleteConversation` at T3 (§4.2 of `PROVIDERS_AND_TOOLS.md`), and C11-05's "exactly one command
+  that destroys history" is kept by an absence in this file rather than by a guard in a route. Migration 6 backfills one row
+  per `session_id` the task table already carried, because an install that ran before this had conversations and no record
+  of them, and an empty table would have upgraded the schema while leaving them just as invisible.
 - Task and checkpoint repository — the task half is implemented twice over: `tasks.ts` for the record and
   `journal.ts` for the runtime's write seam, which is `TaskJournal` from `packages/agent-runtime` implemented the way
   §19 wants an adapter to implement an abstraction (`transact`/`setState`/`appendEvent` behind four synchronous methods,

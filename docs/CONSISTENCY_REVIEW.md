@@ -1187,6 +1187,25 @@ by reading a number and believing it:
    who saw `implemented` go 7 → 8 and declarations go 8 → 9 could otherwise conclude the two numbers had been reconciled.
    Nothing in this build classifies `file.stat`, and F-20's shape is still open.
 
+**Amendment (twenty-ninth slice): ten rows are implemented, and the two new ones are conversations.** The same
+composition gained a third surface — `createSessionTools`, declaring `session.list` and `session.rename`, the two rows
+§4.2 prices at T0 and T1 — so a Gateway that composes a runner now answers `runtime: {implemented: 10, described: 0,
+pending: 35}` and a Gateway that composes none still answers 7, with `cron.schedule` and both session rows carrying all
+five pending fields rather than four. Three things about that are worth recording beside the number:
+
+1. **The two new rows are implemented where the scheduler's is, and for a different reason.** `cron.schedule` is composed
+   only beside a runner because a timer nothing would fire is a promise the process cannot keep. `session.list` and
+   `session.rename` would work perfectly well without one — a conversation is a record and not a privilege, and
+   `GET /sessions` answers on a Gateway that drives nothing — but they are declared through the same combined surface,
+   because §4.1 registers a tool by name across the composition a *runner* is given and a second surface for a Gateway
+   with no runner would be a second place to look. The routes are where the no-runner case is answered honestly, and the
+   integration test asserts both counts rather than one.
+2. **`described` is still 0 and now has three rows keeping it there.** Neither session declaration carries an
+   `outputSchema`, so both join the rows naming `["outputSchema"]` alone: ten implemented, none described, thirty-five
+   pending, and the two counts still mean different things.
+3. **Eleven declarations answer ten rows.** The drift item 4 records did not move: `file.stat` is still declared and still
+   unclassified, and a count that rose on both sides would have hidden it.
+
 ### F-56 — §3.7 gives an adapter a vault handle, and nothing in the build resolves one
 
 **Severity: medium, open, and the same shape as F-52.** §3.7 is specific: provider credentials "are supplied once, stored

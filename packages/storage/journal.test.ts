@@ -227,19 +227,20 @@ describe("the SQLite journal", () => {
     // the column. `docs/DATA_AND_MEMORY.md` §2.6's alternative reading is "upgrade = re-install", and on a phone that
     // means losing the task history that outlives one cancellation.
     const { db, dir, close } = tempDb();
-    // Undoing v3 means undoing v4 and v5 as well, for the reason `approvals.test.ts` gives: a ledger that still records a
-    // later migration would leave `migrate` with nothing to apply, and the fixture would be testing an upgrade no file can
-    // be in. A v2 file has no job pair either, and a CREATE against tables the fixture left standing is a failure no
-    // upgrade would ever meet.
+    // Undoing v3 means undoing v4, v5 and v6 as well, for the reason `approvals.test.ts` gives: a ledger that still
+    // records a later migration would leave `migrate` with nothing to apply, and the fixture would be testing an upgrade
+    // no file can be in. A v2 file has no job pair and no session record either, and a CREATE against tables the fixture
+    // left standing is a failure no upgrade would ever meet.
     db.exec(
       "DELETE FROM schema_migration WHERE version >= 3; DROP TABLE checkpoint; " +
-        "DROP TABLE job_run; DROP TABLE job; ALTER TABLE task DROP COLUMN cancellation_json",
+        "DROP TABLE job_run; DROP TABLE job; DROP TABLE session; " +
+        "ALTER TABLE task DROP COLUMN cancellation_json",
     );
     const task = createTask(db, { objective: "survives the upgrade" });
     // Nothing is read before `migrate` on purpose: v3's SELECT names the new column, so a v2 file is unreadable by v3
     // code until the migration runs. That is why every process migrates on startup rather than lazily, and why this test
     // asserts the upgrade instead of the state before it.
-    assert.deepEqual(migrate(db), { applied: [3, 4, 5], version: 5 });
+    assert.deepEqual(migrate(db), { applied: [3, 4, 5, 6], version: 6 });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,
       1,

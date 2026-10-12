@@ -583,3 +583,38 @@ test("`crabby task watch` with no Gateway says so rather than opening a stream t
       "would have to interrupt",
   );
 });
+
+// `--types` narrows what a watch prints, and the only way it can go wrong quietly is by naming nothing: an empty filter
+// asks the Gateway for no events at all, and a command waiting for an event it asked not to be told about is a hang no
+// exit code can describe. So the refusal is local and immediate, in the same place §7.1 puts every other usage answer.
+test("`crabby task watch --types` with nothing in it is a usage error, not a silent hang", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  for (const value of ["", ",", " , "]) {
+    const run = crabby(["task", "watch", "task_1", "--types", value], state);
+    assert.equal(run.code, 2, `--types "${value}" must be answered locally with the usage exit`);
+    assert.match(run.out, /names no event type/);
+    assert.match(run.out, /comma-separated/, "the fix names the shape the flag wants");
+  }
+});
+
+// The registry's `flags` array is not a help listing — `crabby --help` prints a command and its summary and nothing
+// else, which running it is the only way to learn — so the property that array actually controls is whether `parseTail`
+// accepts the flag or reports it as unknown. That is the assertion worth making: a verb whose flag the registry does not
+// name answers "unknown flag(s)" and exits 2 before any command runs, which is how `task cancel --mode` was rejected
+// until its entry named it. Note the exit code below is 1 and not 2: the flag was accepted, and what failed is the
+// absent Gateway, which is the ordering Slice 3 established for this file.
+test("`crabby task watch --types` is accepted rather than reported as an unknown flag", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const run = crabby(["task", "watch", "task_1", "--types", "task.progress"], state);
+  assert.ok(
+    !run.out.includes("unknown flag"),
+    `the registry entry must name --types for the verb to accept it, got ${JSON.stringify(run.out)}`,
+  );
+  assert.equal(
+    run.code,
+    1,
+    "it must fail *after* accepting the flag, on the absent Gateway and not on the flag",
+  );
+});

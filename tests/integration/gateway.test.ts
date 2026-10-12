@@ -1441,6 +1441,102 @@ describe("a spawned gateway and a spawned cli (P-003)", () => {
       if (watcher.exitCode === null) watcher.kill("SIGTERM");
     }
 
+    // `--types` narrows what is printed, and the property worth testing is the one that could silently hang a user: a
+    // filter naming `task.progress` does not name the event that ends the task, so if the verb asked the Gateway for
+    // only what the user typed it would wait forever for a terminal event it had asked not to be told about. The verb
+    // widens the query with the three terminal types and narrows the *printing* instead, so the command still returns —
+    // which is §7.1's promise surviving a flag whose whole job is to hide things.
+    const filteredResponse = await fetch(`http://127.0.0.1:${info.port}/api/v1/tasks`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokenFromCli(dir)}`,
+        "content-type": "application/json",
+        "idempotency-key": "spawned-watch-filter",
+      },
+      body: JSON.stringify({ objective: "watched through a filter" }),
+    });
+    const filteredTask = (await filteredResponse.json()) as { id: string };
+    assert.equal(filteredResponse.status, 201, JSON.stringify(filteredTask));
+    const filteredWatcher = spawn(
+      process.execPath,
+      [
+        path.join(REPO, "apps/cli/crabby.ts"),
+        "--data-dir",
+        dir,
+        "task",
+        "watch",
+        filteredTask.id,
+        "--types",
+        "task.progress",
+        "--json",
+      ],
+      { cwd: REPO, env: { ...process.env, HOME: path.dirname(dir) } },
+    );
+    try {
+      let filteredOut = "";
+      let filteredErr = "";
+      filteredWatcher.stdout.setEncoding("utf8");
+      filteredWatcher.stdout.on("data", (chunk: string) => {
+        filteredOut += chunk;
+      });
+      filteredWatcher.stderr?.setEncoding("utf8");
+      filteredWatcher.stderr?.on("data", (chunk: string) => {
+        filteredErr += chunk;
+      });
+      const filteredAttached = await (async () => {
+        const deadline = Date.now() + 15_000;
+        for (;;) {
+          const response = await fetch(`http://127.0.0.1:${info.port}/api/v1/diagnostics`, {
+            headers: { authorization: `Bearer ${tokenFromCli(dir)}` },
+          });
+          const body = (await response.json()) as { streams?: { subscribers?: number } };
+          if ((body.streams?.subscribers ?? 0) >= 1) return true;
+          if (Date.now() > deadline) return false;
+          await wait(100);
+        }
+      })();
+      assert.ok(
+        filteredAttached,
+        `the filtered watcher never became a subscriber within 15 s; stderr was ${JSON.stringify(filteredErr)}`,
+      );
+
+      const filteredCancel = await fetch(
+        `http://127.0.0.1:${info.port}/api/v1/tasks/${filteredTask.id}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${tokenFromCli(dir)}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ mode: "immediate" }),
+        },
+      );
+      await filteredCancel.json();
+      assert.equal(filteredCancel.status, 200);
+
+      const filteredExit = await new Promise<number | null>((resolve) => {
+        const deadline = setTimeout(() => resolve(null), 15_000);
+        filteredWatcher.once("exit", (code) => {
+          clearTimeout(deadline);
+          resolve(code);
+        });
+      });
+      assert.notEqual(
+        filteredExit,
+        null,
+        "a `--types` filter that excludes the terminal event made the watcher hang, so the query must carry the events " +
+          `that end a task whatever the user asked to see; stdout was ${JSON.stringify(filteredOut)}`,
+      );
+      assert.equal(filteredExit, 0, filteredOut);
+      assert.ok(
+        !filteredOut.includes("task.cancelled"),
+        "the user asked for `task.progress` only, so the terminal event that ended the watch must not be printed — it " +
+          "was requested from the Gateway to know when to stop, not to be shown",
+      );
+    } finally {
+      if (filteredWatcher.exitCode === null) filteredWatcher.kill("SIGTERM");
+    }
+
     // C10-04's row, end to end: a spawned CLI asking a spawned Gateway for the registry. `tools ls --json` is the
     // machine form of the same answer the Web's tools pane will render in M3, and this is the test that says the two
     // cannot drift — there is one route behind both.

@@ -176,7 +176,10 @@ export const COMMANDS: readonly CommandSpec[] = [
     noun: "task",
     verb: "watch",
     summary: "follow one task's events, NDJSON per line with `--json`",
-    flags: ["--json"],
+    // `--types` is not a new promise: D-048 already accepted that `GET /events` filters by query (`sessionId`,
+    // `taskId`, `types`), and the Gateway has split that value on commas and matched it as a prefix since the route was
+    // written. What the flag adds is a terminal that can ask for the filter it was already entitled to.
+    flags: ["--types <a,b>", "--json"],
     status: "ready",
   },
 

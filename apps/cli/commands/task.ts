@@ -19,6 +19,7 @@ import {
   isTerminal,
   type TaskCheckpoint,
   type TaskRecord,
+  TERMINAL_STATES,
 } from "@crabby/api-contracts";
 import { GatewayFailure, readCredentials } from "@crabby/gateway";
 import type { DataLayout } from "@crabby/platform";
@@ -28,6 +29,12 @@ import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
 
 export type TaskVerb = "ls" | "show" | "cancel" | "watch";
+
+/** The events that end a task, derived rather than retyped: `TERMINAL_STATES` is the constant the runtime uses to decide
+ *  that a run is over, and a watch that could not see those events would never know to stop. Naming them as
+ *  `task.<state>` keeps this list tied to that one source, so a state added to the runtime cannot leave this filter
+ *  behind — the failure mode is a command that hangs, which no test a user runs would explain. */
+const TERMINAL_EVENT_TYPES = TERMINAL_STATES.map((state) => `task.${state}`);
 
 export async function runTask(
   verb: TaskVerb | undefined,
@@ -62,6 +69,26 @@ export async function runTask(
   const watchId = verb === "watch" ? tail.positionals[0] : undefined;
   if (verb === "watch" && watchId === undefined) {
     renderer.line("task watch", "which task? `crabby task ls` prints the ids");
+    return EXIT.usage;
+  }
+  // `--types` is split here rather than in the stream loop for the reason §7.1 gives exit 2: a value that yields no
+  // filter at all would ask the Gateway for nothing and then wait forever, and the user learns that from the command
+  // that mistyped it rather than from a stream that never answers. The Gateway trims and drops empty tokens itself
+  // (`app.ts` parses the query the same way), so the local rule is the same rule, read where the fix is one keystroke
+  // away instead of being discovered as a hang.
+  const watchTypesRaw = verb === "watch" ? tail.values.types : undefined;
+  const watchTypes =
+    watchTypesRaw === undefined
+      ? undefined
+      : watchTypesRaw
+          .split(",")
+          .map((token) => token.trim())
+          .filter((token) => token.length > 0);
+  if (watchTypesRaw !== undefined && (watchTypes === undefined || watchTypes.length === 0)) {
+    renderer.line("bad --types", `"${watchTypesRaw}" names no event type`);
+    renderer.fix(
+      "a comma-separated list such as `task.progress,tool.*` — leaving the flag off follows every event",
+    );
     return EXIT.usage;
   }
   const connection = await connect(layout);
@@ -265,8 +292,16 @@ export async function runTask(
     if (credentials === undefined) return reportNoGateway(renderer, "unpaired");
     let response: globalThis.Response;
     try {
+      // The filter the user asked for, widened by the three events that end a task. A `--types` value that left out
+      // `task.cancelled` would otherwise hide the very event that makes a watch finish, and the command would hold a
+      // stream open forever — which is §7.1's promise broken by a flag whose whole job is to narrow what is printed.
+      // Narrowing the *display* is the user's business; narrowing what the command can see about its own ending is not,
+      // so the widening happens in the query and the narrowing happens below, at print time.
+      const requested =
+        watchTypes === undefined ? undefined : [...watchTypes, ...TERMINAL_EVENT_TYPES];
       response = await fetch(
-        `${connection.url}/api/v1/events?taskId=${encodeURIComponent(watchId)}`,
+        `${connection.url}/api/v1/events?taskId=${encodeURIComponent(watchId)}` +
+          (requested === undefined ? "" : `&types=${encodeURIComponent(requested.join(","))}`),
         {
           headers: {
             authorization: `Bearer ${credentials.token}`,
@@ -286,7 +321,12 @@ export async function runTask(
       return EXIT.failure;
     }
 
-    renderer.line("watching", `${watchId} · ${task.state} · waiting for events`);
+    renderer.line(
+      "watching",
+      watchTypes === undefined
+        ? `${watchId} · ${task.state} · waiting for events`
+        : `${watchId} · ${task.state} · ${watchTypes.join(",")} · waiting for events`,
+    );
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -343,9 +383,18 @@ export async function runTask(
 
         const event = parsed as unknown as Event;
         if (idLine !== undefined) lastEventId = idLine;
-        seen += 1;
-        if (renderer.json) renderer.raw(JSON.stringify(event));
-        else renderer.line(String(event.seq).padStart(4), `${event.type}  ${event.ts}`);
+        // Printed only if the user asked for it, matched the way the Gateway matches: an exact type or a prefix ending in
+        // a dot, so `task` follows `task.state.changed` and `task.` follows the same events without swallowing
+        // `taskmaster.whatever`. The cursor still advances for an event that is not printed, because §5.1's reconnect
+        // contract is about the stream's position and not about what one client chose to look at.
+        const wanted =
+          watchTypes === undefined ||
+          watchTypes.some((filter) => event.type === filter || event.type.startsWith(`${filter}.`));
+        if (wanted) {
+          seen += 1;
+          if (renderer.json) renderer.raw(JSON.stringify(event));
+          else renderer.line(String(event.seq).padStart(4), `${event.type}  ${event.ts}`);
+        }
 
         // Two ways to recognise the end, because a terminal state arrives either as the state change itself or as the
         // event named for it, and watching past either one would leave the user staring at a prompt that will never

@@ -419,6 +419,36 @@ the watcher has something new to see. The end-to-end claim is the one that matte
 status zero, having printed one parseable event per line in a monotonic per-task `seq`, because `isTerminal` is what makes
 `task watch` a command that returns rather than a tail that only Ctrl-C ends.
 
+**Nineteenth slice — `crabby task watch --types`, and what a filter must not be allowed to hide.** The flag is not a new
+promise: D-048 already accepted that `GET /events` is filtered by query (`sessionId`, `taskId`, `types`), and the Gateway has
+split that value on commas and matched each token as a prefix since the route was written. What was missing was a terminal that
+could ask for the filter it was already entitled to, so the registry entry now names `--types <a,b>` and nothing server-side
+changed to accommodate it.
+
+The decision this slice turns on is that the flag narrows what a watch *prints* and never what it can see about its own ending.
+A `--types task.progress` watch that asked the Gateway for only what the user typed would never be told `task.cancelled`, and
+the command would hold a stream open forever — §7.1's "a command that returns" broken by a flag whose whole job is to hide
+things. So the query is widened with the three terminal types and the narrowing happens at print time, matched the way the
+Gateway matches: an exact type, or a prefix ending in a dot, so `task` follows `task.state.changed` without swallowing anything
+else that merely starts with the same letters. The three are derived from `TERMINAL_STATES` rather than retyped, because a state
+added to the runtime must not leave this filter behind, and the failure mode of that drift is a hang no user can diagnose. The
+cursor still advances for an event that is not printed, since §5.1's reconnect contract is about the stream's position and not
+about what one client chose to look at. An empty filter — `--types ""`, or commas and spaces naming nothing — is answered
+locally with exit 2 for the reason the seventeenth slice established: it would ask for no events at all and then wait forever,
+and the user should learn that from the command that mistyped it rather than from a stream that never answers.
+
+Two facts are recorded here rather than fixed in passing, because each is a claim a reader would otherwise trust. `crabby
+--help` prints a command and its summary and never the registry's `flags`, which makes the fix line at `apps/cli/crabby.ts:158`
+— "`crabby --help` lists the flags this build understands" — inaccurate; it predates this slice and correcting it would widen
+the work into the help renderer, so the test asserts the property that array really controls instead, which is whether
+`parseTail` accepts a flag or reports it unknown. And §8's matrix names `POST /tasks/{id}/resume` as the API behind
+`task resume`, but no such route exists in `packages/gateway/app.ts`: the only `resume` there is a comment recording that the
+recovery route deliberately resumes nothing (D-092). `task resume` therefore stays `planned` — `runner.resume` exists and
+answers `not-parked` with SECURITY §7, D-065's `re-ask`, §4.3 of this document and F-47 behind it, but nothing composes a
+runner into the Gateway, so no task can ever be parked and the verb would be scaffolding with nothing behind it. Parity tolerates
+the gap because its route check runs in one direction only: it fails when a registered route is undocumented, not when a
+documented route is unregistered.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

@@ -19,7 +19,6 @@
 // same-host redirect rule, the bounded hop count, and the capped read that stops a stranger's body at D-064's number
 // instead of pulling it whole onto a phone. Both the *why* and the *how* come from one place, because a redirect rule
 // with two copies is a rule with two answers.
-import { cappedRead, MAX_REDIRECTS, noteHeader, parseOrRefuse, SCHEMES } from "./net-shared.ts";
 import type { ToolOutcome, ToolRunContext } from "@crabby/agent-runtime";
 import {
   MAX_TOOL_OUTPUT_BYTES,
@@ -31,6 +30,7 @@ import { LIMITS_DEFAULTS } from "@crabby/core";
 import type { ToolCall } from "@crabby/policy";
 import type { ProviderToolSpec } from "@crabby/providers";
 import { assertRegistrable } from "./declare.ts";
+import { cappedRead, MAX_REDIRECTS, noteHeader, parseOrRefuse, SCHEMES } from "./net-shared.ts";
 import { writeOverflowFile } from "./overflow.ts";
 import { capWrapped, defaultNonce, type UntrustedMetadata } from "./untrusted.ts";
 

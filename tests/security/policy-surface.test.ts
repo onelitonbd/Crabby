@@ -195,6 +195,32 @@ describe("no client can be walked into an approval it cannot answer", () => {
     }
   });
 
+  it("no T3 shell command is answerable from Telegram, whatever the arguments", () => {
+    // The sweep above calls every T3 row with empty args; `shell.run`'s tier is a function of its arguments, so an
+    // empty call cannot prove the argument-dependent half. A destructive command and a sensitive redirect both deny
+    // from Telegram rather than queuing an approval no chat surface may sign (D-085). The redirect needs a path
+    // context — without roots and a home there is no deny-list to measure against, so judging it would assert the
+    // "cannot locate" branch instead of the sensitive one.
+    const paths = { home: "/home/ua", dataDir: "/home/ua/.local/share/crabby", roots: ["/home/ua/work"] };
+    for (const command of ["rm -rf /tmp/x", "echo x > ~/.ssh/authorized_keys"]) {
+      const decision = evaluate(
+        { tool: "shell.run", args: { command } },
+        { grants: ALL_GRANTS, clientKind: "telegram", taskId: "task_shell_t3" },
+        { grants: ALL_GRANTS, paths },
+      );
+      assert.equal(
+        decision.outcome,
+        "deny",
+        `shell.run ${JSON.stringify(command)} was not denied from Telegram`,
+      );
+      assert.match(
+        decision.outcome === "deny" ? decision.reason : "",
+        /TUI or the Web/,
+        "the refusal has to name where the answer can be given",
+      );
+    }
+  });
+
   it("an approval never exists for a T0 or T1 call, and always exists above it", () => {
     for (const spec of TOOL_REGISTRY) {
       const decision = evaluate(

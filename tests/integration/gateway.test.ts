@@ -49,7 +49,12 @@ import {
   type SqliteDb,
   setState,
 } from "@crabby/storage";
-import { combineToolSurfaces, createFileTools, defaultRealpathOf } from "@crabby/tools";
+import {
+  combineToolSurfaces,
+  createFileTools,
+  createHttpTools,
+  defaultRealpathOf,
+} from "@crabby/tools";
 import { createShellTools } from "@crabby/tools/shell";
 
 const REPO = path.resolve(new URL("../../", import.meta.url).pathname);
@@ -1337,6 +1342,84 @@ describe("the tool registry over http (§4.4's GET /tools row)", () => {
           `${name} is not declared by any executor in this build`,
         );
       }
+    } finally {
+      await harness.close();
+    }
+  });
+
+  /** The composition `crabby gateway start` builds for §4.2's mutating row: the file executor plus `http.request`
+   *  over one workspace, combined into one surface because the loop holds a single `ToolSurface` and §4.1 makes a
+   *  duplicate id fatal at startup rather than last-one-wins. Built beside the shell composition above rather than
+   *  merged into it, because a test that composed both would have to say which of the two a count moved for. */
+  function composeFileAndHttp(): { declares: (tool: string) => ToolDeclaration | undefined } {
+    const base = mkdtempSync(path.join(tmpdir(), "crabby-gateway-http-"));
+    const root = path.join(base, "workspace");
+    const home = path.join(base, "home");
+    const dataDir = path.join(base, "state");
+    mkdirSync(root, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    const scratchDirFor = (taskId: string) => {
+      const dir = path.join(dataDir, "scratch", taskId);
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      return dir;
+    };
+    const combined = combineToolSurfaces([
+      createFileTools({
+        paths: { home, dataDir, roots: [root] },
+        scratchDirFor,
+        realpathOf: defaultRealpathOf,
+      }),
+      createHttpTools({ scratchDirFor }),
+    ]);
+    return { declares: combined.declares };
+  }
+
+  it("answers the http.request row from its executor, and pins what the merge promises §6.3", async () => {
+    const { declares } = composeFileAndHttp();
+    const harness = await boot({ platformFacts: { isTermux: false }, declares });
+    try {
+      const body = (await harness.client.tools()).body as ToolsBody;
+      const row = body.items.find((item) => item.id === "http.request");
+      assert.ok(
+        row,
+        "§4.2's row is in the registry; with an executor composed it must stop being all-pending",
+      );
+      assert.deepEqual(
+        [...row.pendingRecordFields],
+        ["outputSchema"],
+        "the executor answers §4.1's other four fields, so the row merges rather than pends (F-55's condition) — " +
+          "and no declaration in this build carries an outputSchema, so exactly one field stays open",
+      );
+      assert.equal(
+        row.idempotent,
+        false,
+        "§7.3's verdict for a mutating request is `re-ask`: a recovery may not resend an order the server already " +
+          "received (D-065), and the screen that shows this flag is where a client learns why",
+      );
+      assert.equal(
+        row.sideEffects,
+        "external",
+        "§6.2's cancellation evidence reports that a POST may have landed somewhere this install cannot inspect",
+      );
+      assert.equal(
+        row.limits?.timeoutMs,
+        20_000,
+        "the network class's one clock from `limits.netFetchTimeoutMs` — the number §5.2 prices and the loop arms, " +
+          "read from the same key `net.fetch` announces",
+      );
+      assert.equal(
+        row.riskTier,
+        "T2",
+        "§4.2's price for this row, printed from the registry: an executor arriving does not reprice it, and the " +
+          "curated-host T1 belongs to the fetch row alone",
+      );
+      assert.equal(
+        body.runtime.implemented,
+        8,
+        "seven file rows plus the one mutating-request row — the merge adds a surface rather than reinterpreting " +
+          "the ones already there",
+      );
+      assert.equal(body.runtime.pending, body.count - 8);
     } finally {
       await harness.close();
     }

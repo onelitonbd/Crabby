@@ -415,6 +415,17 @@ granted), and an abort that kills the process group rather than the one pid the 
 install cannot inspect. The executor declares no `facts`: the tier moves on the argv the caller declared (D-099's
 channel stays empty rather than carrying a second copy of the request).
 
+**What this build declares now (http.request slice).** Nineteen of §4.2's forty-five rows have an executor — the
+eighteen above plus `http.request` — carried as nineteen declarations, because this row's reason to exist is that it
+cannot share `net.fetch`'s: one tool cannot declare itself both idempotent and not. The shell paragraph above stays as
+its snapshot. What this row adds to the rules above is a sixth, and it is about *when* rather than where or how much:
+**a mutating request is never passed by a resume** — `idempotent: false` makes §7.3's verdict for the step `re-ask`,
+which is the whole difference the §4.2 split carries, and it is why the tier cell does not move either: the
+allow-list de-escalation in §4.3 belongs to the GET row, so a curated host is still a host the user is asked before
+anything is written to it, and `escalation.ts` prices this row at its base tier by having no branch for it at all.
+The row also inherits the network class's one clock (`limits.netFetchTimeoutMs`, §5.2) rather than being handed a
+second number, because both rows are one crossing of the same boundary on the same `net.egress` grant.
+
 ### 4.2 Initial tool set with risk-tier assignment (closes O-020)
 
 Tiers are per `SECURITY.md` §6.2. "Approval" means the default policy for a fresh install; users may tighten, and
@@ -444,7 +455,7 @@ may relax only where a floor exists (T3 has no relaxation path in the first rele
 | `ext.uninstall` | `ext.install` | **T2** | `--purge-data` is **T3**. |
 | `mcp.connect` / `mcp.tools` | `ext.install` | **T2** | Shows exact command line or URL. |
 | `net.fetch` | `net.egress:<host>` | **T2** | **T1** only for a user-curated allow-list; response is untrusted content. **Executed since M2ab** (`packages/tools/net.ts`, D-106): GET only, because a method that mutates remote state is the next row's `http.request`; the allow-list that moves this row to **T1** is `net.allowList` in `config.json`, and the grant an identity holds names that *set* rather than its members, so a host nobody curated reaches the tier rule below instead of being denied outright. |
-| `http.request` (non-GET) | `net.egress` | **T2** | Any method that mutates remote state; carries destination host in the approval text. |
+| `http.request` (non-GET) | `net.egress` | **T2** | Any method that mutates remote state; carries destination host in the approval text. **Executed since the http.request slice** (`packages/tools/http.ts`): a second executor rather than a `method` argument on `net.fetch`, because the two rows cannot share a tier cell or an idempotency declaration — this row is `idempotent: false` (§7.3's verdict for a resume is `re-ask`), and the allow-list **T1** belongs to the GET row: a host the user curated for *reading* is not a host they pre-approved *writing* to, so every call is **T2** with the host named whatever `net.allowList` holds, and `escalation.ts` has no branch for this row at all. Serves `POST`/`PUT`/`PATCH`/`DELETE` verbatim — a lowercase or unrecognised verb is refused rather than rewritten, because §6.3's approval quotes `args` as the user read them — and a read verb is refused with a pointer at `net.fetch`. Credential headers (`Authorization`, `Cookie`, `x-api-*`) are refused with §3 rule 06 named rather than stripped (F-56: no vault, nothing to attach). Destination judgements are shared with `net.fetch` from `net-shared.ts`: http(s) only, a hop that changes the host refused as a destination nobody priced, D-106's five hops, D-064's capped read; a 303/301/302 turns the follow-up into a GET and drops the body, and the report says so. The clock is the network class's own — `limits.netFetchTimeoutMs`, the same key `net.fetch` reads (§5.2). |
 | `provider.invoke` | `provider.invoke` | **T1** | **T2** when the selected model is paid (`provider.billing`). |
 | `shell.run` | `shell.run` | **T2** per command | Capability itself is off by default. Tier computed per command, not per tool; escalation table in §4.3. **Executed since the shell slice** (`packages/tools/shell.ts`): argv-form only — `argv` plus an optional `cwd` inside the workspace roots, never a string assembled from untrusted content (§9) — cwd resolved through `checkPath` with the link re-check, a fixed child-env allow-list, abort killing the process group, and D-064's 64 KiB wrapped cap with the nonce delimiter and the runtime note outside it. One declaration covers both shell rows; privilege stays a grant the arbiter checks, not a branch the executor takes. Composed only when the install opted in (`shell.enabled`, `crabby init --enable-shell`); otherwise `GET /tools` reports both rows as pending. |
 | `shell.run` (elevated) | `shell.privileged` | **T3** | Package install/remove, service control, system config. Reached through the same argv-form executor as the base row: the elevated price is enforced by the capability (`shell.privileged`, withheld from every fresh install per §9) and by D-085's TUI/Web-only signature, not by a second executor path — so a T3 shell prompt parks on a CLI-only build exactly the way `config.set` does. |
@@ -568,7 +579,7 @@ interface:
 | Provider — idle stream | 45 s | A stream that goes quiet is dead, not slow. |
 | Provider — absolute | 300 s | The per-call ceiling, not the per-task one. |
 | `fs.*` | 10 s | Storage on a phone can be slow; it cannot be this slow. |
-| `net.fetch` | 20 s total | One request, redirects included, so a redirect chain cannot restart the clock forever. Enforced since M2ab by handing the executor the loop's own `AbortSignal` and no timer of its own, and a same-host chain is bounded at five hops (D-106), so a chain can neither restart the clock nor multiply the requests one pricing bought. |
+| `net.fetch` | 20 s total | One request, redirects included, so a redirect chain cannot restart the clock forever. Enforced since M2ab by handing the executor the loop's own `AbortSignal` and no timer of its own, and a same-host chain is bounded at five hops (D-106), so a chain can neither restart the clock nor multiply the requests one pricing bought. `http.request` takes the same number from the same key (`limits.netFetchTimeoutMs`): it is the same class — one crossing of the same boundary, on the same `net.egress` grant — and a second number for a second network row would be a second opinion about how long a phone waits on a stranger. |
 | `shell.run` | 120 s wall clock | Killed as a process group so children go with it. Declared since the shell slice (`shellRunTimeoutMs`, read from `config.json` so the declaration and the enforced deadline are one number); the loop arms the deadline from the declaration and hands the run its own abort, which the executor answers with a group kill — and the outcome is reported as a timeout, never a failure, because "it took too long" and "it did not work" need different responses. |
 | SQLite busy | 5 s | `PRAGMA busy_timeout`; longer and the UI starts to look frozen instead of busy. |
 | Extension, MCP | tool class + 5 s | Adapter overhead, so a slow plugin is not blamed on the tool or the host. |
@@ -585,8 +596,9 @@ priced by guess (F-41, F-45): a per-task wall clock, which would have to exclude
 clocks are separate by D-074 and a task paused for a human is not a task that is running long; a `finish-step` cancellation window,
 which is deliberately the step's own deadline rather than a second clock beside it (D-090); and a token budget and an
 optional cost ceiling, which both need `AGENT_RUNTIME.md` §8's context accounting and cannot be enforced before it
-exists. The per-tool deadlines below are enforced for the three classes this table prices — `fs.*`, `net.fetch`,
-`shell.run` — and a tool in no class runs under cancellation alone, with `deadlineMs: null` in its
+exists. The per-tool deadlines below are enforced for the three classes this table prices — `fs.*`, the network class
+(`net.fetch` and `http.request`), `shell.run` — and a tool in no class runs under cancellation alone, with
+`deadlineMs: null` in its
 `tool.execution.started` event so the absence is visible instead of implied.
 
 Every row is a `limits.*` key in `config.json` — readable with `crabby config get limits`, editable in the same screen

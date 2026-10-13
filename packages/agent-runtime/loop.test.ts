@@ -964,6 +964,13 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
       20_000,
       "§5.2's `net.fetch` row: one request, redirects included",
     );
+    assert.equal(
+      toolDeadlineMs("http.request"),
+      toolDeadlineMs("net.fetch"),
+      "and its sibling row in the same class, from the same key: §5.2 prices the network class once, and a second " +
+        "number for a second crossing of the same boundary would be a second opinion about how long a phone waits " +
+        "on a stranger",
+    );
     assert.equal(toolDeadlineMs("shell.run"), 120_000, "§5.2's `shell.run` row");
     assert.equal(
       toolDeadlineMs("memory.save"),

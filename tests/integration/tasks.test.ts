@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
-import { type LoopLimits } from "@crabby/agent-runtime";
+import type { LoopLimits } from "@crabby/agent-runtime";
 import { createScriptedProvider } from "@crabby/agent-runtime/loop-harness";
 import { type Event, isTerminal, type TaskRecord } from "@crabby/api-contracts";
 import { createLogger } from "@crabby/core";

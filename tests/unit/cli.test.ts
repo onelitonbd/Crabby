@@ -3,7 +3,7 @@
 // wrong thing — that the code is correct in isolation rather than that `crabby` works.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -127,6 +127,76 @@ test("`init` creates the state dir, the vault at 700, and §5 step 3's workspace
     JSON.parse(readFileSync(path.join(state, "config.json"), "utf8")),
     { workspace: { roots: [workspace] } },
     "init never overwrites, and never records the same root twice",
+  );
+});
+
+test("`init --enable-shell` records the §9 opt-in, and a bare `init` leaves the shell off", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  const workspace = path.join(root, "crabby-workspace");
+  const opted = crabby(["init", "--enable-shell"], state);
+  assert.equal(opted.code, 0, opted.err + opted.out);
+  assert.match(opted.out, /shell/, "the opt-in is explained in terms the next command can use");
+  assert.deepEqual(JSON.parse(readFileSync(path.join(state, "config.json"), "utf8")), {
+    workspace: { roots: [workspace] },
+    shell: { enabled: true },
+  });
+
+  // The flag is an opt-in, not a mode: a second init without it leaves the choice alone, and a second init with it
+  // leaves a refusal alone — init never overwrites either way.
+  const plain = tempDir();
+  const plainState = path.join(plain, ".crabby");
+  assert.equal(crabby(["init"], plainState).code, 0);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(plainState, "config.json"), "utf8")), {
+    workspace: { roots: [path.join(plain, "crabby-workspace")] },
+  });
+  assert.equal(crabby(["init"], plainState).code, 0);
+  const kept = crabby(["init", "--enable-shell"], state);
+  assert.equal(kept.code, 0);
+  assert.match(kept.out, /left untouched/);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(state, "config.json"), "utf8")), {
+    workspace: { roots: [workspace] },
+    shell: { enabled: true },
+  });
+});
+
+test("`init` reports the shell state on an existing config instead of writing it", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  assert.equal(crabby(["init"], state).code, 0);
+  const rerun = crabby(["init", "--enable-shell"], state);
+  assert.equal(rerun.code, 0);
+  assert.match(rerun.out, /shell/, "the existing choice is reported, not replaced");
+  assert.match(rerun.out, /config set shell\.enabled/, "the fix names the command that changes it");
+});
+
+test("`config set shell.enabled` toggles the opt-in, and a non-boolean is refused at the keystroke", () => {
+  const state = path.join(tempDir(), ".crabby");
+  assert.equal(crabby(["init"], state).code, 0);
+  assert.equal(crabby(["config", "set", "shell.enabled", "true"], state).code, 0);
+  const get = crabby(["config", "get", "shell", "--json"], state);
+  assert.equal(get.code, 0, get.out);
+  assert.deepEqual(JSON.parse(get.out).shell, { enabled: true });
+  assert.equal(crabby(["config", "set", "shell.enabled", "false"], state).code, 0);
+  const off = crabby(["config", "get", "shell", "--json"], state);
+  assert.deepEqual(JSON.parse(off.out).shell, { enabled: false });
+  // A truthy string enabling shell execution would be an opt-in nobody typed, so the schema refuses it — and a
+  // refused set changes nothing, which the earlier round-trip test's file still shows.
+  const bad = crabby(["config", "set", "shell.enabled", '"yes"'], state);
+  assert.equal(bad.code, 2, bad.out);
+  const kept = crabby(["config", "get", "shell", "--json"], state);
+  assert.deepEqual(JSON.parse(kept.out).shell, { enabled: false });
+});
+
+test("`init` refuses a flag it does not know before touching anything", () => {
+  const state = path.join(tempDir(), ".crabby");
+  const run = crabby(["init", "--enable-shel"], state);
+  assert.equal(run.code, 2, run.out);
+  assert.match(run.out, /--enable-shell/, "the fix names the flag that was meant");
+  assert.equal(
+    existsSync(state),
+    false,
+    "a usage refusal lands before any directory is created, let alone a config that opts in",
   );
 });
 

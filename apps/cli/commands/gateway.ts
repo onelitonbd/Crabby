@@ -70,6 +70,7 @@ import {
   type TaskToolCode,
   type TaskToolOptions,
 } from "@crabby/tools";
+import { createShellTools } from "@crabby/tools/shell";
 import { parseTail, unknownFlagMessage } from "../args.ts";
 import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
@@ -171,6 +172,36 @@ async function runStart(
           scratchDirFor: (taskId) => taskScratch(layout, taskId),
           limits: loaded.limits,
         });
+  /** §9's opt-in, read strictly: only `enabled: true` opts in, and anything else — absent, `false`, or a
+   *  non-boolean the schema already refused — is off. Enabling additionally takes configured workspace roots (below):
+   *  a command needs a root to be confined to (§8's cwd rule), so `true` with no roots still composes nothing, and the
+   *  banner says which half is missing rather than leaving a row to explain it later. */
+  const shellEnabled = loaded.config.shell?.enabled === true;
+  const shellTools =
+    shellEnabled && roots.length > 0
+      ? createShellTools({
+          paths: { home: homeDirectory(), dataDir: layout.stateDir, roots },
+          // The same scratch layout and the same symlink resolver the file executor is handed: a policy that resolved
+          // a link and an executor that did not would let the link decide a containment question between them.
+          scratchDirFor: (taskId) => taskScratch(layout, taskId),
+          realpathOf: defaultRealpathOf,
+          // D-074's `shell.run` class deadline, read from `limits` so the declaration and the clock the loop enforces
+          // are one number rather than two opinions about how long a command may run.
+          limits: loaded.limits,
+        })
+      : undefined;
+  /** The workspace-bound executors, composed whether or not anything drives them: `GET /api/v1/tools` answers §4.1's
+   *  runtime fields for the file rows from the file executor alone when no runner exists, and the shell executor joins
+   *  that half for the same reason — both are confined to the configured roots (§8), and neither is a way to create a
+   *  timer nothing would fire, which is the row the combination below withholds. A duplicate id across the two stays
+   *  fatal at startup (§4.1), because two executors answering one call would leave the outcome to whichever promise
+   *  settled. */
+  const workspaceTools =
+    executor === undefined
+      ? undefined
+      : shellTools === undefined
+        ? executor
+        : combineToolSurfaces([executor, shellTools]);
   /** §3.6's selection, resolved here rather than inside the Gateway for the reason the providers and the executor are:
    *  the party that starts the process is the party that can print a refusal and its fix once, at startup, instead of
    *  leaving it to a route to explain later. It moved above `buildApp` when the runner arrived, because the runner needs
@@ -324,10 +355,10 @@ async function runStart(
    *  §5.1's "hidden is better than failing" applied to a subsystem: a Gateway that drives no tasks must not advertise a
    *  way to create a timer nothing would ever fire, because the row it creates would read as "soon" forever. */
   const composed =
-    executor === undefined || !selected.ok
+    workspaceTools === undefined || !selected.ok
       ? undefined
       : combineToolSurfaces([
-          executor,
+          workspaceTools,
           netTools,
           configTools,
           schedulerTools,
@@ -369,12 +400,12 @@ async function runStart(
     listenerMode: "local",
     providers,
     // The declarations `GET /api/v1/tools` merges §4.1's runtime fields from: the combined surface when a runner exists,
-    // so `cron.schedule` is reported as implemented exactly when a job could fire, and the file executor alone when it
-    // does not — a count that rose on a Gateway that drives nothing would be F-55's number lying.
+    // so `cron.schedule` is reported as implemented exactly when a job could fire, and the workspace executors alone
+    // when it does not — a count that rose on a Gateway that drives nothing would be F-55's number lying.
     ...(composed === undefined
-      ? executor === undefined
+      ? workspaceTools === undefined
         ? {}
-        : { declares: executor.declares }
+        : { declares: workspaceTools.declares }
       : { declares: composed.declares }),
     ...(drive === undefined ? {} : { drive }),
   });
@@ -441,7 +472,7 @@ async function runStart(
   );
   // Printed because it is the difference between a Gateway that can describe its tools and one that can only classify
   // them, and `GET /api/v1/tools` answers it too — this line just answers it once, at startup, where a user can act on it.
-  if (executor === undefined) {
+  if (workspaceTools === undefined) {
     renderer.line(
       "tools",
       "no executor composed: no workspace roots are configured, so every row reports §4.1's runtime fields as pending",
@@ -453,7 +484,9 @@ async function runStart(
   } else {
     renderer.line(
       "tools",
-      `${executor.declarations().length} declared by the file executor over ${roots.length} root(s)` +
+      `${workspaceTools.declarations().length} declared by ${
+        shellTools === undefined ? "the file executor" : "the file and shell executors"
+      } over ${roots.length} root(s)` +
         (composed === undefined
           ? ", and nothing else: a Gateway that drives no tasks declares no way to create a timer, no way to read a " +
             "conversation and no way to act on a task, because all of them belong to the runner's one surface (§5.1)"
@@ -466,6 +499,34 @@ async function runStart(
     renderer.line(
       "tools",
       "the rows nothing implements still name their runtime fields as pending (F-55)",
+    );
+  }
+  // Printed beside `tools` because it is the same question for a different row: whether a `shell.run` call has an
+  // executor behind it, and if not, which half is missing — the opt-in (§9, `docs/ROADMAP.md` §4) or a root to be
+  // confined to (§8). `GET /api/v1/tools` answers the counts; this line answers it once, at startup, where a user
+  // can act on it.
+  if (!shellEnabled) {
+    renderer.line(
+      "shell",
+      "not composed: `shell.run` is off by default (§4.2), so no command runs through it",
+    );
+    renderer.fix(
+      "`crabby init --enable-shell` opts in on a fresh install, `crabby config set shell.enabled true` after",
+    );
+  } else if (shellTools === undefined) {
+    renderer.line(
+      "shell",
+      "opted in but not composed: no workspace root is configured, so `shell.run` has no root to run in",
+    );
+    renderer.fix(
+      "`crabby config set workspace.roots '[\"/path/to/work\"]'` names one; a command needs a root to be confined " +
+        "to (§8)",
+    );
+  } else {
+    renderer.line(
+      "shell",
+      `${shellTools.declarations().length} declared by the shell executor over ${roots.length} root(s), ` +
+        "base T2 per command with §4.3's escalation deciding what needs a human",
     );
   }
   // Both halves of the condition are named because TypeScript cannot infer one from the other, and neither can a

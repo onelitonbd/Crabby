@@ -23,7 +23,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "init",
     summary: "create the data directory and config file",
-    flags: ["--data-dir DIR"],
+    flags: ["--data-dir DIR", "--enable-shell"],
     status: "ready",
   },
   {

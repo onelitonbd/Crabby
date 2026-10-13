@@ -1084,6 +1084,18 @@ in §13 is now `--restrict task,session`, which mints an identity that can read 
 else. The finding is recorded here rather than as a new row because it is F-52's subject — what a restriction means and
 who may set it — and this row is where a reader looks for that answer.
 
+**Amendment (thirtieth slice): `task.cancel` now has a path where the capability *is* the control.** §4.2's three task
+rows are executed inside a run (`packages/tools/task.ts`, D-105), and a run is the one place this build has a
+`PolicySubject`, so a `task.cancel` tool call is gated by the `task.cancel` grant the identity holds and refused §13's way
+when it does not hold one. That is the enforcement this row has described since §3.1, and until now it had only ever
+applied to file and scheduler tools. The route half is unchanged and stays exactly as this row says it:
+`POST /api/v1/tasks/{id}/cancel` decides on the token the guard demanded, because it has no subject to ask and D-097's
+migration is still what stands between that and a grant test. What changed is the *shape* of the gap, and the new shape is
+the one a reader can act on: the same act is gated on one path and not on the other, so an identity minted with
+`--restrict task` cannot stop a task from inside a run and can still stop one over HTTP with its token. That is worse than
+a uniform gap in one specific way — it makes the capability real enough to be relied on and partial enough to be wrong
+about — and it is the reason the closing condition below is now sharper rather than softer: one migration, and both paths
+decide on the same fact.
 
 ### F-54 — §4.4's first check is a *type* check, and a schema that arrives as data cannot be type-checked
 
@@ -1206,6 +1218,24 @@ five pending fields rather than four. Three things about that are worth recordin
 3. **Eleven declarations answer ten rows.** The drift item 4 records did not move: `file.stat` is still declared and still
    unclassified, and a count that rose on both sides would have hidden it.
 
+**Amendment (thirtieth slice): thirteen rows are implemented, and the three new ones act on work rather than on files.**
+The same composition gained a fourth surface — `createTaskTools`, declaring `task.create`, `task.status` and `task.cancel`,
+the rows §4.2 prices at T1, T0 and T1 — so a Gateway that composes a runner now answers
+`runtime: {implemented: 13, described: 0, pending: 32}`, and a Gateway that composes none still answers 7 with all three
+rows carrying their five pending fields. Three things belong beside the number:
+
+1. **The count is asserted in two integration files, and they agree because both harnesses now compose four surfaces.**
+   `tests/integration/jobs.test.ts` said it mirrored `crabby gateway start` while composing three of the four; this slice
+   made the sentence true rather than narrowing it, so 13 is one fact asserted twice instead of two fixtures with two
+   numbers — and the job routes are proved unaffected by a surface they do not use, which is the only way "unaffected" is
+   worth writing down.
+2. **`described` is still 0, with three more rows keeping it there.** None of the three declarations carries an
+   `outputSchema`, for the reason §4.1 gives and the other executors' tests repeat: an empty one would pretend to validate
+   an answer these tools render as prose for a model to read.
+3. **Fourteen declarations answer thirteen rows.** The drift item 4 records is still exactly one row wide: `file.stat` is
+   declared and still unclassified, and both counts rose by three, which is what keeps the drift visible rather than
+   absorbed.
+
 ### F-56 — §3.7 gives an adapter a vault handle, and nothing in the build resolves one
 
 **Severity: medium, open, and the same shape as F-52.** §3.7 is specific: provider credentials "are supplied once, stored
@@ -1278,6 +1308,50 @@ and why W16-12's "teach `crabby task run --schedule`" is deferred with this fiel
 field" but "give the route a way to open the T2 approval the field implies" — which is the same condition `job edit`
 (C12-05) waits on. The other two fields are unchanged: capability narrowing per task still has no carrier, and the model
 pin still needs a `modelId` column and version 6.
+
+**Amendment (thirtieth slice): the pin's schema version moved, because version 6 was spent on conversations.** The two
+sentences above say a model pin "would need schema version 6" and that M2x spent 5 on §4.5's `job` and `job_run` tables.
+M2y then spent 6 on the `session` table and its backfill (D-104), so the pin needs version **7** — and the reason the
+number went stale is F-40's shape inside this file rather than inside a screen: a version printed in prose, away from the
+migration list that produces it. Nothing else here moved. Capability narrowing per task still has no carrier in
+`CreateTaskBody`, `schedule` stays out of `POST /tasks` by the decision the previous amendment records, and the honest
+closing condition for the pin is still the contract gaining the field rather than the row losing it — §3.6 says a user
+"may pin a model per task", and a runner that can only take its model from composition is the half of that sentence this
+build answers.
+
+### F-58 — `POST /approvals/{id}/decision` records the answer and nothing in the process spends it
+
+**Severity: high, open, and the composition's to answer rather than a defect in the arbiter or in the runner.** A run that
+reaches a gated step does what §6.3 and D-084 ask: `policy.evaluate` answers `require-approval`, the loop opens the row
+inside the same transaction as the `approval.requested` event and the move to `awaiting_approval`, it writes D-065's
+`prompt` boundary, and it suspends. A user then answers from any interface, the arbiter records the decision, the
+`approval.answered` event is appended, the row leaves the pending queue and carries `approved` beside `answeredBy` — and
+the task stays `awaiting_approval` forever. `Runner.resume(taskId)` exists, holds the `SuspendedRun` in memory, and would
+spend the decision; no route calls it. `packages/gateway/app.ts`'s `registerApprovalRoutes` is not handed a runner, and
+the only callers of `resume` in the repository are tests.
+
+The restart case is *not* this finding and is already honest: `resume` answers `not-parked` with F-47's reason, because
+§7 keeps `call.args` out of the checkpoint (SECURITY.md §8.2, D-095) so a restarted Gateway cannot rebuild the proposed
+call, and D-065's verdict for a step killed at a prompt boundary is `re-ask`. That is an absence with a sentence attached.
+What this finding is about is the same-process case, where the parked run is reachable and nothing asks it — so §6.3's
+"answer from anywhere" is, in this build, "record an answer from anywhere": a user approves a T2 step on Telegram, the
+button says approved, and the agent never continues. The corollary of D-084's rule is the reason it is easy to miss: only
+the loop may open a prompt, so only the loop can spend one, and the loop is the one party a route cannot reach without
+being handed it.
+
+Found by the thirtieth slice rather than by a review pass, and found because a test tried to use it: `task.cancel` with
+`all: true` is §4.2's T2 half, so the run that declares it parks, and the test that approves the prompt and expects the
+cancellations to happen discovered that nothing wakes the run. `tests/integration/task-tools.test.ts` therefore asserts the
+gap and then drives `runner.resume` itself, with a comment naming this finding — the assertions after that call are the
+behaviour the fix has to make reachable from a route, and they stay as they are when it does.
+
+**Closing condition:** the decision path wakes the parked run — either the route is handed the runner, or the arbiter is,
+and the second is the better seam because a decision answered over a socket and one answered inside the process then take
+the same path — for `approve` *and* for `deny`, since `loop.resume` spends both and a denial nobody delivers leaves a task
+parked on a question already answered. With it: a test that a T2 prompt answered over HTTP ends with the gated step
+executed and the task terminal, containing no `resume` call of its own; §4.3's decision row and §7.1's `approval approve`
+row losing the sentence this slice added; and `docs/review/TELEGRAM.md`'s approve element checked against it, because
+"approved" printed on a phone has to mean something happened on the device.
 
 ## 3. Checks That Passed
 

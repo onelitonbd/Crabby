@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-57 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-58 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -902,6 +902,39 @@ features) and `docs:check` (104 accepted decisions) green.
 
 
 
+
+**Slice 30 — §4.2's three task rows, composed against the Gateway's own acts (D-105).** `task.create` (T1), `task.status`
+(T0, whose §4.2 alias is `task.history`) and `task.cancel` (T1, and **T2** for `crossSession` or `all`) are declared and
+executed by `packages/tools/task.ts`, the fourth surface in the runner's one executor. The executor owns argument
+validation, the cross-session guard and the rendering, and nothing else: it holds no database, no runner and no route,
+because the acts it needs already exist and belong to the Gateway. Two new fields on `BuiltApp` are the slice's seam —
+`driveTask`, which *is* `recordAndDriveTask`, the one act `POST /api/v1/tasks` and the scheduler's `fire` reach, and
+`cancellation`, which is the process's one manager the cancel route requests through — and they are handed *out* rather
+than composed in, because `ARCHITECTURE.md` §19's dependency direction forbids `packages/gateway` from importing
+`packages/tools` (which is why `deps.declares` exists). `apps/cli/commands/gateway.ts` binds the four sinks against holders
+filled after `buildApp` returns, exactly as `cron.schedule`'s sink is bound. Decided rather than fallen into: `source:
+"tool"` as a third value on `DriveTaskInput.source`, so §14's log line can tell a task a model created from one a user asked
+for and from one a timer fired; the identity a call acts under arrives as the run's `RunOrigin` and never as an argument,
+so a created task runs under the capabilities of the identity that is already running and a cancellation is attributed to a
+person; policy prices the crossing before the call and the executor refuses an undeclared one at it, since a price no party
+honours at the act is a sentence in a table; `all` reaches the nine states minus the three terminal ones minus
+`interrupted`, because §7.1's recovery already ended that task and recorded why, and settling it to `cancelled` would
+rewrite a crash as a choice; `task.status` carries the newest eight events by `seq` range and names the ones it did not,
+with the eight as one constant both the description and the sink read; and a cancellation output never claims a stop it did
+not see — `settled: false` renders `cancelling`, and §6.2's evidence is rendered from the record once the manager has
+written it. What this slice did **not** build: `task.resume`, because F-47's absent route is not something a tool gets to
+substitute for; a wake for a parked run, which is the gap this slice's own T2 test found and **F-58** now records — an
+answered approval is recorded and nothing spends it, so `tests/integration/task-tools.test.ts` asserts the gap and then
+drives `runner.resume` itself with a comment saying whose job that becomes; and `memory.*`, `net.fetch`, `config.*` and
+`shell.run`, which are the rest of §4's tools line. Documents moved beside the code: `DECISIONS.md` with D-105, §4A's map on
+five rows and the counter at 105; `docs/CONSISTENCY_REVIEW.md` with F-55 amended a third time for the three new rows, F-57
+amended for the schema version a model pin now needs, and F-58 opened; `docs/INTERFACES_AND_API.md` §4.3's decision row,
+which now says the run stays parked, and its `GET /tools` row, which says where the count comes from; this file's finding
+range at F-01…F-58; and `packages/tools/index.ts`'s header, which named `task.*` and `session.*` as stores this build has
+no manager for and now says what each remaining absence waits on. Gates: `typecheck`, `lint`, `format:check`, `npm test`
+612/612 (20 new: 13 on the executor and the composition it joins, 7 over HTTP against a Gateway composed the way
+`crabby gateway start` composes one), `test:security` 138/138, `test:parity` (24 routes, 45 tools, 32 capabilities, 25
+features) and `docs:check` (105 accepted decisions) green.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

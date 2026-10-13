@@ -5,7 +5,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { type ClientInterface, EXIT, type ExitCode } from "@crabby/api-contracts";
+import type { CancellationFailureCode } from "@crabby/agent-runtime";
+import {
+  type ClientInterface,
+  EXIT,
+  type ExitCode,
+  isTerminal,
+  TASK_STATES,
+  type TaskState,
+} from "@crabby/api-contracts";
 import {
   createLogger,
   createShutdown,
@@ -25,31 +33,58 @@ import { composeProviders, selectDefaultModel } from "@crabby/providers";
 import {
   DB_FILE_NAME,
   getSession,
+  getTask,
   listSessions,
   migrate,
   openDatabase,
   patchSession,
+  readReplayWindow,
   schemaVersion,
   sessionRowOf,
   sessionRows,
   taskScratch,
+  tasksInStates,
 } from "@crabby/storage";
 import {
   combineToolSurfaces,
   createFileTools,
   createSchedulerTools,
   createSessionTools,
+  createTaskTools,
   defaultRealpathOf,
   SCHEDULER_TOOL,
   type SchedulerToolOptions,
   SESSION_LIST_TOOL,
   SESSION_RENAME_TOOL,
+  TASK_CANCEL_TOOL,
+  TASK_CREATE_TOOL,
+  TASK_HISTORY_EVENTS,
+  TASK_STATUS_TOOL,
+  type TaskToolCode,
+  type TaskToolOptions,
 } from "@crabby/tools";
 import { parseTail, unknownFlagMessage } from "../args.ts";
 import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1"]);
+
+/** What `task.cancel`'s `all: true` reaches, derived from the contract's own two lists rather than retyped. `interrupted`
+ *  is excluded on purpose and the exclusion is a decision, not an oversight: §7.1's recovery already ended that task and
+ *  recorded *why* (the process died), and settling it to `cancelled` would rewrite a crash as a choice the user made —
+ *  which is the one thing §4.1's "success is not cancellation, which is not failure, which is incomplete execution"
+ *  forbids confusing. The three terminal states are excluded because the manager refuses them anyway, and filtering here
+ *  keeps the answer's count honest: every task `all` reports is one it actually asked. */
+const CANCELLABLE_STATES: readonly TaskState[] = TASK_STATES.filter(
+  (state) => !isTerminal(state) && state !== "interrupted",
+);
+
+/** The refusal both cancellation sinks give before `buildApp` has returned the manager. Unreachable in a Gateway that
+ *  declared the tools — see `taskTools` above — and reachable in a composition test, where hanging would be the worse
+ *  answer. */
+const NO_CANCELLATION =
+  "this process composed no cancellation manager, so there is nothing to ask: `task.cancel` is declared only inside a " +
+  "Gateway, because §6.1's request row, state move and event are the manager's to write";
 
 export type GatewayVerb = "start" | "status";
 
@@ -187,6 +222,51 @@ async function runStart(
     },
     limits: loaded.limits,
   });
+  /** §4.2's three task rows. Two of their sinks are late-bound holders for the reason `scheduleSink` is one: the acts
+   *  they reach are composed *inside* `buildApp` — the runner, the journal, the arbiter and the process's one
+   *  cancellation manager — while the runner needs its executor *before* `buildApp` can run. So the executor is built
+   *  first against holders and the holders are filled from `built` below, which is D-105's whole content: one act, reached
+   *  by three callers, rather than a second creation path in the tool package. The refusals are unreachable in a Gateway
+   *  that declared these tools at all — the surface is composed only when a runner is — and reachable in a test that
+   *  composes them on their own, which is the case they exist to answer rather than hang. */
+  let driveSink: TaskToolOptions["create"] | undefined;
+  let askCancel: TaskToolOptions["cancel"] | undefined;
+  let askCancelAll: TaskToolOptions["cancelAll"] | undefined;
+  const taskTools = createTaskTools({
+    create: (input) =>
+      driveSink === undefined
+        ? {
+            ok: false,
+            code: "unavailable",
+            reason:
+              "this process composed no task handoff, so there is nothing to create a task in: `task.create` is " +
+              "declared only beside a runner that can run what it creates",
+          }
+        : driveSink(input),
+    /** The one sink that needs no holder: `getTask` and `readReplayWindow` are the two reads `GET /api/v1/tasks/{id}`
+     *  answers with, over the database this process opened before `buildApp`. Reading them here rather than through the
+     *  Gateway's own route keeps §9's rule — one derivation of a record — without making a tool call an HTTP client of
+     *  the process it is running inside. */
+    read: (taskId) => {
+      const task = getTask(handle.db, taskId);
+      if (task === undefined) return undefined;
+      return {
+        task,
+        sessionId: task.sessionId,
+        events: readReplayWindow(handle.db, taskId, TASK_HISTORY_EVENTS),
+        eventCount: task.lastSeq,
+      };
+    },
+    cancel: (input) =>
+      askCancel === undefined
+        ? { ok: false, code: "unavailable", reason: NO_CANCELLATION }
+        : askCancel(input),
+    cancelAll: (input) =>
+      askCancelAll === undefined
+        ? { results: [{ ok: false, code: "unavailable", reason: NO_CANCELLATION }] }
+        : askCancelAll(input),
+    limits: loaded.limits,
+  });
   /** The one executor the runner is given, which is a *combination* rather than the file tools alone: §4.1 registers a
    *  tool by name across the whole composition and `combineToolSurfaces` makes a duplicate fatal at startup instead of
    *  last-one-wins. Composed only when a runner will exist, for the reason `createSchedulerTools`'s own header gives —
@@ -195,7 +275,7 @@ async function runStart(
   const composed =
     executor === undefined || !selected.ok
       ? undefined
-      : combineToolSurfaces([executor, schedulerTools, sessionTools]);
+      : combineToolSurfaces([executor, schedulerTools, sessionTools, taskTools]);
   // Both halves of the condition are named again here, for the reason the banner below names them: `composed` is built
   // from `selected`, so "there is an executor" and "a model was selected" are the same fact seen from two places, and
   // TypeScript narrows the second only from a test that mentions it.
@@ -310,11 +390,13 @@ async function runStart(
       "tools",
       `${executor.declarations().length} declared by the file executor over ${roots.length} root(s)` +
         (composed === undefined
-          ? ", and nothing else: a Gateway that drives no tasks declares no way to create a timer and no way to read a " +
-            "conversation, because both belong to the runner's one surface (§5.1)"
+          ? ", and nothing else: a Gateway that drives no tasks declares no way to create a timer, no way to read a " +
+            "conversation and no way to act on a task, because all of them belong to the runner's one surface (§5.1)"
           : `, plus ${SCHEDULER_TOOL} from the scheduler it drives jobs through — the only path that creates one, ` +
-            "because a route or a verb that made a job would be a creation path with no approval in it (C12-09) — and " +
-            `${SESSION_LIST_TOOL} and ${SESSION_RENAME_TOOL} for the conversations schema version 6 gave a record`),
+            "because a route or a verb that made a job would be a creation path with no approval in it (C12-09) — " +
+            `${SESSION_LIST_TOOL} and ${SESSION_RENAME_TOOL} for the conversations schema version 6 gave a record, and ` +
+            `${TASK_CREATE_TOOL}, ${TASK_STATUS_TOOL} and ${TASK_CANCEL_TOOL}, whose sinks are the Gateway's own task act ` +
+            "and its one cancellation manager rather than a second copy of either (D-105)"),
     );
     renderer.line(
       "tools",
@@ -392,6 +474,68 @@ async function runStart(
       renderer.fix(
         "a run stops and records `waiting on approval` if it cannot get one; nobody is answered on its behalf (§4.5)",
       );
+  }
+  // D-105's binding, and the reason it is here rather than in `packages/tools`: `built.driveTask` *is*
+  // `recordAndDriveTask`, the act `POST /api/v1/tasks` and the scheduler's `fire` already reach, so a task a model
+  // creates is recorded, journalled, priced and handed to the runner exactly as one a user created is. Nothing below
+  // re-implements any of it; the only thing this composition adds is the rendering, which the tool owns.
+  {
+    driveSink = ({ objective, sessionId, origin }) => {
+      const driven = built.driveTask({ objective, sessionId, origin, source: "tool" });
+      return {
+        ok: true,
+        task: driven.task,
+        driven: built.runner !== undefined,
+        withheld: driven.withheld,
+        ...(driven.started === undefined || driven.started.ok
+          ? {}
+          : { startRefused: { code: driven.started.code, reason: driven.started.reason } }),
+      };
+    };
+    // The manager's four failure codes, narrowed to the two a model can act on: `not-found` is "you named a task that
+    // does not exist" and the other three are all §4.1's absorbing states getting there first — `terminal`,
+    // `not-cancelling` and `already-settled` differ in which caller moved the record, and the manager's own sentence (which
+    // travels through verbatim) is the place that difference is stated. A fourth code here would be a fourth wording of
+    // one refusal.
+    const codeFor = (code: CancellationFailureCode): TaskToolCode =>
+      code === "not-found" ? "not-found" : "terminal";
+    const request = (input: {
+      taskId: string;
+      mode?: "finish-step" | "immediate";
+      reason?: string;
+      origin: { clientId: string; interface: ClientInterface };
+    }): ReturnType<NonNullable<typeof askCancel>> => {
+      const result = built.cancellation.request({
+        taskId: input.taskId,
+        ...(input.mode === undefined ? {} : { mode: input.mode }),
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+        // §14's audit fields, taken from the run's origin and never from the arguments: who asked and from which
+        // interface. The manager puts both in the `task.cancelling` event's payload, so a cancellation a model requested
+        // is attributable to the identity whose approval let it run.
+        byClientId: input.origin.clientId,
+        via: input.origin.interface,
+      });
+      return result.ok
+        ? {
+            ok: true,
+            task: result.task,
+            settled: result.settled,
+            ...(result.deduplicated === undefined ? {} : { deduplicated: result.deduplicated }),
+            ...(result.escalated === undefined ? {} : { escalated: result.escalated }),
+          }
+        : { ok: false, code: codeFor(result.code), reason: result.reason };
+    };
+    askCancel = (input) => request(input);
+    askCancelAll = ({ mode, reason, origin }) => ({
+      results: tasksInStates(handle.db, CANCELLABLE_STATES).map((task) =>
+        request({
+          taskId: task.id,
+          ...(mode === undefined ? {} : { mode }),
+          ...(reason === undefined ? {} : { reason }),
+          origin,
+        }),
+      ),
+    });
   }
   if (built.bootstrap) {
     renderer.line("", "");

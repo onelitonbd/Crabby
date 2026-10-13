@@ -22,14 +22,17 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
-import type { Scheduler } from "@crabby/agent-runtime";
+import type { CancellationFailureCode, Scheduler } from "@crabby/agent-runtime";
 import { createScriptedProvider } from "@crabby/agent-runtime/loop-harness";
-import type {
-  JobActionBody,
-  JobDetailBody,
-  JobListBody,
-  JobRecord,
-  TaskRecord,
+import {
+  type ClientInterface,
+  isTerminal,
+  type JobActionBody,
+  type JobDetailBody,
+  type JobListBody,
+  type JobRecord,
+  TASK_STATES,
+  type TaskRecord,
 } from "@crabby/api-contracts";
 import { createLogger } from "@crabby/core";
 import { type BuiltApp, buildApp, createClient, type GatewayClient } from "@crabby/gateway";
@@ -38,26 +41,33 @@ import { capabilitiesFor } from "@crabby/policy";
 import { composeProviders, FAKE_TOOL_MODEL_ID, type FakeStep } from "@crabby/providers";
 import {
   getSession,
+  getTask,
   listSessions,
   migrate,
   mintPairingCode,
   openDatabase,
   patchSession,
+  readReplayWindow,
   redeemPairingCode,
   revoke,
   type SqliteDb,
   sessionRowOf,
   sessionRows,
   taskScratch,
+  tasksInStates,
 } from "@crabby/storage";
 import {
   combineToolSurfaces,
   createFileTools,
   createSchedulerTools,
   createSessionTools,
+  createTaskTools,
   defaultRealpathOf,
   SCHEDULER_TOOL,
   type SchedulerToolOptions,
+  TASK_HISTORY_EVENTS,
+  type TaskToolCode,
+  type TaskToolOptions,
 } from "@crabby/tools";
 
 interface Harness {
@@ -113,6 +123,34 @@ async function boot(options: BootOptions): Promise<Harness> {
           }
         : scheduleSink(input),
   });
+  /** The fourth surface `crabby gateway start` composes, bound to the same two acts `tests/integration/task-tools.test.ts`
+   *  binds it to: `built.driveTask` and `built.cancellation` (D-105). Composed here so that this harness stays the
+   *  composition a real install makes rather than three quarters of it — and so that the `GET /api/v1/tools` count below is
+   *  a fact about that install. The job routes are the subject of this file, and a fourth surface is how a test proves they
+   *  are unaffected by one. */
+  let driveSink: TaskToolOptions["create"] | undefined;
+  let askCancel: TaskToolOptions["cancel"] | undefined;
+  let askCancelAll: TaskToolOptions["cancelAll"] | undefined;
+  const noHandoff = (what: string): { ok: false; code: TaskToolCode; reason: string } => ({
+    ok: false,
+    code: "unavailable",
+    reason: `this process composed no ${what}`,
+  });
+  const taskTools = createTaskTools({
+    create: (input) => driveSink?.(input) ?? noHandoff("task handoff"),
+    read: (taskId) => {
+      const task = getTask(handle.db, taskId);
+      if (task === undefined) return undefined;
+      return {
+        task,
+        sessionId: task.sessionId,
+        events: readReplayWindow(handle.db, taskId, TASK_HISTORY_EVENTS),
+        eventCount: task.lastSeq,
+      };
+    },
+    cancel: (input) => askCancel?.(input) ?? noHandoff("cancellation manager"),
+    cancelAll: (input) => askCancelAll?.(input) ?? { results: [noHandoff("cancellation manager")] },
+  });
   const composed = options.noRunner
     ? undefined
     : combineToolSurfaces([
@@ -135,6 +173,7 @@ async function boot(options: BootOptions): Promise<Harness> {
             return { ok: true as const, session: sessionRowOf(handle.db, patched.session) };
           },
         }),
+        taskTools,
       ]);
   const drive =
     composed === undefined
@@ -195,6 +234,57 @@ async function boot(options: BootOptions): Promise<Harness> {
         }
       : scheduler.schedule(input);
   };
+  driveSink = ({ objective, sessionId, origin }) => {
+    const driven = built.driveTask({ objective, sessionId, origin, source: "tool" });
+    return {
+      ok: true as const,
+      task: driven.task,
+      driven: built.runner !== undefined,
+      withheld: driven.withheld,
+      ...(driven.started === undefined || driven.started.ok
+        ? {}
+        : { startRefused: { code: driven.started.code, reason: driven.started.reason } }),
+    };
+  };
+  const codeFor = (code: CancellationFailureCode): TaskToolCode =>
+    code === "not-found" ? "not-found" : "terminal";
+  const ask = (input: {
+    taskId: string;
+    mode?: "finish-step" | "immediate";
+    reason?: string;
+    origin: { clientId: string; interface: ClientInterface };
+  }) => {
+    const result = built.cancellation.request({
+      taskId: input.taskId,
+      ...(input.mode === undefined ? {} : { mode: input.mode }),
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+      byClientId: input.origin.clientId,
+      via: input.origin.interface,
+    });
+    return result.ok
+      ? {
+          ok: true as const,
+          task: result.task,
+          settled: result.settled,
+          ...(result.deduplicated === undefined ? {} : { deduplicated: result.deduplicated }),
+          ...(result.escalated === undefined ? {} : { escalated: result.escalated }),
+        }
+      : { ok: false as const, code: codeFor(result.code), reason: result.reason };
+  };
+  askCancel = (input) => ask(input);
+  askCancelAll = ({ mode, reason, origin }) => ({
+    results: tasksInStates(
+      handle.db,
+      TASK_STATES.filter((state) => !isTerminal(state) && state !== "interrupted"),
+    ).map((task) =>
+      ask({
+        taskId: task.id,
+        ...(mode === undefined ? {} : { mode }),
+        ...(reason === undefined ? {} : { reason }),
+        origin,
+      }),
+    ),
+  });
 
   await built.app.listen({ host: "127.0.0.1", port: 0 });
   const address = built.app.server.address();
@@ -894,9 +984,10 @@ describe("the job routes on a Gateway that drives", () => {
       };
       assert.equal(
         body.runtime.implemented,
-        10,
-        "seven §4.2 rows the file executor declares, plus `cron.schedule`, plus the two conversation rows — the count a " +
-          "real `crabby gateway start` answers with, because this harness composes the same three surfaces it does",
+        13,
+        "seven §4.2 rows the file executor declares, plus `cron.schedule`, plus the two conversation rows, plus the three " +
+          "task rows — the count a real `crabby gateway start` answers with, because this harness composes the same four " +
+          "surfaces it does",
       );
       assert.equal(
         body.runtime.described,

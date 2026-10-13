@@ -6,12 +6,20 @@
 // forbids.
 //
 // What is here is the eight file tools `PROVIDERS_AND_TOOLS.md` §4.2 classifies (`file.read`, `file.list`, `file.stat`,
-// `file.write`, `file.edit`, `file.delete`, `file.move`, `fs.search`), with §4.1's record filled in for them. That is the
-// whole of `docs/ROADMAP.md` §4's "initial tools" line that can be built without a subsystem that does not exist yet:
-// `session.*`, `task.*`, `memory.*` and `config.*` all read stores this build has no manager for, and §4.2's remaining rows
-// need a tunnel, an extension registry, a provider or Termux's own API. Shipping a name with nothing behind it is the mock
-// this repository refuses, so those tools stay absent and `crabby tools ls` keeps saying so from the registry rather than
-// from an executor.
+// `file.write`, `file.edit`, `file.delete`, `file.move`, `fs.search`), the scheduler's one row (`cron.schedule`), the two
+// conversation rows (`session.list`, `session.rename`) and the three task rows (`task.create`, `task.status`,
+// `task.cancel`), with §4.1's record filled in for each. Every one of them is an executor over a sink rather than a
+// subsystem of its own: the file tools do their own I/O because §8's containment is a property of paths and this package
+// owns the path rules, and the other four ask a party that owns a store — the scheduler, the session table, the Gateway's
+// one task act — and render the answer, because a second writer of a fact is how two interfaces start disagreeing (§9).
+//
+// What is still absent, and why, rather than a list that reads as an oversight: `memory.*` has no store to read —
+// `docs/ROADMAP.md` §6 gives the persistent memory subsystem to M4, and a `memory.search` over nothing would answer
+// "nothing remembered" forever, which is the mock this repository refuses. `config.*` waits on the same slice that gives
+// `config.json` a writer with a concurrency token (§2's other half). `net.fetch` waits on `EvalContext.egressAllowList`
+// and on `limits.http*` being priced, because a fetch with no allow-list is §8's deny-list with the wall removed. And
+// §4.2's remaining rows need a tunnel, an extension registry, a provider or Termux's own API. Absent rows stay absent in
+// `crabby tools ls`, which prints them from the registry as planned rather than from an executor as broken.
 //
 // `shell.run` is deliberately not here either. §4.2 says its "capability itself is off by default" and `docs/ROADMAP.md` §4
 // says it ships in this phase but stays off until `crabby init` opts in — an executor for it is a slice that has to arrive
@@ -55,6 +63,22 @@ export {
   type SessionToolOptions,
   sessionToolDeclarations,
 } from "./session.ts";
+export {
+  createTaskTools,
+  TASK_CANCEL_TOOL,
+  TASK_CREATE_TOOL,
+  TASK_HISTORY_EVENTS,
+  TASK_STATUS_TOOL,
+  TASK_TOOL_CODES,
+  type TaskToolCancelResult,
+  type TaskToolCode,
+  type TaskToolCreateResult,
+  type TaskToolExecutor,
+  type TaskToolOptions,
+  type TaskToolOrigin,
+  type TaskToolRead,
+  taskToolDeclarations,
+} from "./task.ts";
 export {
   capWrapped,
   cutAtByteBoundary,

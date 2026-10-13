@@ -243,6 +243,21 @@ export interface BuiltApp {
   /** The job table itself, read by the routes either way. Handed back so the composition root can answer `job ls`
    *  questions from the same rows the routes answer them from, instead of opening a second reader. */
   readonly jobStore: JobStore;
+  /** The one act that turns an objective into a task and a run, exposed so a composition root can bind `task.create`'s
+   *  sink to it (D-105). `POST /api/v1/tasks`, the scheduler's `fire` and a tool call inside a run are three callers of
+   *  one act, and the act is this file's: it writes the record, ensures the conversation row, appends the `task.created`
+   *  event, expands the identity's capabilities into §6.1's grants and hands the run to the runner. A second copy of it
+   *  in `packages/tools` would be a second writer of `task.last_seq` and a second opinion about which grants a run holds
+   *  — and `packages/gateway` cannot import `packages/tools` to compose the tool itself, because §19's dependency
+   *  direction runs the other way (ARCHITECTURE.md §18). So the seam is an act handed out, not a tool built in.
+   *  `runner === undefined` is visible on the returned record rather than hidden in a refusal: the task is created and
+   *  nothing will move it, which the tool's output has to say. */
+  readonly driveTask: (input: DriveTaskInput) => DrivenTask;
+  /** The process's one cancellation manager, exposed for the same reason and with the same rule: `task.cancel` must ask
+   *  through the manager the routes ask through, because §6.1's step 2 and §6.2's evidence are about *one* request, and a
+   *  tool that built its own would hold half of it. Nothing here is a second opinion about stopping work — it is the same
+   *  instance, reachable from the party that composes the executor. */
+  readonly cancellation: Cancellation;
 }
 
 const REDEEM_PATH = "/api/v1/auth/pair";
@@ -284,10 +299,13 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
 
   // One cancellation manager for the whole process, composed here for the reason the arbiter, the journal and the
   // checkpoint manager are: §6.1's step 2 ("stop scheduling new steps") and §6.2's evidence have to be about *one*
-  // request, and two managers would each hold half of it. `POST /api/v1/tasks/{id}/cancel` requests through it, a runner
-  // would pass its `signalFor` to the loop, and the settle writes the evidence the record carries — three parties, one
+  // request, and two managers would each hold half of it. `POST /api/v1/tasks/{id}/cancel` requests through it, the runner passes its
+  // `signalFor` to the loop, and the settle writes the evidence the record carries — three parties, one
   // request row. Note what this does *not* need: no provider, no executor and no grants, because stopping work is not
-  // the same act as doing it. That is why this route is real in a build where the task handoff is not (F-52).
+  // the same act as doing it — which is why the manager is composed even when `deps.drive` is absent, and this route
+  // answers in a Gateway that drives nothing. When a runner *is* composed it is handed this same instance, and
+  // `BuiltApp.cancellation` hands it to the composition root so a `task.cancel` executor asks through it too (D-105):
+  // three callers, one request row.
   const cancellation: Cancellation = createCancellation({
     journal,
     checkpoints,
@@ -508,6 +526,8 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
     ...(runner === undefined ? {} : { runner }),
     ...(scheduler === undefined ? {} : { scheduler }),
     jobStore,
+    driveTask: (input: DriveTaskInput) => recordAndDriveTask(deps, bus, runner, input),
+    cancellation,
   };
 }
 
@@ -589,9 +609,11 @@ export interface DriveTaskInput {
     readonly capabilities: readonly string[];
   };
   readonly correlationId?: string | undefined;
-  /** Which caller asked, for the log line: a client over HTTP or a job on its schedule. The two are the same act and
-   *  different stories, and §14's audit records are only useful if a reader can tell them apart. */
-  readonly source: "client" | "job";
+  /** Which caller asked, for the log line: a client over HTTP, a job on its schedule, or a tool call inside a run that
+   *  is already moving. All three are the same act and different stories, and §14's audit records are only useful if a
+   *  reader can tell them apart — `tool` in particular, because a task a model created is work the user did not ask for
+   *  by name and the log is where that shows up. */
+  readonly source: "client" | "job" | "tool";
 }
 
 export interface DrivenTask {
@@ -1010,12 +1032,14 @@ function registerTaskRoutes(
    *  row, the state move, the event and the abort — a route that re-implemented any of them would be a second writer of
    *  one fact (§9).
    *
-   *  What this can do today, and what it cannot, stated rather than implied: a task in `queued` or `awaiting_approval`
-   *  has nothing in flight, so the manager settles at once and this route answers with a task that is already
-   *  `cancelled`, carrying §6.2's evidence on the record (`inFlight: "none"`, `effectsUncertain: false`). A *moving*
-   *  task answers `cancelling` and settles when its run stops — which needs the task handoff, and the handoff waits on
-   *  F-52's last question: no code turns the identity that asked into a `PolicySubject`, so a run started from a route
-   *  would hold no grants and policy would refuse every tool in it.
+   *  What this can do today, stated rather than implied: a task in `queued` or `awaiting_approval` has nothing in
+   *  flight, so the manager settles at once and this route answers with a task that is already `cancelled`, carrying
+   *  §6.2's evidence on the record (`inFlight: "none"`, `effectsUncertain: false`). A *moving* task answers
+   *  `cancelling` and settles when its run stops, which the handoff makes reachable rather than hypothetical:
+   *  `recordAndDriveTask` turns the identity that asked into a `PolicySubject` — §6.1's grants from `grantsFor`,
+   *  §13's `removedGrants`, the paired interface as `clientKind` — and hands the run to the runner, so a run started
+   *  from this route holds the grants its identity was paired for and the loop can signal the step in flight. F-52's
+   *  remaining question is the socket guard on `auth.manage`, not this route.
    *
    *  §6.1 names `task.cancel` as the capability that decides who may stop a task. Since the mint route assigns §6.1's
    *  baseline, every paired client in this build *holds* it — but holding is not checking: this route has no subject to

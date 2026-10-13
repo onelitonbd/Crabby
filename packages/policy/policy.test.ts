@@ -590,6 +590,43 @@ describe("shell classifier (PROVIDERS_AND_TOOLS.md §4.3)", () => {
     assert.deepEqual([...assessShellCommand("cmd > /dev/null").writeTargets], []);
     assert.deepEqual([...assessShellCommand("cmd > out.txt").writeTargets], ["out.txt"]);
   });
+
+  it("prices an unknown command at T2, never cheaper for being unrecognized", () => {
+    const assessed = assessShellCommand("frobnicate --xyz");
+    assert.equal(
+      assessed.tier,
+      "T2",
+      "not on the read-only list and no destructive pattern is §4.3's 'everything else'",
+    );
+    assert.deepEqual(assessed.matchedPatterns, []);
+  });
+
+  it("keeps a chain of read-only parts cheap", () => {
+    assert.equal(
+      assessShellCommand("cat notes.md; ls").tier,
+      "T0",
+      "worst-of-parts cuts both ways: no part above T0 means the chain is T0 " +
+        "(`echo` is not on the read-only list, so it cannot be the example here)",
+    );
+  });
+
+  it("judges substitution as one opaque command and says so", () => {
+    // §4.3 forces a re-evaluation of the whole chain rather than pricing the parts: the command is judged whole
+    // (not split at the substitution), and the opacity is carried as a visible reason rather than a silent tier.
+    const assessed = assessShellCommand("ls $(whoami)");
+    assert.equal(assessed.tier, "T0");
+    assert.equal(assessed.reEvaluated, true);
+    assert.match(
+      assessed.reasons.join(" "),
+      /opaque/,
+      "the classifier does not execute the inner command to find out",
+    );
+  });
+
+  it("leaves the two forgiven redirect forms at the tier the command earned", () => {
+    assert.equal(assessShellCommand("ls > /dev/null").tier, "T0");
+    assert.equal(assessShellCommand("ls 2>&1").tier, "T0");
+  });
 });
 
 describe("path judgement (SECURITY.md §8)", () => {
@@ -1007,6 +1044,48 @@ describe("decision pipeline (PROVIDERS_AND_TOOLS.md §4.4)", () => {
       { paths: PATHS },
     );
     assert.equal(tierOf(outsideWrite), "T2", "outside every root is a write, not a read");
+  });
+
+  it("raises a write the classifier cannot locate to T2 instead of guessing", () => {
+    // Policy owns no cwd, so a relative target names no location: §4.3's answer is a price, not a refusal and not
+    // an allowance — the executor re-checks against the run's own cwd (D-099's split).
+    const unlocatable = decide(
+      { tool: "shell.run", args: { command: "echo x > notes.txt" } },
+      {},
+      { paths: PATHS },
+    );
+    assert.equal(tierOf(unlocatable), "T2");
+    assert.match(asApproval(unlocatable).reasons.join(" "), /cannot locate/);
+  });
+
+  it("reads the deny-list breadth the same way for every sensitive home", () => {
+    const gnupg = decide(
+      { tool: "shell.run", args: { command: "cat secrets > ~/.gnupg/out" } },
+      {},
+      { paths: PATHS },
+    );
+    assert.equal(tierOf(gnupg), "T3");
+    assert.match(asApproval(gnupg).reasons.join(" "), /deny-list/);
+  });
+
+  it("denies a shell call without the grant before any tier is computed", () => {
+    // Even a T0 command denies without the capability: the grant check precedes the tier (§4.4's order), so an
+    // ungranted identity is never priced into an approval it could not hold. A missing grant is `deny` (not
+    // `unavailable`: nothing was removed at pairing — it was never held), and the reason names the grant.
+    const grants = ALL_GRANTS.filter(
+      (grant) => grant !== "shell.run" && grant !== "shell.privileged",
+    );
+    const decision = decide(
+      { tool: "shell.run", args: { command: "ls" } },
+      { grants },
+      { paths: PATHS },
+    );
+    assert.equal(decision.outcome, "deny");
+    assert.match(
+      decision.outcome === "deny" ? decision.reason : "",
+      /needs 'shell\.run'/,
+      "the refusal names the missing grant, not the tier",
+    );
   });
 
   it("requires the billing capability to be mentioned when a paid model is chosen", () => {

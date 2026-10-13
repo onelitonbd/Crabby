@@ -160,6 +160,47 @@ describe("the approval surface cannot be walked around §6.2", () => {
     assert.equal((answered.json() as { record: { state: string } }).record.state, "approved");
   });
 
+  it("refuses a T3 shell.run answer from Telegram and from the CLI, and leaves the row pending for the TUI", async () => {
+    // Same rule as the privileged row above, proved on the tool whose tier is argument-dependent: a destructive
+    // command opens a T3 prompt, and no chat surface may sign it (D-085). The row naming `shell.privileged` above
+    // proves the registry row; this one proves the executor's row reaches the same arbiter.
+    const id = open({
+      tool: "shell.run",
+      tier: "T3",
+      summary: "run rm -rf /tmp/x",
+      exact: "command: rm -rf /tmp/x",
+      effects: "deletes /tmp/x",
+      reversibility: "irreversible",
+      whatCouldGoWrong: "the path may not contain what the model thinks it does",
+      binding: "sha256:shellt3",
+    });
+    for (const surface of ["telegram", "cli"] as const) {
+      const refused = await app.inject({
+        method: "POST",
+        url: `/api/v1/approvals/${id}/decision`,
+        headers: { authorization: `Bearer ${tokens[surface]}` },
+        payload: { decision: "approve" },
+      });
+      assert.equal(refused.statusCode, 403, `${surface} may not sign a T3 shell.run`);
+      const error = refused.json().error as { code: string; message: string };
+      assert.equal(error.code, "approval_surface-not-allowed");
+      assert.match(error.message, /SECURITY\.md §6\.2/);
+    }
+    assert.equal(
+      approvals.list().find((row) => row.id === id)?.state,
+      "pending",
+      "the row a chat surface could not sign is still signable by the surface that can",
+    );
+    const answered = await app.inject({
+      method: "POST",
+      url: `/api/v1/approvals/${id}/decision`,
+      headers: { authorization: `Bearer ${tokens.tui}` },
+      payload: { decision: "approve", scope: "once" },
+    });
+    assert.equal(answered.statusCode, 200);
+    assert.equal((answered.json() as { record: { state: string } }).record.state, "approved");
+  });
+
   it("refuses a remembered approval over HTTP with the sentence that cites D-052", async () => {
     const id = open({ binding: "sha256:t3scope", tool: "fs.write", tier: "T2", ttlMs: undefined });
     const widened = await app.inject({

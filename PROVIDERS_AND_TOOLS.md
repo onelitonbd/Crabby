@@ -403,6 +403,18 @@ state rather than bytes from elsewhere, and both take the `fs.*` clock from D-07
 file write, so the tool borrows the deadline of the thing it touches instead of inventing a fifth number for a document on
 the same disk.
 
+**What this build declares now (shell slice).** Eighteen of §4.2's forty-five rows have an executor — the sixteen above
+plus the two shell rows — carried as eighteen declarations, because the base and the elevated `shell.run` rows share one
+name and one declaration answers both records. The M2ac paragraph above stays as its snapshot. What the shell row adds
+to the rules above is a fifth, and it is about *where* rather than what: **a command runs only inside the configured
+workspace roots**, with the run's own cwd resolved through the same link re-check §8 demands of every path, a child
+environment that is an explicit allow-list (a provider key inherited from the parent is a secret the run was never
+granted), and an abort that kills the process group rather than the one pid the spawn returned. The declaration is
+`idempotent: false` — a second run with the same argv is a second act, so §7.3's answer for it is `re-ask` — with
+`sideEffects: "external"`, which is what lets §6.2's cancellation evidence say an effect may have landed somewhere this
+install cannot inspect. The executor declares no `facts`: the tier moves on the argv the caller declared (D-099's
+channel stays empty rather than carrying a second copy of the request).
+
 ### 4.2 Initial tool set with risk-tier assignment (closes O-020)
 
 Tiers are per `SECURITY.md` §6.2. "Approval" means the default policy for a fresh install; users may tighten, and
@@ -434,8 +446,8 @@ may relax only where a floor exists (T3 has no relaxation path in the first rele
 | `net.fetch` | `net.egress:<host>` | **T2** | **T1** only for a user-curated allow-list; response is untrusted content. **Executed since M2ab** (`packages/tools/net.ts`, D-106): GET only, because a method that mutates remote state is the next row's `http.request`; the allow-list that moves this row to **T1** is `net.allowList` in `config.json`, and the grant an identity holds names that *set* rather than its members, so a host nobody curated reaches the tier rule below instead of being denied outright. |
 | `http.request` (non-GET) | `net.egress` | **T2** | Any method that mutates remote state; carries destination host in the approval text. |
 | `provider.invoke` | `provider.invoke` | **T1** | **T2** when the selected model is paid (`provider.billing`). |
-| `shell.run` | `shell.run` | **T2** per command | Capability itself is off by default. Tier computed per command, not per tool; escalation table in §4.3. |
-| `shell.run` (elevated) | `shell.privileged` | **T3** | Package install/remove, service control, system config. |
+| `shell.run` | `shell.run` | **T2** per command | Capability itself is off by default. Tier computed per command, not per tool; escalation table in §4.3. **Executed since the shell slice** (`packages/tools/shell.ts`): argv-form only — `argv` plus an optional `cwd` inside the workspace roots, never a string assembled from untrusted content (§9) — cwd resolved through `checkPath` with the link re-check, a fixed child-env allow-list, abort killing the process group, and D-064's 64 KiB wrapped cap with the nonce delimiter and the runtime note outside it. One declaration covers both shell rows; privilege stays a grant the arbiter checks, not a branch the executor takes. Composed only when the install opted in (`shell.enabled`, `crabby init --enable-shell`); otherwise `GET /tools` reports both rows as pending. |
+| `shell.run` (elevated) | `shell.privileged` | **T3** | Package install/remove, service control, system config. Reached through the same argv-form executor as the base row: the elevated price is enforced by the capability (`shell.privileged`, withheld from every fresh install per §9) and by D-085's TUI/Web-only signature, not by a second executor path — so a T3 shell prompt parks on a CLI-only build exactly the way `config.set` does. |
 | `process.spawn` / `process.list` | `shell.run` | **T2** / **T0** | Long-running processes must be cancellable and re-attachable after restart. |
 | `memory.save` | `memory.write` | **T1** (confirmed) | Auto-memory is T1; a memory whose content originates from untrusted external material stays **T2** until the user confirms — writing injection text into durable memory is the poisoning path (`SECURITY.md` §10). |
 | `memory.search` | read-only | **T0** | |
@@ -557,7 +569,7 @@ interface:
 | Provider — absolute | 300 s | The per-call ceiling, not the per-task one. |
 | `fs.*` | 10 s | Storage on a phone can be slow; it cannot be this slow. |
 | `net.fetch` | 20 s total | One request, redirects included, so a redirect chain cannot restart the clock forever. Enforced since M2ab by handing the executor the loop's own `AbortSignal` and no timer of its own, and a same-host chain is bounded at five hops (D-106), so a chain can neither restart the clock nor multiply the requests one pricing bought. |
-| `shell.run` | 120 s wall clock | Killed as a process group so children go with it. |
+| `shell.run` | 120 s wall clock | Killed as a process group so children go with it. Declared since the shell slice (`shellRunTimeoutMs`, read from `config.json` so the declaration and the enforced deadline are one number); the loop arms the deadline from the declaration and hands the run its own abort, which the executor answers with a group kill — and the outcome is reported as a timeout, never a failure, because "it took too long" and "it did not work" need different responses. |
 | SQLite busy | 5 s | `PRAGMA busy_timeout`; longer and the UI starts to look frozen instead of busy. |
 | Extension, MCP | tool class + 5 s | Adapter overhead, so a slow plugin is not blamed on the tool or the host. |
 | Parallel tool steps in one task | 2 | More than two on a phone trades wall-clock time for memory pressure. |

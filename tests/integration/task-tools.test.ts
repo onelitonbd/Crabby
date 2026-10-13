@@ -41,6 +41,7 @@ import { type BuiltApp, buildApp, createClient, type GatewayClient } from "@crab
 import { dataLayout, homeDirectory } from "@crabby/platform";
 import { capabilitiesFor } from "@crabby/policy";
 import { composeProviders, FAKE_TOOL_MODEL_ID, type FakeStep } from "@crabby/providers";
+import { createShellTools, SHELL_RUN_TOOL } from "@crabby/tools/shell";
 import {
   createTask,
   getSession,
@@ -112,6 +113,9 @@ interface BootOptions {
    *  raced the runner would be asserting a scheduler it does not control. */
   readonly seed?: readonly { objective: string; state?: TaskState }[] | undefined;
   readonly capabilities?: readonly string[] | undefined;
+  /** Compose the shell executor (with a spawn that never forks) and grant the identity `shell.run`, so a test can
+   *  ask what changes when the install opted in. Absent by default: most boots prove the shell-off composition. */
+  readonly withShell?: boolean | undefined;
   /** Compose no runner: no scheduler, no combined surface, and §4.2's three task rows back to pending. */
   readonly noRunner?: boolean | undefined;
 }
@@ -175,6 +179,25 @@ async function boot(options: BootOptions): Promise<Harness> {
     ? undefined
     : combineToolSurfaces([
         files,
+        // The shell row, composed exactly where the CLI composes it when the install opted in — and only then. The
+        // spawn never forks: a harness that ran real commands would make a red line depend on the device, and the
+        // executor's own tests already prove framing against a scripted child (`packages/tools/shell.test.ts`). What
+        // this composition proves instead is the seam: the declaration merges into `GET /tools`, the grant reaches
+        // the run, and a gated call parks at an approval rather than running or failing.
+        ...(options.withShell === true
+          ? [
+              createShellTools({
+                paths,
+                scratchDirFor: (taskId: string) => taskScratch(layout, taskId),
+                spawn: () => ({
+                  stdout: (async function* (): AsyncGenerator<Uint8Array> {})(),
+                  stderr: (async function* (): AsyncGenerator<Uint8Array> {})(),
+                  waitExit: async () => ({ exitCode: 0, signal: null }),
+                  killGroup: () => {},
+                }),
+              }),
+            ]
+          : []),
         // The network row, composed exactly where the CLI composes it, with a transport that refuses: no test in this
         // file asks a run to fetch, and a harness that could reach the network would make a red line depend on one. The
         // executor's own tests script `Response` objects instead (`packages/tools/net.test.ts`).
@@ -356,7 +379,13 @@ async function boot(options: BootOptions): Promise<Harness> {
   const minted = mintPairingCode(handle.db, {
     name: "the owner",
     interface: "cli",
-    capabilities: options.capabilities ?? capabilitiesFor("cli"),
+    // The shell grant is never in a baseline (D-102: §9 withholds it until an explicit act), so a boot that wants
+    // the shell says so: the grant list is the opt-in, the same way `crabby init --enable-shell` records it.
+    capabilities:
+      options.capabilities ??
+      (options.withShell === true
+        ? [...capabilitiesFor("cli"), "shell.run"]
+        : capabilitiesFor("cli")),
   });
   const redeemed = redeemPairingCode(handle.db, minted.code);
   assert.ok(redeemed.ok && redeemed.token, "the harness's identity has to pair");
@@ -1030,5 +1059,131 @@ describe("§4.2's task rows, composed the way a Gateway composes them", () => {
       404,
       "and the route says the same thing about the same id: one derivation of a record, two interfaces reading it (§9)",
     );
+  });
+});
+
+describe("shell.run off vs on (§4.2, D-066/D-080/D-102)", () => {
+  it("reports shell.run as pending (not offered) when the install never opted in", async () => {
+    // `GET /tools` lists every registry row — the shell rows included — so absence is the wrong assertion. What
+    // shell-off means is that no executor answers §4.1's runtime fields for them: all five pend, the same shape the
+    // noRunner count above asserts for the task rows. Not offering the row to the model (the loop's specs come from
+    // the composed executor, never from the registry) is §5.1's "hidden is better than failing", stated where a
+    // client can read it rather than as a stub that would fail at the act.
+    const h = await booted({ rounds: [[{ kind: "text", text: "nothing to do" }]] });
+    const body = (await h.cli.tools()).body as {
+      items: { id: string; pendingRecordFields: string[] }[];
+    };
+    const shellRows = body.items.filter((row) => row.id === SHELL_RUN_TOOL);
+    assert.equal(shellRows.length, 2, "both §4.2 shell rows are listed, base and elevated");
+    for (const row of shellRows)
+      assert.deepEqual(
+        row.pendingRecordFields,
+        ["inputSchema", "outputSchema", "limits", "idempotent", "sideEffects"],
+        "all five runtime fields pending: no executor in this composition answers them",
+      );
+  });
+
+  it("lists shell.run at its base tier once the install opts in, and parks a gated call at T2", async () => {
+    const h = await booted({
+      withShell: true,
+      rounds: [
+        // An unknown command is the deterministic T2: not on the read-only list, no destructive pattern, and no
+        // filesystem fact the test would have to arrange — the tier comes from the arguments alone.
+        [{ kind: "tool-call", name: SHELL_RUN_TOOL, arguments: { argv: ["frobnicate", "--xyz"] } }],
+        [{ kind: "text", text: "after the answer" }],
+      ],
+    });
+    const body = (await h.cli.tools()).body as {
+      runtime: { implemented: number };
+      items: { id: string; pendingRecordFields: string[]; riskTier: string }[];
+    };
+    assert.equal(
+      body.runtime.implemented,
+      18,
+      "the sixteen this file already counts plus the two §4.2 shell rows — base and elevated share the name " +
+        "`shell.run` and the executor's one declaration merges into both records, so the count moves by rows " +
+        "rather than by declarations",
+    );
+    const shellRows = body.items.filter((row) => row.id === SHELL_RUN_TOOL);
+    assert.equal(shellRows.length, 2, "both §4.2 shell rows are answered by the one declaration");
+    for (const row of shellRows)
+      assert.deepEqual(
+        row.pendingRecordFields,
+        ["outputSchema"],
+        "the executor answers §4.1's other four runtime fields, so the rows merge rather than pend (F-55's condition)",
+      );
+    assert.deepEqual(
+      shellRows.map((row) => row.riskTier).sort(),
+      ["T2", "T3"],
+      "and the tiers printed are still §4.2's own prices — base T2 per command beside elevated T3: an executor " +
+        "arriving does not reprice a row",
+    );
+
+    const created = await h.cli.createTask({ objective: "the shell question" }, "task-tools-shell-1");
+    const parent = created.body as TaskRecord;
+    const parked = await untilState(h, parent.id, "awaiting_approval");
+    assert.equal(parked.state, "awaiting_approval");
+    const queue = (await h.cli.approvals({ state: "pending" })).body as {
+      items: { id: string; request: { tool: string; tier: string; exact: string } }[];
+    };
+    const prompt = queue.items.find((item) => item.request.tool === SHELL_RUN_TOOL);
+    assert.ok(prompt, "the gated shell call opened a prompt (D-084: only the loop can open one)");
+    assert.equal(prompt?.request.tier, "T2", "§4.2's price for an unclassified command");
+    assert.ok(
+      (prompt?.request.exact ?? "").length > 0,
+      "§6.3's exact target reaches the user: a prompt that said only `run a command` would be a consent nobody " +
+        "could give",
+    );
+
+    const decided = (await h.cli.decideApproval(prompt?.id as string, { decision: "approve" }))
+      .body as { record: { state: string }; resumed: boolean };
+    assert.equal(decided.record.state, "approved");
+    assert.equal(
+      decided.resumed,
+      true,
+      "the answer wakes the run it parked (F-58's fix holds for shell rows too)",
+    );
+    const settled = await untilTerminal(h, parent.id);
+    assert.equal(
+      settled.state,
+      "completed",
+      "the approved shell step ran against the scripted spawn and the run reached its ending text",
+    );
+    assert.ok(
+      toolOutput(h.db, parent.id, SHELL_RUN_TOOL) !== undefined,
+      "the shell step left its framed output on the record",
+    );
+  });
+
+  it("ends the run on a denied shell call instead of waiting, with the refusal on the record", async () => {
+    const h = await booted({
+      withShell: true,
+      rounds: [
+        [{ kind: "tool-call", name: SHELL_RUN_TOOL, arguments: { argv: ["frobnicate", "--xyz"] } }],
+        [{ kind: "text", text: "then I will leave it alone" }],
+      ],
+    });
+    const created = await h.cli.createTask({ objective: "the refused shell question" }, "task-tools-shell-2");
+    const parent = created.body as TaskRecord;
+    await untilState(h, parent.id, "awaiting_approval");
+    const queue = (await h.cli.approvals({ state: "pending" })).body as {
+      items: { id: string; request: { tool: string } }[];
+    };
+    const prompt = queue.items.find((item) => item.request.tool === SHELL_RUN_TOOL);
+    assert.ok(prompt, "the gated shell call parked the run at a prompt");
+    const decided = (await h.cli.decideApproval(prompt?.id as string, { decision: "deny" }))
+      .body as { record: { state: string }; resumed: boolean };
+    assert.equal(decided.record.state, "denied");
+    assert.equal(decided.resumed, true, "a denial wakes the run as well (F-58's other sign)");
+    const settled = await untilTerminal(h, parent.id);
+    assert.equal(
+      settled.state,
+      "completed",
+      "a denied shell step is an input to the run, not an end of it",
+    );
+    const blocked = readEvents(h.db, parent.id, { limit: 10_000 }).filter(
+      (event) => event.type === "tool.execution.blocked" && (event.payload as { tool?: string })?.tool === SHELL_RUN_TOOL,
+    );
+    assert.equal(blocked.length, 1, "the denial is one event on the record, naming the shell row");
   });
 });

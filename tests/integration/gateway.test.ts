@@ -2035,9 +2035,20 @@ describe("a spawned gateway that drives tasks, and §7.1's exit codes for the ve
     child.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString()));
     child.stderr?.on("data", (chunk: Buffer) => (output += chunk.toString()));
     await waitForGatewayInfo(dir, 25_000);
-    const code = output
-      .split("\n")
-      .find((line) => /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{8}$/.test(line.trim()));
+    // The pairing code prints after the listener line, not with it: `gateway.json` existing means the socket bound,
+    // not that the banner finished — so a single scan of `output` is a race against the pipe, which a slower runner
+    // loses with exactly one line delivered. Poll the accumulated output the way the file above polls the info file.
+    const pairPattern = /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{8}$/;
+    const pairDeadline = Date.now() + 25_000;
+    let code: string | undefined;
+    while (Date.now() < pairDeadline) {
+      code = output
+        .split("\n")
+        .find((line) => pairPattern.test(line.trim()))
+        ?.trim();
+      if (code !== undefined) break;
+      await wait(50);
+    }
     assert.ok(code, `the gateway has to print a pairing code; output was:\n${output}`);
     const paired = runCli(dir, ["auth", "pair", "--code", code.trim()]);
     assert.equal(paired.code, 0, paired.stdout);

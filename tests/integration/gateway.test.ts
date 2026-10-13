@@ -2067,10 +2067,12 @@ describe("a spawned gateway that drives tasks, and §7.1's exit codes for the ve
     const work = mkdtempSync(path.join(tmpdir(), "crabby-run-work-"));
     writeFileSync(path.join(work, "notes.md"), "# notes\n", "utf8");
     // A configuration that composes a runner, which is the only way to test this verb's exit codes at all: one
-    // workspace root, one keyless provider entry, and a selected default model. The endpoint is a port nothing listens
-    // on and `limits.providerAttempts` is 1, so a run fails on its first attempt instead of walking D-074's ladder for
-    // half a minute. The assertions below are about an exit code and about what the command does and does not follow,
-    // and a test that spent thirty seconds proving one integer would be a test nobody ran twice.
+    // workspace root, one keyless provider entry, and a selected default model. The endpoint is a port nothing
+    // listens on, so every generate call fails and the run walks D-064's retry ladder to its end before the task
+    // turns `failed` — which is slow, and necessarily so: D-043 floors `limits.providerAttempts` at 5, so the
+    // ladder cannot be configured shorter than the schema allows, and the run has to outlast the command's stream
+    // connect for `task run` to follow it to its terminal event rather than meet a task that is already terminal.
+    // The assertions below are about an exit code and about what the command does and does not follow.
     writeFileSync(
       path.join(dir, "config.json"),
       `${JSON.stringify(
@@ -2104,7 +2106,6 @@ describe("a spawned gateway that drives tasks, and §7.1's exit codes for the ve
             },
           },
           defaultModel: "local/qwen2.5:3b",
-          limits: { providerAttempts: 1 },
         },
         null,
         2,

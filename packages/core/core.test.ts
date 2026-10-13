@@ -48,6 +48,35 @@ test("config: a bad key is named, and the good keys still load", () => {
   assert.equal(loaded.limits.providerConnectMs, LIMITS_DEFAULTS.providerConnectMs);
 });
 
+test("config: an out-of-range limit reaches no consumer, but the file and the problem keep it", () => {
+  const layout = freshLayout();
+  // D-043 floors `providerAttempts` at 5, so a hand-edited `1` is a config that fails validation. `onlyKnownKeys`
+  // keeps the value so `crabby config get` shows what the user wrote and `problems` names the defect — but the
+  // derived `limits` a consumer reads must never carry it, or the floor would hold only until a file was edited
+  // past the validator. A valid `fsTimeoutMs` beside the defect survives, because one bad number is not a reason
+  // to discard a different one set correctly.
+  writeFileSync(
+    layout.configPath,
+    JSON.stringify({ limits: { fsTimeoutMs: 15000, providerAttempts: 1 } }),
+  );
+  const loaded = loadConfig(layout);
+  assert.equal(
+    loaded.limits.providerAttempts,
+    LIMITS_DEFAULTS.providerAttempts,
+    "the floor the schema states is the floor the loop enforces",
+  );
+  assert.equal(
+    loaded.limits.fsTimeoutMs,
+    15000,
+    "a valid limit survives a defect in a different one",
+  );
+  assert.equal(loaded.file.limits?.providerAttempts, 1, "the raw file keeps what the user wrote");
+  assert.ok(
+    loaded.problems.some((problem) => /providerAttempts/.test(problem.message)),
+    "and the problem still names the defect",
+  );
+});
+
 test("config: malformed JSON is reported against the file, not swallowed", () => {
   const layout = freshLayout();
   writeFileSync(layout.configPath, "{ not json");

@@ -1148,13 +1148,25 @@ about timeouts and budgets, and `toolDeadlines`, because D-074 prices classes ra
 doc-comment had claimed the overrides were editable in `config.json` all along, and no schema row ever carried one,
 so the comment now says what is true. The wiring is three lines of fact: `DriveFacts` gained `limits`, the
 composition root translates once beside the composition, and `createRunner` already accepted a `Partial<LoopLimits>`
-and merged it. What is deliberately not here: no new config key — a key no document prices is a key no document
+and merged it. Wiring then made one latent gap load-bearing. A hand-edited out-of-range value — `providerAttempts: 1`,
+below D-043's floor of 5 — used to reach no consumer that enforced a floor; now it would reach the loop and configure
+the ladder out of existence, which the schema's `minimum` exists to forbid. The loader closes it where config becomes
+runtime numbers: `limitsInRange` keeps every override that passes the schema and drops every one that does not, one
+key at a time, so a valid `fsTimeoutMs` survives a defect in a different number and the default stands for a value the
+schema refuses. Only the derived `limits` are filtered — `file` still shows what the user wrote and `problems` still
+names the defect, because a floor that rewrote the document silently would be one the user could not see. The gateway
+test that had parked `providerAttempts: 1` to make a run fail fast found the value had been inert all along (the loop
+never read it before this slice), and its comment now says the run walks D-064's ladder because the schema forbids a
+shorter one. What is deliberately not here: no new config key — a key no document prices is a key no document
 describes; no per-tool override path until one does; and the un-mapped `limits.*` keys are still not read by the
 loop, because a number the loop does not enforce must not appear in its run. Gates: `loop.test.ts` 37/37 (the new
 mapper test asserts the eight keys land, the two keyless fields stay out, and a spread over the defaults keeps
 both), `tasks.test.ts` 6/6 (a composition that hands the runner `stepsPerTask: 1` fails a second proposed call with
 `limits.steps_per_task`, the message naming "step limit of 1" — the number travelled from the body to the loop or
-the assertion is false), `typecheck`, `parity`, `docs:check`; CI is the release proof as before.
+the assertion is false), `core.test.ts` (the new loader test asserts an out-of-range `providerAttempts` reaches no
+consumer while the file and the problem keep it), the spawned-gateway `task run` exit-code test (a dead-port run
+walks the ladder and the verb follows it to `failed`), `typecheck`, `parity`, `docs:check`; CI is the release proof
+as before.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

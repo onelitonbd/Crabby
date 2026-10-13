@@ -17,6 +17,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { type ConfigActionCode, type Problem, validate } from "@crabby/api-contracts";
 import type { DataLayout } from "@crabby/platform";
 import { type Static, Type } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import { REDACTED_MARKER, redact } from "./redact.ts";
 
 export const LimitsConfig = Type.Object(
@@ -317,16 +318,32 @@ export function loadConfig(
     config: mergeConfig(DEFAULT_CONFIG, clean),
     file: clean,
     token: configToken(clean),
-    limits: {
-      ...LIMITS_DEFAULTS,
-      ...(typeof clean.limits === "object" && clean.limits !== null
-        ? (clean.limits as LimitsConfig)
-        : {}),
-    },
+    // The numbers a consumer reads are only ever ones the schema allows. `onlyKnownKeys` above keeps a hand-edited
+    // out-of-range value so `crabby config get` shows what the user wrote and `problems` names the defect — but a
+    // number that reaches the loop, the storage layer, or a provider must be one the schema permits, or D-043's
+    // floor ("at least 5 attempts per failing stage... the configurable half may not be used to configure the ladder
+    // out of existence") would hold only until a file was edited past the validator. Only the derived `limits` are
+    // filtered this way; the raw `file` and the reported `problems` keep the user's value and the defect.
+    limits: limitsInRange(clean.limits),
     problems: result.ok ? [] : result.problems,
     path: layout.configPath,
     exists: true,
   };
+}
+
+/** Every `limits.*` override that passes the schema, merged over the defaults, with each out-of-range or wrong-typed
+ *  override dropped so its default stands. One check per key rather than one for the whole block: a valid
+ *  `fsTimeoutMs` beside an invalid `providerAttempts` survives, because a defect in one number is not a reason to
+ *  discard a different one the user set correctly. */
+function limitsInRange(raw: unknown): LimitsConfig {
+  const out: Record<string, unknown> = {};
+  if (typeof raw === "object" && raw !== null) {
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      const prop = LimitsConfig.properties[key as keyof typeof LimitsConfig.properties];
+      if (prop !== undefined && Value.Check(prop, value)) out[key] = value;
+    }
+  }
+  return { ...LIMITS_DEFAULTS, ...out };
 }
 
 export function mergeConfig(base: ConfigFile, override: ConfigFile): ConfigFile {

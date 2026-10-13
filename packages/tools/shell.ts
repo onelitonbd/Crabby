@@ -234,8 +234,10 @@ export function createShellTools(options: ShellToolOptions): ShellToolExecutor {
       parameters: declaration.inputSchema,
     }));
 
-  const run = (call: import("@crabby/policy").ToolCall, ctx: ToolRunContext): Promise<ToolOutcome> =>
-    runShellTool(call, ctx, env);
+  const run = (
+    call: import("@crabby/policy").ToolCall,
+    ctx: ToolRunContext,
+  ): Promise<ToolOutcome> => runShellTool(call, ctx, env);
 
   return {
     specs,
@@ -285,7 +287,11 @@ export async function runShellTool(
   }
 
   const argv = call.args.argv;
-  if (!Array.isArray(argv) || argv.length === 0 || argv.some((entry) => typeof entry !== "string")) {
+  if (
+    !Array.isArray(argv) ||
+    argv.length === 0 ||
+    argv.some((entry) => typeof entry !== "string")
+  ) {
     return refuse(
       SHELL_TOOL_CODES.invalidArguments,
       `'${call.tool}' needs a non-empty argv of strings; what it got cannot be spawned`,

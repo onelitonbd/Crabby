@@ -49,11 +49,7 @@ import {
   type SqliteDb,
   setState,
 } from "@crabby/storage";
-import {
-  combineToolSurfaces,
-  createFileTools,
-  defaultRealpathOf,
-} from "@crabby/tools";
+import { combineToolSurfaces, createFileTools, defaultRealpathOf } from "@crabby/tools";
 import { createShellTools } from "@crabby/tools/shell";
 
 const REPO = path.resolve(new URL("../../", import.meta.url).pathname);

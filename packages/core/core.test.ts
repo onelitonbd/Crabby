@@ -645,7 +645,11 @@ test("config: shell execution is opt-in — `shell.enabled` is absent by default
   for (const doc of [{}, { shell: {} }, { shell: { enabled: false } }]) {
     writeFileSync(layout.configPath, JSON.stringify(doc));
     const loaded = loadConfig(layout);
-    assert.deepEqual(loaded.problems, [], `off-by-default must not be a problem: ${JSON.stringify(doc)}`);
+    assert.deepEqual(
+      loaded.problems,
+      [],
+      `off-by-default must not be a problem: ${JSON.stringify(doc)}`,
+    );
     assert.notEqual(loaded.config.shell?.enabled, true);
   }
   writeFileSync(layout.configPath, JSON.stringify({ shell: { enabled: true } }));

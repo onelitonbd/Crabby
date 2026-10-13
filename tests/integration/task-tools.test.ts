@@ -41,7 +41,6 @@ import { type BuiltApp, buildApp, createClient, type GatewayClient } from "@crab
 import { dataLayout, homeDirectory } from "@crabby/platform";
 import { capabilitiesFor } from "@crabby/policy";
 import { composeProviders, FAKE_TOOL_MODEL_ID, type FakeStep } from "@crabby/providers";
-import { createShellTools, SHELL_RUN_TOOL } from "@crabby/tools/shell";
 import {
   createTask,
   getSession,
@@ -78,6 +77,7 @@ import {
   type TaskToolCode,
   type TaskToolOptions,
 } from "@crabby/tools";
+import { createShellTools, SHELL_RUN_TOOL } from "@crabby/tools/shell";
 
 /** What `task.cancel`'s `all: true` reaches, derived the way `apps/cli/commands/gateway.ts` derives it — the same filter,
  *  restated here because a test that imported the composition root's constant would be asserting a file's spelling rather
@@ -1119,7 +1119,10 @@ describe("shell.run off vs on (§4.2, D-066/D-080/D-102)", () => {
         "arriving does not reprice a row",
     );
 
-    const created = await h.cli.createTask({ objective: "the shell question" }, "task-tools-shell-1");
+    const created = await h.cli.createTask(
+      { objective: "the shell question" },
+      "task-tools-shell-1",
+    );
     const parent = created.body as TaskRecord;
     const parked = await untilState(h, parent.id, "awaiting_approval");
     assert.equal(parked.state, "awaiting_approval");
@@ -1163,7 +1166,10 @@ describe("shell.run off vs on (§4.2, D-066/D-080/D-102)", () => {
         [{ kind: "text", text: "then I will leave it alone" }],
       ],
     });
-    const created = await h.cli.createTask({ objective: "the refused shell question" }, "task-tools-shell-2");
+    const created = await h.cli.createTask(
+      { objective: "the refused shell question" },
+      "task-tools-shell-2",
+    );
     const parent = created.body as TaskRecord;
     await untilState(h, parent.id, "awaiting_approval");
     const queue = (await h.cli.approvals({ state: "pending" })).body as {
@@ -1182,7 +1188,9 @@ describe("shell.run off vs on (§4.2, D-066/D-080/D-102)", () => {
       "a denied shell step is an input to the run, not an end of it",
     );
     const blocked = readEvents(h.db, parent.id, { limit: 10_000 }).filter(
-      (event) => event.type === "tool.execution.blocked" && (event.payload as { tool?: string })?.tool === SHELL_RUN_TOOL,
+      (event) =>
+        event.type === "tool.execution.blocked" &&
+        (event.payload as { tool?: string })?.tool === SHELL_RUN_TOOL,
     );
     assert.equal(blocked.length, 1, "the denial is one event on the record, naming the shell row");
   });

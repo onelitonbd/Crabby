@@ -35,8 +35,8 @@ import {
   createShellTools,
   SHELL_RUN_TOOL,
   type ShellChild,
-  shellToolDeclarations,
   type SpawnFn,
+  shellToolDeclarations,
 } from "./shell.ts";
 import { EXTERNAL_CONTENT_TAG } from "./untrusted.ts";
 
@@ -70,11 +70,7 @@ interface ShellLab {
   readonly calls: RecordedSpawn[];
   readonly kills: string[];
   readonly tools: ReturnType<typeof createShellTools>;
-  run(
-    argv: unknown,
-    extra?: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<ToolOutcome>;
+  run(argv: unknown, extra?: Record<string, unknown>, signal?: AbortSignal): Promise<ToolOutcome>;
   overflowFiles(): string[];
 }
 
@@ -219,7 +215,11 @@ describe("shell.run — §4.1's record for the shell rows (D-098, D-080)", () =>
     const spec = resolveTool(SHELL_RUN_TOOL);
     assert.notEqual(spec, undefined, "§4.4's order has a tier to ask about");
     assert.equal(spec?.tier, "T2", "the executor arriving does not reprice the row");
-    assert.equal(spec?.tierText, "T2 per command", "D-080 keeps the cell verbatim, never flattened");
+    assert.equal(
+      spec?.tierText,
+      "T2 per command",
+      "D-080 keeps the cell verbatim, never flattened",
+    );
     assert.deepEqual([...(spec?.capabilities ?? [])], ["shell.run"]);
   });
 
@@ -358,7 +358,11 @@ describe("shell.run — §4.1 argument validation at the executor", () => {
     );
     assert.equal(outcome.ok, false);
     assert.equal(outcome.code, "not-declared");
-    assert.match(outcome.output, /shell\.run/, "§4.1 makes an undeclared tool unrunnable rather than tolerant");
+    assert.match(
+      outcome.output,
+      /shell\.run/,
+      "§4.1 makes an undeclared tool unrunnable rather than tolerant",
+    );
   });
 
   it("exposes one spec triple and declares only its own name", () => {
@@ -484,7 +488,11 @@ describe("shell.run — §9 argv-form and the explicit child environment", () =>
     assert.equal(outcome.ok, true, outcome.output);
     assert.equal(instance.calls.length, 1);
     assert.equal(instance.calls[0]?.file, "sh", "argv[0] is the executable");
-    assert.deepEqual(instance.calls[0]?.args, ["-c", "ls | cat"], "no shell parsing: policy prices the whole line");
+    assert.deepEqual(
+      instance.calls[0]?.args,
+      ["-c", "ls | cat"],
+      "no shell parsing: policy prices the whole line",
+    );
     assert.equal(instance.calls[0]?.shell, false, "§9: argv-form invocation, never a shell string");
     assert.equal(instance.calls[0]?.detached, true, "§5.2: a process group so children go with it");
     assert.equal(
@@ -529,7 +537,11 @@ describe("shell.run — §9 argv-form and the explicit child environment", () =>
     const outcome = await instance.run(["crabby-no-such-bin", "--version"]);
     assert.equal(outcome.ok, false);
     assert.equal(outcome.code, "spawn-error");
-    assert.match(outcome.output, /ENOENT/, "the errno stays in its own spelling: it is a fact to act on");
+    assert.match(
+      outcome.output,
+      /ENOENT/,
+      "the errno stays in its own spelling: it is a fact to act on",
+    );
     assert.equal(instance.overflowFiles().length, 0, "a spawn that never ran frames nothing");
   });
 });
@@ -549,7 +561,10 @@ describe("shell.run — completion semantics and §10 framing", () => {
     assert.match(outcome.output, new RegExp(`</${EXTERNAL_CONTENT_TAG} nonce="shellnonce0001">`));
     const closer = outcome.output.indexOf(`</${EXTERNAL_CONTENT_TAG} nonce="shellnonce0001">`);
     const note = outcome.output.indexOf("shell.run: exit 0");
-    assert.ok(note > closer, "the runtime's sentence sits outside the frame, because a note inside is content");
+    assert.ok(
+      note > closer,
+      "the runtime's sentence sits outside the frame, because a note inside is content",
+    );
     assert.match(outcome.output, /in .*workspace/, "the note names where it ran");
   });
 
@@ -573,7 +588,8 @@ describe("shell.run — completion semantics and §10 framing", () => {
     });
     const outcome = await instance.run(["cat", "forged.md"]);
     assert.equal(outcome.ok, true);
-    const closers = outcome.output.split(`</${EXTERNAL_CONTENT_TAG} nonce="shellnonce0001">`).length - 1;
+    const closers =
+      outcome.output.split(`</${EXTERNAL_CONTENT_TAG} nonce="shellnonce0001">`).length - 1;
     assert.equal(closers, 1, "exactly one closer carries this call's nonce (D-098)");
     assert.ok(outcome.output.includes(`</${EXTERNAL_CONTENT_TAG} nonce="guessed">after`));
   });
@@ -604,18 +620,34 @@ describe("shell.run — completion semantics and §10 framing", () => {
 
 describe("shell.run — D-064's cap on process output", () => {
   it("stops storing at the cap, labels, and keeps the kept bytes in scratch", async () => {
-    const instance = lab({ script: [{ stdout: "x".repeat(300_000), exitCode: 0 }], maxOutputBytes: 4096 });
+    const instance = lab({
+      script: [{ stdout: "x".repeat(300_000), exitCode: 0 }],
+      maxOutputBytes: 4096,
+    });
     const outcome = await instance.run(["yes"]);
     assert.equal(outcome.ok, true);
-    assert.match(outcome.output, /4096 bytes/, "the note reports what was kept, not the 300 KiB offered");
+    assert.match(
+      outcome.output,
+      /4096 bytes/,
+      "the note reports what was kept, not the 300 KiB offered",
+    );
     assert.match(outcome.output, /\[truncated:/, "D-064's label, from capWrapped");
     assert.match(outcome.output, /24 h/, "the scratch lifetime is stated, not implied");
     const files = instance.overflowFiles();
-    assert.equal(files.length, 1, "larger goes to a file in the session scratch with the path printed");
-    assert.match(outcome.output, new RegExp((files[0] as string).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.equal(
+      files.length,
+      1,
+      "larger goes to a file in the session scratch with the path printed",
+    );
+    assert.match(
+      outcome.output,
+      new RegExp((files[0] as string).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
     const kept = readFileSync(path.join(instance.scratch, files[0] as string), "utf8");
     assert.ok(kept.length > 0 && kept.length <= 300_000);
-    assert.ok(!outcome.output.slice(outcome.output.indexOf("[truncated")).includes(EXTERNAL_CONTENT_TAG));
+    assert.ok(
+      !outcome.output.slice(outcome.output.indexOf("[truncated")).includes(EXTERNAL_CONTENT_TAG),
+    );
   });
 });
 
@@ -639,8 +671,16 @@ describe("shell.run — §6.1 cancellation and D-074's 120 s group-kill", () => 
     const outcome = await pending;
     assert.equal(outcome.ok, false);
     assert.equal(outcome.code, "aborted", "D-074: a distinct code, never failure");
-    assert.equal(instance.calls.length, 1, "one request inside a budget priced for one: nothing retried");
-    assert.deepEqual(instance.kills, ["SIGKILL"], "the kill targets the group via the seam, not just the leader");
+    assert.equal(
+      instance.calls.length,
+      1,
+      "one request inside a budget priced for one: nothing retried",
+    );
+    assert.deepEqual(
+      instance.kills,
+      ["SIGKILL"],
+      "the kill targets the group via the seam, not just the leader",
+    );
   });
 
   it("answers aborted when the clock fires mid-run, even if the transport throws after", async () => {
@@ -656,7 +696,11 @@ describe("shell.run — §6.1 cancellation and D-074's 120 s group-kill", () => 
     const outcome = await instance.run(["sleep", "10"], undefined, controller.signal);
     assert.equal(outcome.ok, false);
     assert.equal(outcome.code, "aborted", "the loop's deadline reaches the executor as an abort");
-    assert.match(outcome.output, /120|one clock/, "and the message names the class clock that fired");
+    assert.match(
+      outcome.output,
+      /120|one clock/,
+      "and the message names the class clock that fired",
+    );
   });
 });
 

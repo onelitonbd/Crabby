@@ -121,7 +121,9 @@ export function runInit(
         : "off by default — `shell.run` is not composed (§4.2)",
     );
     if (!shellEnabled) {
-      renderer.fix("`crabby config set shell.enabled true` opts in; the flag only applies to a fresh install");
+      renderer.fix(
+        "`crabby config set shell.enabled true` opts in; the flag only applies to a fresh install",
+      );
     }
     renderer.line("config check", "valid");
     return renderer.done({ created, existing, configPath: layout.configPath, workspaceRoot: root });
@@ -152,7 +154,9 @@ export function runInit(
       : "off by default — `shell.run` is not composed (§4.2)",
   );
   if (!enableShell) {
-    renderer.fix("`crabby init --enable-shell` opts in on a fresh install, `crabby config set shell.enabled true` after");
+    renderer.fix(
+      "`crabby init --enable-shell` opts in on a fresh install, `crabby config set shell.enabled true` after",
+    );
   }
   renderer.line(
     "limits",

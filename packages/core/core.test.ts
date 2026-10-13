@@ -636,6 +636,50 @@ test("config: `differingPaths` names the keys that moved and never a value, beca
   );
 });
 
+test("config: shell execution is opt-in — `shell.enabled` is absent by default and only `true` enables", () => {
+  const layout = freshLayout();
+  // No file, no key: a fresh install has never heard of the shell, which is §9's "never enabled by default" as data.
+  assert.equal(loadConfig(layout).config.shell, undefined);
+  // Absent, empty, and false are all off — and all three load without a problem, because off is the default and not
+  // a state that needs explaining.
+  for (const doc of [{}, { shell: {} }, { shell: { enabled: false } }]) {
+    writeFileSync(layout.configPath, JSON.stringify(doc));
+    const loaded = loadConfig(layout);
+    assert.deepEqual(loaded.problems, [], `off-by-default must not be a problem: ${JSON.stringify(doc)}`);
+    assert.notEqual(loaded.config.shell?.enabled, true);
+  }
+  writeFileSync(layout.configPath, JSON.stringify({ shell: { enabled: true } }));
+  const opted = loadConfig(layout);
+  assert.deepEqual(opted.problems, []);
+  assert.equal(opted.config.shell?.enabled, true);
+  // Anything that is not a boolean is refused by the schema rather than coerced: a truthy string enabling shell
+  // execution would be an opt-in nobody typed.
+  for (const bad of ["yes", 1, 0, null]) {
+    writeFileSync(layout.configPath, JSON.stringify({ shell: { enabled: bad } }));
+    const refused = loadConfig(layout);
+    assert.ok(
+      refused.problems.some((problem) => problem.path.includes("shell")),
+      `the problem has to name the section: ${JSON.stringify(refused.problems)}`,
+    );
+    assert.equal(
+      refused.limits.fsTimeoutMs,
+      LIMITS_DEFAULTS.fsTimeoutMs,
+      "rule 2: a bad shell value must not sink the limits beside it",
+    );
+  }
+  // The dotted key a user types reaches the same field `crabby init --enable-shell` writes, because both are one
+  // spelling of one opt-in rather than two paths that can drift.
+  const keyed = applyConfigKey({}, "shell.enabled", true);
+  assert.equal((keyed as { shell: { enabled: boolean } }).shell.enabled, true);
+  // The opt-in moves the D-107 token, so a Gateway `PUT /config` that landed between the read and the write is
+  // refused as `stale` instead of silently overwriting the choice.
+  assert.notEqual(configToken({ shell: { enabled: true } }), configToken({}));
+  // And the schema `crabby config schema --json` prints names the section, because a key the schema does not list
+  // is a key `crabby config set` refuses at the keystroke.
+  const properties = configSchema().properties as Record<string, unknown>;
+  assert.ok(properties.shell, "`shell` must be in the schema the command prints");
+});
+
 function freshLayout() {
   const root = mkdtempSync(join(tmpdir(), "crabby-core-"));
   return dataLayoutFor(join(root, STATE));

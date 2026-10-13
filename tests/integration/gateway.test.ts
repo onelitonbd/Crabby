@@ -49,7 +49,12 @@ import {
   type SqliteDb,
   setState,
 } from "@crabby/storage";
-import { createFileTools, defaultRealpathOf } from "@crabby/tools";
+import {
+  combineToolSurfaces,
+  createFileTools,
+  defaultRealpathOf,
+} from "@crabby/tools";
+import { createShellTools } from "@crabby/tools/shell";
 
 const REPO = path.resolve(new URL("../../", import.meta.url).pathname);
 
@@ -1251,6 +1256,191 @@ describe("the tool registry over http (§4.4's GET /tools row)", () => {
       }
     } finally {
       await merged.close();
+    }
+  });
+
+  /** The composition `crabby gateway start` builds when the §9 opt-in and the §8 roots both exist, built here the same
+   *  way: the file executor and the shell executor over one workspace, combined into one surface because the loop holds
+   *  a single `ToolSurface` and §4.1 makes a duplicate id fatal at startup rather than last-one-wins. */
+  function composeWorkspaceTools(): {
+    declares: (tool: string) => ToolDeclaration | undefined;
+  } {
+    const base = mkdtempSync(path.join(tmpdir(), "crabby-gateway-shell-"));
+    const root = path.join(base, "workspace");
+    const home = path.join(base, "home");
+    const dataDir = path.join(base, "state");
+    mkdirSync(root, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    const scratchDirFor = (taskId: string) => {
+      const dir = path.join(dataDir, "scratch", taskId);
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      return dir;
+    };
+    const paths = { home, dataDir, roots: [root] };
+    const combined = combineToolSurfaces([
+      createFileTools({ paths, scratchDirFor, realpathOf: defaultRealpathOf }),
+      createShellTools({ paths, scratchDirFor, realpathOf: defaultRealpathOf }),
+    ]);
+    return { declares: combined.declares };
+  }
+
+  it("answers the shell rows from the shell executor exactly when opt-in and roots compose it, and nothing else moves", async () => {
+    const { declares } = composeWorkspaceTools();
+    const harness = await boot({ platformFacts: { isTermux: false }, declares });
+    try {
+      const body = (await harness.client.tools()).body as ToolsBody;
+      const shellRows = body.items.filter((item) => item.id === "shell.run");
+      // Two: the base row and the elevated qualifier share one name, and privilege is a grant the arbiter checks
+      // rather than a branch the executor takes — so one declaration answers both.
+      assert.equal(
+        shellRows.length,
+        2,
+        "the shell executor declares one name and the registry classifies two rows under it",
+      );
+      for (const item of shellRows) {
+        assert.deepEqual(
+          [...item.pendingRecordFields],
+          ["outputSchema"],
+          `${item.id}${item.qualifier ? `(${item.qualifier})` : ""} must name exactly the field its executor does ` +
+            "not answer — a row that named all five would have merged nothing",
+        );
+        assert.ok(
+          Object.keys(item.inputSchema ?? {}).length > 0,
+          `${item.id} merged an empty inputSchema, which reads as "takes no arguments"`,
+        );
+        assert.equal(
+          item.idempotent,
+          false,
+          "a second run with the same argv is a second act, not the same end state — recovery must re-ask",
+        );
+        assert.equal(
+          item.sideEffects,
+          "external",
+          "§6.2's cancellation evidence must report that an effect may have landed somewhere uninspectable",
+        );
+        assert.ok(
+          (item.limits?.timeoutMs ?? 0) > 0,
+          `${item.id} merged no deadline, and a tool with no deadline is a run that cannot be cancelled`,
+        );
+      }
+      // Seven file rows plus the two shell rows, and the file rows keep the answers the earlier test pinned: the
+      // merge adds a surface rather than reinterpreting one.
+      assert.equal(
+        body.runtime.implemented,
+        9,
+        "`runtime.implemented` is the rows an executor declares — seven file rows and two shell rows",
+      );
+      assert.equal(body.runtime.pending, body.count - 9);
+      // The shell executor's name is one name: `process.spawn` and `process.list` are a different act with different
+      // semantics, not a flag on this one, so they stay pending with everything else nothing implements.
+      for (const name of ["process.spawn", "process.list"]) {
+        const row = body.items.find((item) => item.id === name);
+        assert.deepEqual(
+          [...(row?.pendingRecordFields ?? [])],
+          [...PENDING_RECORD_FIELDS],
+          `${name} is not declared by any executor in this build`,
+        );
+      }
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+describe("a spawned gateway prints which half of the shell composition is missing (ROADMAP §4)", () => {
+  async function startWithConfig(config: unknown): Promise<{
+    child: ChildProcess;
+    output: () => string;
+  }> {
+    const dir = mkdtempSync(path.join(tmpdir(), "crabby-shell-banner-"));
+    writeFileSync(path.join(dir, "config.json"), `${JSON.stringify(config)}\n`);
+    let text = "";
+    const child = spawn(
+      process.execPath,
+      [path.join(REPO, "apps/cli/crabby.ts"), "--data-dir", dir, "gateway", "start"],
+      { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    child.stdout?.on("data", (chunk: Buffer) => (text += chunk.toString()));
+    child.stderr?.on("data", (chunk: Buffer) => (text += chunk.toString()));
+    // The file means the listener is up; the banner follows it on the same path, so the assertions poll for their
+    // line rather than reading whatever happened to be printed first.
+    await waitForGatewayInfo(dir, 25_000);
+    return { child, output: () => text };
+  }
+
+  async function bannerText(get: () => string, pattern: RegExp): Promise<string> {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if (pattern.test(get())) return get();
+      await wait(100);
+    }
+    throw new Error(`the banner never printed ${pattern}:\n${get()}`);
+  }
+
+  it("says the shell is off by default and names the opt-in", async () => {
+    const { child, output } = await startWithConfig({});
+    try {
+      const banner = await bannerText(output, /shell +not composed/);
+      assert.match(banner, /off by default/, "off is the default, not a failure to configure");
+      assert.match(
+        banner,
+        /shell\.enabled true/,
+        "the line names the command that opts in, where a user can act on it",
+      );
+    } finally {
+      child.kill("SIGTERM");
+      await waitGone(child, 10_000);
+    }
+  });
+
+  it("says an opt-in without roots composes nothing, and names the missing half", async () => {
+    const { child, output } = await startWithConfig({ shell: { enabled: true } });
+    try {
+      const banner = await bannerText(output, /shell +opted in but not composed/);
+      assert.match(
+        banner,
+        /workspace\.roots/,
+        "a command needs a root to be confined to (§8), so the fix names the key that records one",
+      );
+    } finally {
+      child.kill("SIGTERM");
+      await waitGone(child, 10_000);
+    }
+  });
+
+  it("says the shell executor composed when the opt-in and the roots both exist", async () => {
+    const base = mkdtempSync(path.join(tmpdir(), "crabby-shell-roots-"));
+    const root = path.join(base, "crabby-workspace");
+    mkdirSync(root, { recursive: true });
+    const dir = mkdtempSync(path.join(tmpdir(), "crabby-shell-banner-"));
+    writeFileSync(
+      path.join(dir, "config.json"),
+      JSON.stringify({ workspace: { roots: [root] }, shell: { enabled: true } }),
+    );
+    let text = "";
+    const child = spawn(
+      process.execPath,
+      [path.join(REPO, "apps/cli/crabby.ts"), "--data-dir", dir, "gateway", "start"],
+      { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    child.stdout?.on("data", (chunk: Buffer) => (text += chunk.toString()));
+    child.stderr?.on("data", (chunk: Buffer) => (text += chunk.toString()));
+    try {
+      await waitForGatewayInfo(dir, 25_000);
+      const banner = await bannerText(() => text, /shell +1 declared/);
+      assert.match(
+        banner,
+        /1 declared by the shell executor over 1 root/,
+        "one declaration over the one root this install configured",
+      );
+      assert.match(
+        banner,
+        /file and shell executors/,
+        "the tools line counts both workspace executors rather than hiding the shell inside the file count",
+      );
+    } finally {
+      child.kill("SIGTERM");
+      await waitGone(child, 10_000);
     }
   });
 });

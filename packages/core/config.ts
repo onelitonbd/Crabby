@@ -3,9 +3,10 @@
 //
 //  1. It owns **only** the keys the documents place in the file. `docs/DECISIONS.md` D-074 is explicit that every
 //     timeout and concurrency number is "a `limits.*` key in `config.json`, visible through `crabby config get
-//     limits`", so `limits` is here, and the four namespaces beside it are here because a document placed them in this
-//     file too: `provider.<id>` and `defaultModel` (§3.7 and §3.6, D-101), `workspace.roots` (§8's containment, D-101)
-//     and `net.allowList` (§6.1's `net.egress:<hostset>` and §4.2's "user-curated allow-list", D-106). Nothing else is,
+//     limits`", so `limits` is here, and the five namespaces beside it are here because a document placed them in this
+//     file too: `provider.<id>` and `defaultModel` (§3.7 and §3.6, D-101), `workspace.roots` (§8's containment, D-101),
+//     `net.allowList` (§6.1's `net.egress:<hostset>` and §4.2's "user-curated allow-list", D-106) and `shell.enabled`
+//     (§9's opt-in, `docs/ROADMAP.md` §4). Nothing else is,
 //     because no other config key is stated anywhere. A key with no documented default stays absent rather than
 //     receiving a plausible number, and the port is the clearest case: the documents say the listener binds loopback
 //     and that the platform reports the port, and they never name one.
@@ -174,6 +175,32 @@ export function egressHosts(config: ConfigFile): readonly string[] {
   return hosts;
 }
 
+/** `SECURITY.md` §9's opt-in, as configuration: "Shell execution is capability-gated (`shell.run`) and **never
+ *  enabled by default** for a fresh install; enabling it is an explicit act", and `docs/ROADMAP.md` §4's "off until
+ *  the user opts in during `crabby init`". Until this key existed the sentence had nowhere to live: `enabledFor` in
+ *  `packages/policy` could only answer the documented default, because no configuration key could turn it on.
+ *
+ *  Two rules, each a sentence somewhere rather than a preference:
+ *
+ *  1. **Absent is off, and off is not an error.** A shell enabled by a default would be arbitrary command execution
+ *     one pairing away on a fresh install, which is the act §9 reserves to the user — the same reason
+ *     `workspace.roots` gets no default. Only `enabled: true`, spelled exactly, opts in; anything else is off.
+ *  2. **This key gates `shell.run` and nothing else.** D-080's `OFF_BY_DEFAULT` is exactly `["shell.run"]`, and no
+ *     document says `shell.privileged` ships disabled — so this key must not be read as covering the elevated row
+ *     (F-34). The privileged row stays approval-gated per call whatever this key says.
+ *
+ *  A boolean carries no secret, so `configForReading` needs no change and the key is printable by
+ *  `crabby config get shell`. Enabling additionally requires configured workspace roots — a command needs a root to
+ *  be confined to (§8) — so `true` with no roots still composes no executor; that refusal belongs to the composition
+ *  root that can name the fix, not to this schema. */
+export const ShellConfig = Type.Object(
+  {
+    enabled: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+export type ShellConfig = Static<typeof ShellConfig>;
+
 export const ConfigFile = Type.Object(
   {
     limits: Type.Optional(LimitsConfig),
@@ -187,6 +214,8 @@ export const ConfigFile = Type.Object(
     workspace: Type.Optional(WorkspaceConfig),
     /** §6.1's host set (D-106). Absent means no host is curated, which leaves every destination at §4.2's base tier. */
     net: Type.Optional(NetConfig),
+    /** §9's shell opt-in. Absent means off, which leaves `shell.run` uncomposed whatever else is configured. */
+    shell: Type.Optional(ShellConfig),
   },
   { additionalProperties: false },
 );

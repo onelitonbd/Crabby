@@ -61,6 +61,9 @@ interface Parsed {
 }
 
 const VALUE_FLAGS = new Set(["--data-dir", "--log-level", "--log-file"]);
+/** Every flag the global parser consumes wherever it appears. A verbless command whose registry entry names only
+ *  these needs no tail of its own, and keeps refusing anything else up here. */
+const GLOBAL_FLAGS = new Set(["--json", "--help", "-h", "--version", "-v", ...VALUE_FLAGS]);
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 
 export function parseArgs(argv: readonly string[]): Parsed {
@@ -78,7 +81,17 @@ export function parseArgs(argv: readonly string[]): Parsed {
     // verbatim. Global flags and per-command flags cannot share one flat namespace: `crabby auth pair --code X` has
     // to reach `auth.ts` intact, and a parser that collected `--code` as an unknown global flag would reject a flag
     // the command itself declares in `registry.ts`.
-    if (positionals.length >= 2) {
+    // A noun that is already a complete command *and declares a flag the globals do not own* forwards the same way:
+    // `init` has no verb, so without this a flag after it would be refused as an unknown global before the command
+    // could parse it against the registry — and `init --enable-shell` is exactly such a flag. Nouns made only of
+    // global flags (`doctor --json`) keep the old path, so a typo after them is still refused here rather than
+    // silently ignored by a command that never asked for a tail.
+    const nounSpec =
+      positionals.length >= 1 ? findCommand(positionals[0] as string, undefined) : undefined;
+    const nounForwardsTail =
+      nounSpec?.status === "ready" &&
+      nounSpec.flags.some((entry) => !GLOBAL_FLAGS.has(entry.split(" ")[0] ?? entry));
+    if (positionals.length >= 2 || nounForwardsTail) {
       if (arg === "--json") {
         json = true;
         continue;
@@ -200,8 +213,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     case "init": {
       // §5 step 3 puts the workspace root at `$HOME/crabby-workspace`, and the home this process resolved is the one
       // `--data-dir` did not override — so init gets the same `home` the layout was built from rather than reading the
-      // environment a second time and risking two answers.
-      return runInit(layout, renderer, home);
+      // environment a second time and risking two answers. The tail carries `init`'s own flags (`--enable-shell`),
+      // parsed by the command against the registry like every other verb.
+      return runInit(rest, layout, renderer, home);
     }
     case "version": {
       return runVersion(facts, readVersion(rootPackageJson), renderer);

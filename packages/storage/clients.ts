@@ -182,6 +182,37 @@ export function authenticate(db: SqliteDb, token: string, now = new Date()): Ide
   };
 }
 
+/** One identity by id, for a caller that has to ask about a *person* rather than enumerate them: a scheduled job's fire
+ *  re-reads the capabilities of the identity that created it (`PROVIDERS_AND_TOOLS.md` §4.5's "a job inherits no ambient
+ *  authority … beyond its own recorded capability set"), and a revocation is answered by this function returning
+ *  `undefined`. That is why the read happens at fire time and is not trusted from the job's own row — O-071's revocation
+ *  deletes the row, so "who created this" survives on the job and "what may it do now" does not. */
+export function getIdentity(db: SqliteDb, id: string): Identity | undefined {
+  const row = db
+    .prepare(
+      "SELECT id, name, interface, capability_json, created_at, last_used_at FROM client_identity WHERE id = ?",
+    )
+    .get(id) as
+    | {
+        id: string;
+        name: string;
+        interface: string;
+        capability_json: string;
+        created_at: string;
+        last_used_at: string | null;
+      }
+    | undefined;
+  if (row === undefined) return undefined;
+  return {
+    id: row.id,
+    name: row.name,
+    interface: row.interface as ClientInterface,
+    capabilities: JSON.parse(row.capability_json) as string[],
+    createdAt: row.created_at,
+    lastUsedAt: row.last_used_at ?? undefined,
+  };
+}
+
 export function listIdentities(db: SqliteDb): Identity[] {
   const rows = db
     .prepare(

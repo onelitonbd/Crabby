@@ -9,9 +9,14 @@ import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "
 import path from "node:path";
 import process from "node:process";
 import {
+  type CancelTaskBody,
+  type CreateSessionBody,
   type CreateTaskBody,
   ErrorEnvelope,
   errorEnvelope,
+  type JobBacklogBody,
+  type PatchJobBody,
+  type PatchSessionBody,
   type TaskState,
   validate,
 } from "@crabby/api-contracts";
@@ -150,6 +155,56 @@ export interface GatewayClient {
   }): Promise<Response<unknown>>;
   getTask(id: string): Promise<Response<unknown>>;
   taskEvents(id: string, cursor?: number): Promise<Response<unknown>>;
+  /** §4.3's checkpoint view (D-095): the boundary a run last committed, its size, and D-065's verdict on resuming from
+   *  it. A task that never reached a step boundary answers `404` with the verdict's reason in `details`, so "no saved
+   *  state" and "a task you may not see" are different responses. */
+  taskCheckpoint(id: string): Promise<Response<unknown>>;
+  /** §6.1's cancellation request, and the one mutating route here that takes no idempotency key on purpose: the manager
+   *  already answers a second request for the same task with the request it recorded (`deduplicated`), and a second
+   *  request that escalates to `immediate` is §6.2's override rather than a replay. A key cache would have to choose
+   *  between those two readings and would get one of them wrong. */
+  cancelTask(id: string, body?: CancelTaskBody): Promise<Response<unknown>>;
+  /** §4.3's queue. `state` defaults to the only value a client can act on, and is passed through as text so a typo is
+   *  refused by the Gateway rather than answered with an empty list. */
+  approvals(options?: { state?: string }): Promise<Response<unknown>>;
+  /** §4.3's decision. The key is optional — the row already refuses a second answer, which is why a lost response is
+   *  a replay convenience here and a requirement for `createTask`. */
+  decideApproval(
+    id: string,
+    body: { decision: "approve" | "deny"; scope?: string },
+    idempotencyKey?: string,
+  ): Promise<Response<unknown>>;
+  /** §4.5's list, and the read half of D-057's first-class surface: the rows every interface's `Scheduled` view answers
+   *  from. `state` is passed through as text so a typo is refused by the Gateway rather than answered with an empty list
+   *  that reads as "you have no jobs". */
+  jobs(options?: { state?: string }): Promise<Response<unknown>>;
+  /** One job with its run history, its unacknowledged `missed` rows and the wall-clock stamp beside the UTC instant
+   *  (D-103) — the whole of C12-02's fifteen lines and W16-08's sheet, in one request. */
+  job(id: string): Promise<Response<unknown>>;
+  /** The non-material half of an edit: a name and a schedule. `objective` is not a field of `PatchJobBody` at all,
+   *  because changing what a job does crosses into re-approval (§4.5) and no route can open one (D-084). */
+  patchJob(id: string, body: PatchJobBody): Promise<Response<unknown>>;
+  /** C12-03's pause, which takes effect before the next tick. A run already in flight keeps going and is stopped through
+   *  `cancelTask` — the same act §4.5 says a job is cancellable by. */
+  pauseJob(id: string): Promise<Response<unknown>>;
+  /** C12-03's resume. It re-evaluates the creating identity's *current* grants rather than restoring the ones recorded at
+   *  creation (D-054), and refuses when they no longer cover the job, so a revoked client cannot be revived by a timer. */
+  resumeJob(id: string): Promise<Response<unknown>>;
+  /** C12-04's explicit run outside the schedule, which changes nothing about the schedule. A fresh policy evaluation, so
+   *  it can stop at an approval — §7.1's exit `3` and not a silent nothing. */
+  runJob(id: string): Promise<Response<unknown>>;
+  /** C12-06's answer to §4.5's backlog. `action` is required on the wire for the reason the CLI asks rather than defaults:
+   *  one of the two choices fires work, and §4.5's sixth rule is that a backlog must not run unannounced. */
+  jobBacklog(id: string, body: JobBacklogBody): Promise<Response<unknown>>;
+  /** C11-01's list: conversations in last-activity order, each with the state word and title a list line prints. */
+  sessions(options?: { origin?: string }): Promise<Response<unknown>>;
+  /** One conversation with the tasks in it, and the `etag` that a rename has to send back as `If-Match`. */
+  session(id: string): Promise<Response<unknown>>;
+  /** W15-03's creation: `{}` is a valid body, because a new session starts empty and un-named. */
+  createSession(body?: CreateSessionBody): Promise<Response<unknown>>;
+  /** W15-04 and T16-05's one write path. The token is required by §2's concurrency row, so it is a parameter rather than
+   *  an option: a client that could forget it would be a client that silently overwrites another interface's rename. */
+  patchSession(id: string, body: PatchSessionBody, ifMatch: number): Promise<Response<unknown>>;
   authList(): Promise<Response<unknown>>;
   authRevoke(id: string): Promise<Response<unknown>>;
 }
@@ -241,6 +296,52 @@ export function createClient(input: {
       request(
         `/api/v1/tasks/${encodeURIComponent(id)}/events${cursor === undefined ? "" : `?cursor=${cursor}`}`,
       ),
+    taskCheckpoint: (id) => request(`/api/v1/tasks/${encodeURIComponent(id)}/checkpoint`),
+    cancelTask: (id, body) =>
+      request(`/api/v1/tasks/${encodeURIComponent(id)}/cancel`, {
+        method: "POST",
+        // An explicit `{}` rather than no body at all, so the wire shape is the same whether or not the caller has a mode
+        // to ask for: `CancelTaskBody`'s fields are optional but the schema is an object, and a client that sent nothing
+        // would be relying on the Gateway to guess what "nothing" means.
+        body: body ?? {},
+      }),
+    approvals: (options = {}) =>
+      request(
+        `/api/v1/approvals${options.state === undefined ? "" : `?state=${encodeURIComponent(options.state)}`}`,
+      ),
+    decideApproval: (id, body, idempotencyKey) =>
+      request(`/api/v1/approvals/${encodeURIComponent(id)}/decision`, {
+        method: "POST",
+        body,
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      }),
+    jobs: (options = {}) =>
+      request(
+        `/api/v1/jobs${options.state === undefined ? "" : `?state=${encodeURIComponent(options.state)}`}`,
+      ),
+    job: (id) => request(`/api/v1/jobs/${encodeURIComponent(id)}`),
+    patchJob: (id, body) =>
+      request(`/api/v1/jobs/${encodeURIComponent(id)}`, { method: "PATCH", body }),
+    pauseJob: (id) =>
+      request(`/api/v1/jobs/${encodeURIComponent(id)}/pause`, { method: "POST", body: {} }),
+    resumeJob: (id) =>
+      request(`/api/v1/jobs/${encodeURIComponent(id)}/resume`, { method: "POST", body: {} }),
+    runJob: (id) =>
+      request(`/api/v1/jobs/${encodeURIComponent(id)}/run`, { method: "POST", body: {} }),
+    jobBacklog: (id, body) =>
+      request(`/api/v1/jobs/${encodeURIComponent(id)}/backlog`, { method: "POST", body }),
+    sessions: (options = {}) =>
+      request(
+        `/api/v1/sessions${options.origin === undefined ? "" : `?origin=${encodeURIComponent(options.origin)}`}`,
+      ),
+    session: (id) => request(`/api/v1/sessions/${encodeURIComponent(id)}`),
+    createSession: (body = {}) => request("/api/v1/sessions", { method: "POST", body }),
+    patchSession: (id, body, ifMatch) =>
+      request(`/api/v1/sessions/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body,
+        headers: { "if-match": `"${ifMatch}"` },
+      }),
     authList: () => request("/api/v1/auth/clients"),
     authRevoke: (id) =>
       request(`/api/v1/auth/clients/${encodeURIComponent(id)}`, { method: "DELETE" }),

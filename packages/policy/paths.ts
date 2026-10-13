@@ -100,9 +100,24 @@ export function checkPath(
     return { ok: true, resolved: initial, root: matched ?? base, sensitive: false };
   }
   const resolved = path.resolve(realpathOf(initial));
-  const resolvedRoot = ctx.roots
-    .map((root) => path.resolve(root))
-    .find((root) => contains(root, resolved));
+  // Both sides of the re-check go through the resolver, or neither does. Comparing a resolved target against the root
+  // exactly as the user typed it refuses every file in a workspace whose root is itself behind a link, and that is not
+  // a rare shape: macOS hands `os.tmpdir()` out as `/var/folders/...` where the real directory is
+  // `/private/var/folders/...`, and Termux's `/sdcard` — the primary platform's most obvious place to put a workspace —
+  // is a link to `/storage/emulated/0`. The refusal reads as an escape ("resolves through a link, outside every
+  // workspace root") while describing a file that never left the root, and it is invisible on any machine whose
+  // temporary directory is a real one, which is why it survived every Linux test run.
+  const resolvedRoots = ctx.roots.map((root) => {
+    const lexical = path.resolve(root);
+    try {
+      return path.resolve(realpathOf(lexical));
+    } catch {
+      // A resolver that throws has no opinion about this root. The lexical path is the honest fallback rather than a
+      // guess: the containment question for a root that does not exist yet is about the path that was configured.
+      return lexical;
+    }
+  });
+  const resolvedRoot = resolvedRoots.find((root) => contains(root, resolved));
   if (!resolvedRoot) {
     return {
       ok: false,

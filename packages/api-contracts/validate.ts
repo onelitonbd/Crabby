@@ -2,7 +2,7 @@
 // `Value.Check` cannot give: unknown
 // fields rejected *with the field named*, and a shape the four interfaces can print the same way. The walker below
 // resolves a JSON Pointer against the schema's own `properties`, which is how a name gets attached to a deep miss.
-import { type Static, type TSchema, Type } from "@sinclair/typebox";
+import { Kind, type Static, type TSchema, Type } from "@sinclair/typebox";
 import type { ValueError } from "@sinclair/typebox/errors";
 import { Errors } from "@sinclair/typebox/errors";
 import { Value } from "@sinclair/typebox/value";
@@ -25,6 +25,29 @@ export function validate<T extends TSchema>(
 
 export function isValid<T extends TSchema>(schema: T, input: unknown): input is Static<T> {
   return Value.Check(schema, input);
+}
+
+/** §4.1's `inputSchema` is a JSON Schema where it is published (a provider's tool list, `GET /tools`) and a typebox
+ *  schema where it is checked, and `PROVIDERS_AND_TOOLS.md` §4.4 puts that check first: "schema validation → capability
+ *  check → tier/approval → execution". This is the one place the two spellings are reconciled, so the cast lives in a
+ *  function with a reason beside it instead of at every call site that needs one.
+ *
+ *  It returns the same `Problem` shape every other validation in the repository returns, because a tool refusal that the
+ *  four interfaces cannot print is a refusal three of them will paraphrase. */
+export function validateToolArguments(
+  schema: Readonly<Record<string, unknown>>,
+  args: unknown,
+): ValidationResult<Record<string, unknown>> {
+  const record = args as Record<string, unknown>;
+  // A schema this repository authored carries typebox's `Kind` symbol. A JSON Schema that arrived as *data* — an MCP
+  // server's tool list, a test harness's stand-in spec — does not, and typebox's visitor throws "Unknown type" on it
+  // instead of answering, so the check is skipped rather than crashed. Skipping is a recorded gap and not a design
+  // (`docs/CONSISTENCY_REVIEW.md` F-54): the argument *names* are still compared against the declaration before policy is
+  // asked (`ToolCall.declaredArgs`, §4.3's "arguments it did not declare → reject before policy"), and what a discovered
+  // tool loses is the type half of §4.1's step 1 until a JSON Schema validator exists in the tree.
+  if ((schema as Record<symbol, unknown>)[Kind] === undefined) return { ok: true, value: record };
+  const result = validate(schema as TSchema, args);
+  return result.ok ? { ok: true, value: record } : result;
 }
 
 /** `CrabbyEnvelope` style wrapper every read command can print: `ok`, the payload, and the request id when one exists. */

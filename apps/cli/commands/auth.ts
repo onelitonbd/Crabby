@@ -42,6 +42,27 @@ async function runPair(
   renderer: Renderer,
 ): Promise<ExitCode> {
   const code = tail.values.code;
+  // Checked before `connect`, for the ordering `task cancel` established: §7.1's exit codes are a contract about the
+  // command, not about the process it would have talked to, so a malformed `--restrict` on a machine whose Gateway is
+  // down still exits 2 and still says what is wrong with it. The split happens here rather than in the body because a
+  // value that names nothing would otherwise reach the route, and the route refuses an empty restriction — better that
+  // the user learns it from the command that mistyped the flag than from a 400 they have to read.
+  const restrictRaw = tail.values.restrict;
+  const restrictList =
+    restrictRaw === undefined
+      ? undefined
+      : restrictRaw
+          .split(",")
+          .map((token) => token.trim())
+          .filter((token) => token.length > 0);
+  if (restrictRaw !== undefined && (restrictList === undefined || restrictList.length === 0)) {
+    renderer.line("bad --restrict", `"${restrictRaw}" names no capability`);
+    renderer.fix(
+      "a comma-separated list of names from SECURITY.md §6.1 — leaving the flag off mints the baseline set, and a " +
+        "restriction may only narrow it (§5.3)",
+    );
+    return EXIT.usage;
+  }
   const connection = await connect(layout);
   if (connection.state === "no-gateway" || connection.state === "stale-gateway")
     return reportNoGateway(renderer, connection.state);
@@ -57,8 +78,25 @@ async function runPair(
         code: string;
         expiresAt: string;
         clientId: string;
-      }>("/api/v1/auth/pair-codes", { method: "POST", body: { name, interface: iface } });
+        capabilities: readonly string[];
+      }>("/api/v1/auth/pair-codes", {
+        method: "POST",
+        body: {
+          name,
+          interface: iface,
+          ...(restrictList === undefined ? {} : { restrict: restrictList }),
+        },
+      });
       renderer.line("pair as", `${name} (${iface})`);
+      // Printed because the alternative is an operator believing a code carries the authority they asked for. §2's rule
+      // 01 is least capability, and a number the operator can check is the cheapest evidence that a narrowing took
+      // effect; `crabby auth list` prints the set itself.
+      renderer.line(
+        "capabilities",
+        `${response.body.capabilities.length} granted` +
+          (restrictList === undefined ? "" : `, narrowed from the ${iface} baseline`) +
+          " — `crabby auth list` prints the set",
+      );
       renderer.line("expires", `${response.body.expiresAt} — ${PAIRING_CODE_TTL_HINT}, single use`);
       renderer.line("", "");
       // The code alone, on its own line, so `crabby auth pair | tail -1` and a long-press paste both work.
@@ -130,30 +168,44 @@ async function runRevoke(
   const connection = await connect(layout);
   if (connection.state !== "paired") return reportNoGateway(renderer, connection.state);
   try {
-    await connection.client.authRevoke(id);
-    renderer.line("revoked", id);
+    const response = await connection.client.authRevoke(id);
+    const body = response.body as { streamsEnded?: number };
+    // C8-10's one line, with the count on it: "revoked" is a fact about a row, and the number is the fact about whether
+    // this revocation also ended the live views the revoked identity held. The Gateway answers 200 with it precisely so
+    // this line can be a report instead of a promise (D-096).
+    const ended = typeof body.streamsEnded === "number" ? body.streamsEnded : 0;
+    renderer.line(
+      "revoked",
+      `${id} · ${ended === 0 ? "no live streams to end" : `${ended} live stream(s) ended`}`,
+    );
     const own = readCredentials(layout);
     if (own && own.clientId === id) {
       renderer.line("note", "that was this client's own identity — its token is now dead");
       renderer.fix(`delete ${credentialsPath(layout)} and pair again`);
     }
-    renderer.fix(
-      "live streams are not yet bound to identities, so a connected client keeps its view until it reconnects (M1c)",
-    );
-    return renderer.done({ revoked: id });
+    return renderer.done({ revoked: id, streamsEnded: ended });
   } catch (error) {
     return reportFailure(renderer, error);
   }
 }
 
 /** Only live identities come back from `GET /auth/clients` — revocation deletes the row (see the route) — so there
- *  is no "revoked" state to render here, and a branch for it would be code for a shape the API cannot produce. */
+ *  is no "revoked" state to render here, and a branch for it would be code for a shape the API cannot produce.
+ *  §3.1's "whether it is currently connected" is the count the Gateway sends, phrased here rather than there: the wire
+ *  carries a number because two renderers deriving a boolean from it is two definitions of connected (D-096). */
 function describe(item: Record<string, unknown>): string {
   const caps =
     Array.isArray(item.capabilities) && item.capabilities.length > 0
       ? ` · ${item.capabilities.join(",")}`
       : "";
-  return `${String(item.name)} · ${String(item.interface)} · paired ${String(item.createdAt)}${caps}`;
+  const live = typeof item.liveStreams === "number" ? item.liveStreams : 0;
+  const seen =
+    live === 0
+      ? "idle"
+      : live === 1
+        ? "connected, 1 live stream"
+        : `connected, ${live} live streams`;
+  return `${String(item.name)} · ${String(item.interface)} · paired ${String(item.createdAt)} · ${seen}${caps}`;
 }
 
 function defaultName(): string {

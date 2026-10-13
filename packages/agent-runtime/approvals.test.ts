@@ -4,6 +4,7 @@
 // an interface shows a user who was denied.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { ClientInterface } from "@crabby/api-contracts";
 import type { ApprovalRequest } from "@crabby/policy";
 import { createApprovals, createMemoryApprovalStore } from "./approvals.ts";
 
@@ -42,19 +43,28 @@ function harness() {
   const approvals = createApprovals({ store, newId });
   const open = (at = T0, overrides: Partial<ApprovalRequest> = {}) =>
     approvals.open(request(overrides), at);
-  const approve = (id: string, at = T0 + 1_000, byClientId?: string) =>
+  // `via` defaults to the TUI because the fixture's request is T3, and D-085 confines a T3 signature to the TUI and the
+  // Web UI. A test that wanted a permissive surface would be a test that never exercised the rule.
+  const approve = (
+    id: string,
+    at = T0 + 1_000,
+    byClientId?: string,
+    via: ClientInterface = "tui",
+  ) =>
     approvals.answer({
       id,
       decision: "approve",
       scope: "once",
+      via,
       at,
       ...(byClientId === undefined ? {} : { byClientId }),
     });
-  const deny = (id: string, at = T0 + 1_000, byClientId?: string) =>
+  const deny = (id: string, at = T0 + 1_000, byClientId?: string, via: ClientInterface = "tui") =>
     approvals.answer({
       id,
       decision: "deny",
       scope: "once",
+      via,
       at,
       ...(byClientId === undefined ? {} : { byClientId }),
     });
@@ -122,6 +132,7 @@ test("`scope: once` is the only shape, in the request and in the answer", () => 
     id: record.id,
     decision: "approve",
     scope: "session" as "once",
+    via: "tui",
     at: T0 + 1,
   });
   assert.ok(!widened.ok, "a client cannot widen the scope while answering either");
@@ -140,6 +151,14 @@ test("an approval is consumed by the action it bound, exactly once", () => {
   const used = h.consume(record.id);
   assert.ok(used.ok, JSON.stringify(used));
   assert.equal(used.ok && used.record.state, "consumed");
+  // The consumption is a state of the row, so it gets an event of its own. Until M2d's loop consumed one, `consume`
+  // returned `approval.answered` and a client watching the stream saw that frame twice for one decision — the first from
+  // whoever recorded the answer, the second from the runtime spending it — with nothing to tell the two apart (F-42).
+  assert.equal(
+    used.ok && used.event,
+    "approval.consumed",
+    "one event per state change, and `consumed` is a state (§6.3's `scope: once` mark)",
+  );
 
   const again = h.consume(record.id, T0 + 3_000);
   assert.ok(!again.ok);
@@ -267,6 +286,7 @@ test("expiry is a deadline and not a grace period, on either side of the queue",
     id: unanswered.id,
     decision: "approve",
     scope: "once",
+    via: "tui",
     at: T0 + 4_000 + T3_TTL + 1,
   });
   assert.ok(!late.ok, "an answer that arrives after the deadline is refused");
@@ -297,12 +317,88 @@ test("expiry is a deadline and not a grace period, on either side of the queue",
   );
 });
 
+test("a T3 signature is refused on a surface §6.2 excludes, and the row is left for the surface that counts", () => {
+  const h = harness();
+  const record = opened(h);
+
+  // Both directions of the answer, because what §6.2 restricts is the *signature* and not the polarity: a denial is
+  // also a decision recorded against a binding, and a surface that may not grant is a surface that may not decide.
+  for (const decision of ["approve", "deny"] as const) {
+    const wrong = h.approvals.answer({
+      id: record.id,
+      decision,
+      scope: "once",
+      via: "telegram",
+      at: T0 + 1_000,
+    });
+    assert.ok(!wrong.ok, `a T3 \`${decision}\` must not be answerable from Telegram`);
+    if (!wrong.ok) {
+      assert.equal(wrong.code, "surface-not-allowed");
+      assert.match(wrong.reason, /§6\.2/);
+      assert.match(wrong.reason, /D-085/);
+      assert.equal(
+        wrong.event,
+        undefined,
+        "a refusal from the wrong surface changes no state, so it owes no event",
+      );
+    }
+  }
+
+  assert.equal(
+    h.store.get(record.id)?.state,
+    "pending",
+    "the refusal must not consume or expire the row",
+  );
+  assert.deepEqual(
+    h.approvals.pending().map((row) => row.id),
+    [record.id],
+    "…and the TUI still finds it in the queue it is allowed to answer",
+  );
+  // Nothing was recorded on the refused path either, so a stale queue and a log cannot disagree about a refusal.
+  assert.equal(h.approvals.refusalCount("tsk_01", "shell.run"), 0);
+  assert.deepEqual(
+    h.approvals.list({ state: "pending" }).map((row) => row.id),
+    h.approvals.pending().map((row) => row.id),
+    "the queue a client reads is the arbiter's own list, so `?state=pending` and a TUI's view cannot diverge",
+  );
+
+  const right = h.approve(record.id);
+  assert.ok(right.ok, "the same answer on the permitted surface is accepted");
+});
+
+test("the surface rule is a table and not a mood: T2 is signable from a chat surface", () => {
+  const h = harness();
+  const T2_TTL = 10 * 60_000; // D-064's T2 expiry, so the TTL guard has nothing to refuse
+  const openedT2 = h.open(T0, {
+    tier: "T2",
+    ttlMs: T2_TTL,
+    expiresAt: T0 + T2_TTL,
+    binding: "sha256:bbb2",
+  });
+  assert.ok(openedT2.ok, JSON.stringify(openedT2));
+  if (!openedT2.ok) return;
+  const answered = h.approvals.answer({
+    id: openedT2.record.id,
+    decision: "approve",
+    scope: "once",
+    via: "telegram",
+    at: T0 + 1_000,
+  });
+  assert.ok(answered.ok, "a restriction that widens to every tier is a rule nobody wrote down");
+});
+
 test("a refusal a user might see cites the sentence that produced it", () => {
   const h = harness();
   const record = opened(h);
   const refusals = [
     h.open(T0, { summary: "" }),
-    h.approvals.answer({ id: "apv_missing", decision: "approve", scope: "once", at: T0 }),
+    h.approvals.answer({
+      id: "apv_missing",
+      decision: "approve",
+      scope: "once",
+      via: "tui",
+      at: T0,
+    }),
     h.consume(record.id),
     h.approve(record.id),
   ].filter((result) => !result.ok) as readonly { readonly code: string; readonly reason: string }[];

@@ -65,8 +65,10 @@ export class ProviderError extends Error {
   readonly raw?: unknown;
   readonly retryAfterMs?: number | undefined;
   /** Which deadline tripped, for `timeout`: §3.5 asks that connect, first-token, and stall be distinguishable, and a
-   *  ladder that cannot tell them apart retries the wrong thing (§4.4). */
-  readonly deadline?: "connect" | "first-token" | "stall" | undefined;
+   *  ladder that cannot tell them apart retries the wrong thing (§4.4). `absolute` is the fourth number D-074 priced
+   *  (`providerAbsoluteMs`), which §3.1 makes the runtime wrapper's to enforce and the adapter's to report — a call that
+   *  ran out of budget is a different fact from an endpoint that never answered. */
+  readonly deadline?: "connect" | "first-token" | "stall" | "absolute" | undefined;
   readonly attempt: number;
 
   constructor(
@@ -121,10 +123,18 @@ export function retryDelayMs(
   return { ms: scheduled, source: "schedule" };
 }
 
-export function shouldRetry(error: ProviderError, attempt: number): boolean {
+/** Whether another attempt is allowed. `maxAttempts` is the caller's budget, defaulting to `MAX_ATTEMPTS` so the
+ *  conformance suite and every adapter agree on one number; D-043's "at least 5 attempts per failing stage (configurable)"
+ *  is what makes it a parameter at all, and `packages/core`'s schema floors the configurable version at 5 so a user can
+ *  lengthen the ladder or shorten it to the documented floor, but not below it. */
+export function shouldRetry(
+  error: ProviderError,
+  attempt: number,
+  maxAttempts: number = MAX_ATTEMPTS,
+): boolean {
   if (error.class === "cancelled") return false;
   if (!error.retryable) return false;
-  return attempt < MAX_ATTEMPTS;
+  return attempt < maxAttempts;
 }
 
 /** The HTTP/status mapping every family shares. Kept as a table, because an adapter's `if (status === 429)` chain is

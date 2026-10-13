@@ -3,6 +3,7 @@
 // that a function returns what it happens to return is how a policy engine grows a hole quietly.
 
 import assert from "node:assert/strict";
+import path from "node:path";
 import { describe, it } from "node:test";
 import {
   APPROVAL_TTL_MS,
@@ -12,12 +13,14 @@ import {
   baseOf,
   CAPABILITIES,
   type ClientKind,
+  capabilitiesFor,
   capabilityFor,
   checkPath,
   clearExtensionTools,
   DESTRUCTIVE_PATTERNS,
   type EvalContext,
   evaluate,
+  grantsFor,
   holdsGrant,
   IRREVERSIBLE_RULES,
   isIrreversible,
@@ -29,7 +32,9 @@ import {
   READ_ONLY_COMMANDS,
   raiseOnly,
   registerTool,
+  removedGrantsFor,
   resolveTool,
+  restrictCapabilities,
   TIERS,
   TOOL_REGISTRY,
   tierFor,
@@ -46,6 +51,8 @@ interface Call {
   tool: string;
   args?: Record<string, unknown>;
   declaredArgs?: readonly string[];
+  /** What the runtime observed, as distinct from what the caller asked for (D-099). */
+  facts?: Record<string, unknown>;
 }
 
 function decide(
@@ -68,6 +75,7 @@ function decide(
       tool: call.tool,
       args: call.args ?? {},
       ...(call.declaredArgs ? { declaredArgs: call.declaredArgs } : {}),
+      ...(call.facts ? { facts: call.facts } : {}),
     },
     {
       grants,
@@ -151,6 +159,240 @@ describe("capability vocabulary (SECURITY.md §6.1)", () => {
     assert.equal(holdsGrant(["fs.read:workspace"], "fs.write"), false);
     assert.equal(holdsGrant(["fs.read:workspace"], "fs.read:secrets"), false);
     assert.equal(baseOf("net.egress:curated"), "net.egress");
+  });
+
+  // F-52's three questions, answered as code rather than as a paragraph: what a restriction means, who may set one, and
+  // how a capability reaches `PolicySubject.grants`. The first two are the baseline and its narrowing; the third is the
+  // expansion below them. Until these existed no code wrote `Identity.capabilities`, so every identity held an empty
+  // set and a run started from a route would have been refused every tool it proposed.
+  it("gives every interface one baseline, less what §9 and §5.3 withhold", () => {
+    const cli = capabilitiesFor("cli");
+    assert.deepEqual(
+      [...capabilitiesFor("tui")],
+      [...cli],
+      "D-005 keeps parity by keeping capability identical and adapting presentation, so the three local interfaces hold one set",
+    );
+    assert.deepEqual([...capabilitiesFor("web")], [...cli]);
+    for (const iface of ["cli", "tui", "web", "telegram"] as const) {
+      for (const shell of ["shell.run", "shell.privileged"]) {
+        assert.ok(
+          !capabilitiesFor(iface).includes(shell),
+          `§9: shell execution is "never enabled by default for a fresh install; enabling it is an explicit act", so ` +
+            `${iface} must not arrive holding ${shell}`,
+        );
+      }
+    }
+    assert.ok(
+      cli.includes("auth.manage"),
+      "§6.1 makes it local-only by construction, and a local identity is exactly what may hold it",
+    );
+    const telegram = capabilitiesFor("telegram");
+    assert.ok(
+      !telegram.includes("auth.manage") && !telegram.includes("tunnel.enable"),
+      "§6.1: no remote or agent-facing path may grant `auth.manage` — and in v1 a bot's requests are the ones that do " +
+        "not originate on the Gateway's own host",
+    );
+    for (const capability of telegram) {
+      assert.ok(
+        cli.includes(capability),
+        `§5.3: a remote client never receives a wider permission set than a local one — ${capability}`,
+      );
+    }
+    assert.equal(
+      cli.length,
+      CAPABILITIES.length - 2,
+      "only §9's two are withheld from a local baseline; everything else is the vocabulary itself",
+    );
+  });
+
+  it("narrows on a restriction and refuses rather than widening or guessing", () => {
+    const baseline = capabilitiesFor("cli");
+    const narrowed = restrictCapabilities(baseline, ["task.read", "session.read", "task.read"]);
+    assert.deepEqual(
+      [...narrowed.capabilities],
+      ["task.read", "session.read"],
+      "the intersection, de-duplicated, in the order asked for",
+    );
+    assert.deepEqual(narrowed.refused, []);
+    const shell = restrictCapabilities(baseline, ["shell.run"]);
+    assert.equal(shell.capabilities.length, 0);
+    assert.equal(
+      shell.refused.length,
+      1,
+      "§5.3 makes a restriction an intersection, so `--restrict` is not a way to enable the shell",
+    );
+    const typo = restrictCapabilities(baseline, ["task.read", "task.red"]);
+    assert.equal(typo.refused.length, 1);
+    assert.match(
+      typo.refused[0]?.reason ?? "",
+      /vocabulary/,
+      "§2's rule 03: an unknown capability is a refusal, not a name quietly dropped from the list",
+    );
+    const empty = restrictCapabilities(baseline, ["", " "]);
+    assert.equal(
+      empty.refused.length,
+      1,
+      "a restriction naming nothing is not a restriction, and an identity holding nothing could only ever fail",
+    );
+  });
+
+  it("reads a dot-less token as the family it names, which is how §13 writes its own example", () => {
+    const baseline = capabilitiesFor("cli");
+
+    const family = restrictCapabilities(baseline, ["config"]);
+    assert.deepEqual(
+      [...family.capabilities],
+      ["config.read", "config.write"],
+      "§13's example is `crabby auth pair --restrict shell,config`, so a dot-less token has to reach the family it " +
+        "names rather than be refused as a word nobody typed. The members arrive in the vocabulary's order, and the set " +
+        "is still only what the baseline held: expansion is a shorthand for narrowing, never a way to reach a member " +
+        "§9 or §6.1 withheld",
+    );
+    assert.deepEqual(family.refused, []);
+
+    const mixed = restrictCapabilities(baseline, ["task", "task.read"]);
+    assert.deepEqual(
+      [...mixed.capabilities],
+      ["task.create", "task.cancel", "task.read"],
+      "a family and one of its own members may be asked for together, and the answer holds no duplicate",
+    );
+    assert.deepEqual(mixed.refused, []);
+
+    // §13's example typed literally. One half of it works and the other cannot work on any install, and the difference
+    // is the reason the two refusals say different things.
+    const documented = restrictCapabilities(baseline, ["shell", "config"]);
+    assert.deepEqual([...documented.capabilities], ["config.read", "config.write"]);
+    assert.equal(documented.refused.length, 1);
+    assert.equal(
+      documented.refused[0]?.name,
+      "shell",
+      "the refusal names the token the operator typed rather than a member they never wrote, because a message naming " +
+        "`shell.run` would have them looking for a flag they did not use. The function reports both halves — what could " +
+        "be honoured and what could not — and it is the mint route that refuses the whole request when anything is " +
+        "refused (§2's rule 03), so `shell,config` never mints a config-only identity",
+    );
+    assert.match(
+      documented.refused[0]?.reason ?? "",
+      /shell\.run, shell\.privileged/,
+      "and it lists the family's members, so an operator sees what was withheld instead of guessing which rule stopped " +
+        "them: §9 keeps the shell off every fresh install, so no baseline anywhere holds this family",
+    );
+    assert.match(
+      documented.refused[0]?.reason ?? "",
+      /widen the set rather than narrow it/,
+      "with §5.3's rule named, because honouring it would be the widening D-054 forbids",
+    );
+
+    const remote = restrictCapabilities(capabilitiesFor("telegram"), ["auth"]);
+    assert.equal(remote.refused.length, 1);
+    assert.match(
+      remote.refused[0]?.reason ?? "",
+      /holds none of them/,
+      "the same refusal for a different reason: §6.1 marks `auth.manage` local-only, so the `auth` family is empty for " +
+        "a telegram baseline, and that is a rule about the interface rather than a spelling mistake",
+    );
+
+    const word = restrictCapabilities(baseline, ["nonsense"]);
+    assert.equal(word.capabilities.length, 0);
+    assert.match(
+      word.refused[0]?.reason ?? "",
+      /not a family either/,
+      "a token that is neither a name nor a family is a typo, and saying so is worth the extra clause: it tells the " +
+        "operator to check the spelling instead of hunting for a rule that stopped them",
+    );
+  });
+
+  it("expands capabilities into well-formed grants, and withholds rather than inventing a parameter", () => {
+    const first = "/data/data/com.termux/files/home/work";
+    const second = "/sdcard/crabby";
+    const expansion = grantsFor(["task.read", "fs.read", "net.egress"], { roots: [first, second] });
+    assert.deepEqual(
+      [...expansion.grants],
+      ["task.read", `fs.read:${first}`, `fs.read:${second}`, "net.egress:allow-list"],
+      "§6.1 writes `fs.read:<root>` and `net.egress:<hostset>`, so one configured root is one grant, a flat capability " +
+        "stays flat, and a hostset names the *set* rather than its members (D-106) — a per-host grant would deny " +
+        "exactly the hosts §4.3 prices at T2, which is a wall where the document put a price",
+    );
+    for (const grant of expansion.grants) {
+      assert.equal(
+        isWellFormedGrant(grant).ok,
+        true,
+        `every emitted grant is well-formed: ${grant}`,
+      );
+    }
+    assert.deepEqual(
+      [...expansion.withheld],
+      [],
+      "nothing is withheld here: the roots are configured and `net.egress` has a set to name, which since D-106 is " +
+        "`net.allowList` in `config.json` — and an *empty* list still yields the grant, because a fresh install has " +
+        "curated nothing and §4.3's T2-with-the-host-named is exactly the state that install is in",
+    );
+
+    const rootless = grantsFor(["fs.write"], {});
+    assert.deepEqual(
+      [...rootless.grants],
+      [],
+      "no roots means no grant: a root invented by a default would be a path the agent may write to that the user never chose",
+    );
+    assert.equal(rootless.withheld.length, 1);
+
+    const chosen = grantsFor(["fs.read:/home/ua/one-root"], { roots: [first, second] });
+    assert.deepEqual(
+      [...chosen.grants],
+      ["fs.read:/home/ua/one-root"],
+      "a parameter somebody already chose is kept — re-expanding it against today's config would let an edit silently " +
+        "move an identity's authority",
+    );
+  });
+
+  it("names what a restriction removed, which is the half of §13's report `grants` cannot carry", () => {
+    const full = capabilitiesFor("cli");
+    assert.deepEqual(
+      removedGrantsFor(full, "cli"),
+      [],
+      "an identity paired without `--restrict` had nothing removed. The empty set is the whole point: with it, a missing " +
+        "capability reads as a denial the user can fix, and §13's other sentence stays reserved for a client that was " +
+        "actually narrowed",
+    );
+
+    const narrow = restrictCapabilities(full, ["task.read", "fs.read"]);
+    assert.deepEqual(
+      narrow.refused,
+      [],
+      "the fixture restriction has to be honoured for the rest of this to mean anything",
+    );
+    const removed = removedGrantsFor(narrow.capabilities, "cli");
+    assert.ok(
+      removed.includes("fs.write"),
+      "`fs.write` was in the baseline and is not held now, so it is what the restriction removed — and it is the name " +
+        "that turns a refusal into 'not available to this client' instead of 'needs `fs.write`, which this identity " +
+        "does not hold'",
+    );
+    assert.ok(
+      !removed.includes("fs.read"),
+      "and a capability the restriction kept is not reported as removed",
+    );
+
+    assert.ok(
+      !removed.includes("shell.run") && !removed.includes("shell.privileged"),
+      "§9 withholds the shell from every install, so no restriction removed it. Naming a rule's own exclusion as " +
+        "somebody's narrowing would send the operator to inspect a pairing nobody narrowed, and `withheldReason` " +
+        "already answers the shell from the registry side with the reason §9 gives",
+    );
+
+    const remote = capabilitiesFor("telegram");
+    assert.deepEqual(
+      removedGrantsFor(remote, "telegram"),
+      [],
+      "§6.1's local-only exclusions are a property of the interface, not of a restriction: an unrestricted telegram " +
+        "identity had nothing taken away from it at pairing",
+    );
+    const empty = removedGrantsFor([], "telegram");
+    assert.ok(
+      !empty.includes("auth.manage"),
+      "and a capability the telegram baseline never contained is not in the removed set either, however little the " +
+        "identity holds",
+    );
   });
 });
 
@@ -373,15 +615,52 @@ describe("path judgement (SECURITY.md §8)", () => {
     assert.equal(checkPath("src/app.ts", PATHS).ok, true);
   });
 
+  // A resolver that answers every path with the same string is not a resolver. `realpath` is a function of the path it
+  // is given, and a constant one collapses the root onto the target, so containment holds for anything asked of it —
+  // which is how these three fixtures read before the root itself started resolving too. They now name the one path
+  // that hops and leave every other path alone, exactly as `realpathSync` does. The assertions are unchanged; what they
+  // test is the rule rather than the artifact.
+  const linkAt = path.resolve(ROOT, "link");
+  const hopTo = (target: string) => (absolute: string) => (absolute === linkAt ? target : absolute);
+
   it("re-checks after the symlink hop and rejects what the first check missed", () => {
-    const escaping = checkPath("link", PATHS, () => `${HOME}/.ssh/id_ed25519`);
+    const escaping = checkPath("link", PATHS, hopTo(`${HOME}/.ssh/id_ed25519`));
     assert.equal(escaping.ok, false);
     assert.match(escaping.ok === false ? escaping.reason : "", /resolves through a link/);
-    assert.equal(checkPath("link", PATHS, () => "/etc/hosts").ok, false);
+    assert.equal(checkPath("link", PATHS, hopTo("/etc/hosts")).ok, false);
     assert.equal(
-      checkPath("link", PATHS, () => `${ROOT}/real.txt`).ok,
+      checkPath("link", PATHS, hopTo(`${ROOT}/real.txt`)).ok,
       true,
       "a hop that stays inside the root is not a finding",
+    );
+  });
+
+  it("accepts a workspace root that is itself behind a link, because both sides of the re-check resolve", () => {
+    // The shape that made the file executor's whole suite fail on macOS while passing on every Linux runner, and that
+    // no test in this file covered: macOS hands `os.tmpdir()` out as `/var/folders/...` where the real directory is
+    // `/private/var/folders/...`, so a root configured at the link and a target resolved through it are two names for
+    // one directory. Refusing the target reads as an escape while describing a file that never left the root. Termux's
+    // `/sdcard` is a link to `/storage/emulated/0`, which makes this the primary platform's most obvious workspace
+    // layout and therefore a defect rather than a CI inconvenience.
+    const REAL = "/private/home/ua/work/site";
+    const throughLink = (absolute: string) =>
+      absolute === ROOT || absolute.startsWith(`${ROOT}/`)
+        ? absolute.replace(ROOT, REAL)
+        : absolute;
+    const inside = checkPath("src/app.ts", PATHS, throughLink);
+    assert.equal(inside.ok, true, inside.ok ? "" : inside.reason);
+    assert.equal(
+      inside.ok ? inside.root : "",
+      REAL,
+      "the root reported back is the resolved one: the file executor measures `path.relative(root, resolved)`, and a " +
+        "lexical root beside a resolved target emits `..` segments that name no location on disk",
+    );
+    assert.equal(
+      checkPath("link", PATHS, (absolute) =>
+        absolute === linkAt ? "/etc/hosts" : throughLink(absolute),
+      ).ok,
+      false,
+      "resolving both sides must not turn containment into a formality — a hop out of the real root is still a finding",
     );
   });
 
@@ -397,6 +676,101 @@ describe("path judgement (SECURITY.md §8)", () => {
   it("fails closed when no workspace root exists at all", () => {
     const decision = decide({ tool: "file.read", args: { path: "a.txt" } });
     assert.match(asApproval(decision).reasons.join(" "), /no workspace root/);
+  });
+});
+
+describe("escalation on observed facts (PROVIDERS_AND_TOOLS.md §4.3, D-099)", () => {
+  // §4.3's file rows turn on facts about the filesystem rather than on intentions the caller declared, and `escalate`
+  // reads them from a channel the caller cannot write to. These four are the first tests those two escalations have ever
+  // had, which is the measure of how unreachable they were: before an executor existed there was no party to observe
+  // anything, so the rule could not be exercised even in principle.
+  const CTX = { paths: PATHS, realpathOf: (absolutePath: string) => absolutePath };
+  const EDIT = {
+    tool: "file.edit",
+    args: { path: "a.txt", content: "x" },
+    declaredArgs: ["path", "content"],
+  };
+
+  it("raises an edit of a file that was already there to T2, and leaves it at T1 with nothing observed", () => {
+    assert.equal(
+      tierOf(decide(EDIT, {}, CTX)),
+      "T1",
+      "§4.2's `file.edit (existing)` row is T1, and a fact nobody observed cannot raise it — this module can escalate on " +
+        "evidence and it cannot invent evidence",
+    );
+    const observed = decide({ ...EDIT, facts: { preExistingUserFile: true } }, {}, CTX);
+    assert.equal(
+      tierOf(observed),
+      "T2",
+      "§4.2: 'Bumped to T2 when overwriting a file Crabby did not create'",
+    );
+    assert.match(
+      asApproval(observed).approval.effects,
+      /overwriting a file Crabby did not create/,
+      "§6.2's T2 row is 'explicit approval with full context', so the sentence that raised the tier is in the prompt",
+    );
+  });
+
+  it("refuses the same fact from the caller, because §10 says a declared field is never an authority", () => {
+    const forged = decide(
+      {
+        tool: "file.edit",
+        args: { path: "a.txt", content: "x", preExistingUserFile: false },
+        declaredArgs: ["path", "content"],
+      },
+      {},
+      CTX,
+    );
+    const denial = asDeny(forged);
+    assert.equal(
+      denial.class,
+      "validation",
+      "a fact smuggled in as an argument is an argument the tool never declared, and §4.3's rule for those is rejection " +
+        "before policy — the model cannot lower its own tier by declaring the answer",
+    );
+    assert.match(denial.reason, /does not declare/);
+  });
+
+  it("raises a move onto an occupied destination to T2, on the runtime's observation of the destination", () => {
+    const MOVE = {
+      tool: "file.move",
+      args: { path: "a.txt", destination: "b.txt" },
+      declaredArgs: ["path", "destination"],
+    };
+    assert.equal(tierOf(decide(MOVE, {}, CTX)), "T1", "§4.2's `file.move` row");
+    assert.equal(
+      tierOf(decide({ ...MOVE, facts: { overwrites: true } }, {}, CTX)),
+      "T2",
+      "§4.2: 'T2 across roots or onto an existing target' — and the target's state is a fact, not an intention",
+    );
+  });
+
+  it("puts the observed fact inside the binding, so a signature covers what policy actually saw", () => {
+    // `file.delete` is used because the fact changes nothing about its tier, which isolates the only difference between
+    // the two calls: §6.3's binding has to cover the observation as well as the request, or D-084's comparison at the
+    // moment of execution would be comparing half of what the user priced.
+    const DELETE = { tool: "file.delete", args: { path: "a.txt" }, declaredArgs: ["path"] };
+    const plain = asApproval(decide(DELETE, {}, CTX));
+    const observed = asApproval(
+      decide({ ...DELETE, facts: { preExistingUserFile: true } }, {}, CTX),
+    );
+    assert.equal(
+      plain.approval.tier,
+      observed.approval.tier,
+      "the tier is the same, so the tier is not what differs",
+    );
+    assert.notEqual(
+      plain.approval.binding,
+      observed.approval.binding,
+      "the fact is part of the action's identity: two calls that policy judged on different evidence are two approvals",
+    );
+    assert.equal(
+      asApproval(decide({ ...DELETE, facts: { preExistingUserFile: true } }, {}, CTX)).approval
+        .binding,
+      observed.approval.binding,
+      "and the same evidence produces the same binding, which is what makes the comparison at execution a comparison " +
+        "rather than a coin toss",
+    );
   });
 });
 
@@ -524,6 +898,54 @@ describe("decision pipeline (PROVIDERS_AND_TOOLS.md §4.4)", () => {
       /evil\.example/,
       "the host has to be named in the prompt",
     );
+  });
+
+  it("reaches §4.2's `net.fetch` row from a real identity's grants, and prices the two halves of the row apart", () => {
+    // The chain a Gateway actually runs, rather than a subject built by hand: `capabilitiesFor` for the interface,
+    // `grantsFor` against this install's configuration, and then the arbiter. It is here because the two halves of
+    // §4.2's cell — "**T1** only for a user-curated allow-list" and the T2 base — are only both reachable if the grant
+    // expansion names the *set* instead of its members. A per-host expansion would have failed the capability check for
+    // every host nobody curated and answered `deny`, turning "escalation by destination" (§4.3) into a wall, and the
+    // deny would have read as a configuration problem the user could not fix from `config.json` at all.
+    const roots = ["/data/data/com.termux/files/home/work"];
+    const curated = ["api.example.com"];
+    for (const allowList of [curated, [] as readonly string[]]) {
+      const grants = grantsFor(capabilitiesFor("cli"), { roots }).grants;
+      const onList = decide(
+        { tool: "net.fetch", args: { url: "https://api.example.com/v1/status" } },
+        { grants },
+        { egressAllowList: allowList },
+      );
+      const offList = decide(
+        { tool: "net.fetch", args: { url: "https://example.org/v1/status" } },
+        { grants },
+        { egressAllowList: allowList },
+      );
+      const curatedNow = allowList.length > 0;
+      if (curatedNow) {
+        assert.equal(
+          asAllow(onList).tier,
+          "T1",
+          "a host the user curated is §4.2's T1 half: auto-allowed, with the curation as the reason",
+        );
+      } else {
+        assert.equal(
+          asApproval(onList).approval.tier,
+          "T2",
+          "with nothing curated there is no T1 to be had, and the row's base tier is the price — not a denial",
+        );
+      }
+      assert.equal(
+        asApproval(offList).approval.tier,
+        "T2",
+        "a host that is not on the list is T2 whichever list was loaded, which is §4.3's escalation by destination",
+      );
+      assert.match(
+        asApproval(offList).approval.exact,
+        /example\.org/,
+        "and §6.3's exact field carries the destination, so the user approves a host rather than a tool name",
+      );
+    }
   });
 
   it("refuses to answer a T3 from Telegram, and asks normally everywhere else", () => {

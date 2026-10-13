@@ -6,9 +6,18 @@
 >
 > **Reviewed:** 22 documents (16 planning at `*.md` and `docs/*.md`, 4 element inventories, the review index and
 > this file), most recently on 2026-10-10 — findings F-13…F-31 are from the six 2026-10-10 passes (the (R) round,
-> the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from), and
+> the finalization round, and the two implementation passes, which is where F-27, F-28 and F-29…F-31 came from),
 > F-32…F-36 from M1c's implementation pass, the first pass where a *generator* rather than a reader compared the
-> documents with the code, so every earlier finding has been re-checked against the documents as they now stand.
+> documents with the code, and F-37…F-53 from M2's — CI's seven legs (F-37), the one unreproduced red (F-38, sighted
+> twice), a rule enforced without a document to cite (F-39), the checker's own arithmetic (F-40), the three M2d's loop met
+> when it had to ask for numbers and vocabulary the plan had not priced (F-41…F-43), the three M2e's cancellation manager
+> met when it had to write down an outcome §6.2 requires and the plan had not defined (F-44…F-46), and the two M2g's
+> recovery met when it had to answer what a restart owes a prompt and a user (F-47, F-48), the one M2h's ladder met
+> when it went looking for the budget D-043 had already priced (F-49), the one M2i's checkpoint met when it went to
+> hand the run back to a task the state machine had already ended (F-50), and the two M2j's revocation met when it went to
+> find the second half of its own promise and the capability that was supposed to decide it (F-51, F-52, F-53).
+> Every earlier finding has been re-checked against
+> the documents as they now stand.
 >
 > **Method:** `python3 scripts/check-docs.py` + targeted manual contradiction hunting. This file is the record, not
 > a scratch pad: every finding below is either fixed with a decision ID, or explicitly listed as still open.
@@ -634,6 +643,794 @@ into `docs/DEVELOPMENT.md` §1's install row instead of being discovered by the 
 rule this file has been building since F-20 applies to a red you cannot reproduce: name it, date it, and record what
 was measured against it, because "could not reproduce" without the measurements is how a real race becomes folklore.
 
+**Second sighting, 2026-10-10, M2e, and this one has a named condition.** `npm test` answered `# tests 250 · # pass 249 ·
+# fail 1`, the failure being `a spawned gateway and a spawned cli (P-003)` — the same test, and the first red since the
+one above. What was different is measurable: the run was started *concurrently* with a second shell running
+`test:integration`, `test:security`, `biome`, `parity` and `docs:check`, so two suites were spawning processes and
+type-stripping TypeScript on the same cores at once. Re-run alone immediately afterwards, and twice more during the same
+slice, it was 250/250. So the budget that gave way is `waitForGatewayInfo`'s 25 s under roughly double load, which is a
+fact about the sandbox rather than about the Gateway — but it is the second time this specific test has been the one to
+fail, and the pattern is now worth stating: **the spawned-process legs are the ones that go red under load, and a red
+produced by running two suites at once is not evidence about the code.** The discipline that follows is the boring one —
+run the gates one at a time before a commit, which is what the M2 slices have done, and treat a red from a parallel run
+as unmeasured until it reproduces on its own.
+
+### F-39 — A security rule enforced by code cited a section that does not state it, and the fix moved the rule and the sentence
+**Severity: high, because the rule was correct.** `packages/policy/evaluate.ts` refuses to queue a T3 approval for a
+Telegram client, and its comment and its user-facing message both cite `SECURITY.md` §6.2. §6.2's T3 row says
+"explicit approval, no stored blanket grant, re-prompt on every material change"; §6.2's rules list says nothing about
+which surface may answer. Meanwhile §6.3 states "it must be answerable from all four interfaces". So a reviewer reading
+only the documents — which is what `docs/DEVELOPMENT.md` §7 asks of a security change — would find an enforcement that
+the prose forbids, in the one place a chat notification is most likely to be answered, and the defensible action would
+be to delete the `if`. Finding it required writing the approval arbiter and needing to know, for the route, *who may
+answer what*: the answer was not in any document.
+
+Two moves, in this order. The rule was kept and §6.2 gained a bullet, because "a T3 signature may be made only on a
+surface that renders the whole request" is the §6.2 floor and D-080's procedure for changing what a tier means is to
+move the document first, in a commit a reviewer reads. And the enforcement moved from the queue to the answer:
+`evaluate` refusing to *create* a T3 prompt for one surface is not the same rule as refusing to *record an answer* on
+it, because the queue is shared ("answer from anywhere"), a T3 row opened for the TUI sits in the phone's list too, and
+a per-surface check would have to be written four times and would fail the first time a fifth surface arrived. D-085
+records both halves, including the part that was decided rather than found: a refusal from a wrong surface leaves the
+row `pending` and writes no event, since sending someone to another device to say *no* is worse than the prompt they
+were already reading, and an unanswered request expires in D-064's window instead.
+
+The general rule this adds to the one F-27 established: a citation in a message string is a claim about a document, and
+`grep` settles it — but a *refusal* a user reads is also a rule, so the check is two-sided. A citation that points at a
+section which does not say it is a finding even when the behavior is right, because the behavior is then owned by a
+comment instead of by the specification that is supposed to be able to overrule it.
+
+### F-40 — The checker counted one thing and printed another, and the fix was to make the number come from the list
+**Severity: low, category: the tooling that enforces everything else.** `scripts/check-docs.py` printed
+`! 4 advisory item(s)` followed by three bullets. The count came from the raw list and the bullets from
+`sorted(set(list))`, so one duplicate reference — three documents citing the not-yet-written `CHANGELOG.md`, plus a
+second mention in one of them — made the line advertise output the tool had not shown. Nothing failed, which is how a
+reporter bug survives: the check it belongs to is advisory by design, because a reference to a planned document is a
+promise and not an error. That part is correct and stays — `CHANGELOG.md` is owed to M9's release process, and the
+advisory list is where a reviewer sees the debt without a build going red for it.
+
+What was fixed is the arithmetic: the list is deduplicated first and its length is what is printed, so the number is
+computed from the thing beneath it rather than from an earlier snapshot of the same data. The general rule, which
+belongs next to F-27's: **a count printed above a list has to come from the expression that produced the list** —
+`len(raw)` beside `sorted(set(raw))` is a discrepancy no test can catch because both halves are individually correct,
+and a tool whose numbers do not match its own output teaches a reviewer to skim it.
+
+The same audit found and fixed one instance of the *worse* version of this in a user-facing command, recorded here
+rather than in its own section because the cause is identical: `crabby status` printed "no policy engine in this build
+— T2/T3 approvals arrive with M2, so nothing is waiting". The policy engine has been in the build since M1c and the
+approval queue has been answerable since M2's arbiter, so the line asserted a fact about the release that the release no
+longer matches, and no test reads prose. The command now queries `GET /approvals?state=pending` and prints the count it
+gets, with the same object in the `--json` document — the claim became a measurement, which is the only fix that cannot
+go stale again.
+
+### F-41 — §5.2 requires six limits and D-074's table priced two of them nowhere
+**Severity: medium, because the prose and the table were both right and the code needed one of them.**
+`PROVIDERS_AND_TOOLS.md` §5.2's opening sentence requires the core — citing `SECURITY.md` §12 for why the caller may not
+be trusted with it — to enforce "per-task step limit, wall-clock timeout, tool-call count, output bytes, parallel steps
+(D-023), provider request rate, and a token budget with an optional cost ceiling". D-074's table, which is where §5.2 says
+those numbers live ("every row is a `limits.*` key in `config.json`"), carries provider timeouts, three tool classes,
+SQLite's busy timeout, extension overhead, 2 parallel steps, 4 concurrent provider requests and 5 queued tasks. It
+carries **no row for a per-task step limit and none for a tool-call count**, and none for a per-task wall clock or a token
+budget either.
+
+M2d's loop was the first code that had to answer "how many steps", which turned a documentation gap into a blocker: an
+unbounded loop of refused proposals is exactly what `SECURITY.md` §6.3 forbids, and a bound written only in a source file
+is a number no document can overrule — F-39's shape one level down, since here the *rule* was documented and the *size*
+was not. Fixed by D-088: 25 steps per task, counting refused calls as well as executed ones, and 2 tool calls per
+completion — D-074's own parallel-steps number reused as a per-response cap rather than a second invention. Both rows are
+in §5.2's table, and the three limits that remain unpriced are named in the paragraph under it with the reason each one
+waits: a wall clock would have to exclude D-064's approval window (D-074 keeps the two clocks separate on purpose), and a
+token budget and cost ceiling need `AGENT_RUNTIME.md` §8's context accounting, which does not exist.
+
+The same class of gap, one row down: the table prices per-tool deadlines for **three** classes only, so
+`packages/agent-runtime`'s `toolDeadlineMs` answers for `fs.*`, `net.fetch` and `shell.run` and `undefined` for the other
+forty-odd tools in §4.2, and the loop publishes `deadlineMs: null` in `tool.execution.started` rather than inventing a
+number. The general rule this adds: **a prose list of what the core enforces and a table of numbers are two registers, and
+the difference between them is a blocker for whoever writes the core.** A generator could diff them the way
+`scripts/parity.ts` diffs §4.2's tier table, and that is left as a named arrival rather than built here — §5.2's list is a
+sentence, and a sentence is not yet a machine-readable register.
+
+### F-42 — The fifth approval state had no event, so one event was doing two jobs
+**Severity: low, and invisible until something consumed an approval.** `APPROVAL_STATES` has five members, and the fifth —
+`consumed` — is what D-052's `scope: once` means in a row. `docs/INTERFACES_AND_API.md` §5.2's `approval.*` family listed
+four types, and `packages/agent-runtime/approvals.ts` returned `approval.answered` for the consumption as well as for the
+answer. Nothing could see it while only the arbiter and the decision route existed: the route only *answers*, so the double
+use never appeared in one log. M2d's loop consumes, and a full cycle then wrote **two `approval.answered` frames for one
+decision** — the first meaning "a human approved this", the second "the runtime has now used it" — with nothing to tell a
+client which had happened. `AGENT_RUNTIME.md` §5.1's own rule ("a state change without its event is a lie in progress") is
+why that is a defect and not a cosmetic one.
+
+Fixed by adding the type rather than by suppressing the second event, because suppressing it would have left a state
+change unlogged: `approval.consumed` is in `EVENT_TYPES`, in §5.2's family row, and is what `consume` returns;
+`packages/agent-runtime/approvals.test.ts` asserts it at the arbiter and `loop.test.ts` asserts it in a full cycle, in
+order, before the action starts. It is deliberately **not** in `ACTIONABLE_EVENT_TYPES`: §5.2's rule is about events a
+client must act on, and nobody acts on a consumption — the action it authorized is already running. The general rule: a
+state list and an event list are two registers of one lifecycle, and when their lengths differ the shorter one is missing
+something rather than the longer one inventing it.
+
+### F-43 — A deferral the registry carries on a row no name-keyed lookup can reach
+**Severity: low, still open by choice, category: a table split by argument and a lookup keyed by name.** §4.2 gives
+`ext.install` two rows: "Content-only kinds." at T2, and the executable kind "Blocked in the first release regardless of
+tier (D-038)". `packages/policy`'s `resolveTool` answers **by name**, so it returns the first row — and `availability.ts`'s
+`deferralFor`, which correctly reads the deferral off the row's own note instead of keeping a second list, therefore never
+sees the blocked one. No argument rule covers the gap either: `escalation.ts` has nothing for `ext.install`. So an executor
+that declared `ext.install` today would be offered it, and a call carrying an executable kind would be *gated at T2*
+instead of blocked at D-038.
+
+Recorded rather than fixed, for two reasons. Nothing in this build declares an `ext.install` executor — `ARCHITECTURE.md`
+§18's `packages/tools` has existed since M2k and implements eight file rows, none of them `ext.install`, so what makes the
+gap unreachable is now the executor's scope rather than its absence, which is a narrower reason and a stabler one — and the
+honest fix is an argument-dependent rule in
+`escalation.ts` beside the §4.2 row that justifies it, which belongs with the extension tooling and not with M2d's loop.
+`packages/agent-runtime/loop.test.ts` pins what *is* reachable (`withheldReason("ext.install", …)` answers `undefined`
+when the identity holds the grant) with this finding named in the assertion message, so the day someone adds the executor
+the test that goes red is the one that says why. It is the same shape as F-33 and F-34: two documents or two rows
+disagreeing, recorded visibly instead of resolved by inference.
+
+### F-44 — §6.2 said a per-tool duration was undecided while D-074's table priced three, and the code enforced them
+**Severity: low, and it was the code that made it visible.** `AGENT_RUNTIME.md` §6.2's last paragraph read: "Timeout
+thresholds remain a tuning value (the 64 KiB and temp-lifetime caps are decided in D-064; a per-tool duration is not)".
+D-074's table in `PROVIDERS_AND_TOOLS.md` §5.2 prices three per-tool durations — `fs.*` 10 s, `net.fetch` 20 s,
+`shell.run` 120 s — as "defaults with a named override path", and M2d's loop enforces exactly those three, citing D-074.
+A reviewer reading §6.2 would conclude the loop invented numbers, and the defensible action would be to delete the
+enforcement: F-39's shape again, with the code right and the sentence stale.
+
+The sentence was wrong, not the table, so the sentence moved: §6.2 now says the thresholds are defaults with an override
+path, names the three classes that are priced and the code that enforces them, and says plainly that the other forty-odd
+tools in §4.2 have no priced duration — which is F-41's third clause, and is why `toolDeadlineMs` returns `undefined` and
+the loop publishes `deadlineMs: null` instead of guessing. The general rule is F-27's, applied to a negative claim: a
+document saying a number is *not* decided is as checkable as one saying it is, and it goes stale in the opposite
+direction, by being overtaken rather than forgotten.
+
+### F-45 — §12's table cited D-074 for cancellation timeouts, and D-074 has no such row
+**Severity: low, one half fixed and one half left unpriced on purpose.** `AGENT_RUNTIME.md` §12's disposition table answers
+"Cancellation timeouts and escalation" with "§6; D-074" and adds "nothing structural; the numbers are `limits.*` keys".
+§6 states the requirement and no number; D-074's table has rows for provider timeouts, three tool classes, SQLite,
+extension overhead, parallel steps, provider concurrency and queue depth — and nothing for cancellation. So the citation
+resolved to a table that did not contain the thing cited, which is the F-14 class of defect one level down: not a section
+that moved, but a number that was never there.
+
+M2e had to answer it, and the answer is split rather than unified (D-090). The `immediate` override — §6.2's
+safety-critical path — is priced at `limits.cancellationSettleMs` = 5 s and has a row in §5.2's table, because an override
+that cannot bound a step which ignores its signal is not an override. The `finish-step` default is deliberately **not**
+priced: the step in flight keeps the deadline it was already given, and a cancellation clock beside a tool clock would give
+one step two deadlines. §5.2's paragraph about unpriced limits now names it, so the absence is a decision a reader can
+find rather than a hole a reviewer has to infer.
+
+### F-46 — §6.2 requires the uncertainty "on the task", and `TaskRecord` has no field for it
+**Severity: medium, open by choice, and the one debt M2e names instead of hiding.** §6.2: "Where an external action may
+already have taken effect when cancellation arrived …, that uncertainty MUST be recorded explicitly **on the task**".
+M2e records it durably, per task, in the `task.cancelled` event payload — `terminated`, `effectsUncertain`, `inFlight` and
+the step — which satisfies §5.2's recovery rule ("anything a client must act on must also be retrievable by polling
+`GET /tasks/{id}`") only in its weaker form: the poll that answers it is `GET /tasks/{id}/events`. A client reading the
+task record alone learns that the task was cancelled and not whether an external effect is in doubt, which is the fact
+§7.3 says must never be resolved by blindly re-executing.
+
+Not fixed in that slice because the honest fix was a schema change and not a sentence: `TaskRecord` would gain a
+`cancellation` object, `packages/storage` a migration to v3 with a column to hold it, `crabby task show` and
+`GET /tasks/{id}` a line each, and §4.1's tool-record vocabulary a decision about where `sideEffects` eventually comes
+from. That was a slice of its own with a review surface of its own, and doing it inside a cancellation slice would have put
+a migration and a contract change in the same commit as the behaviour they serve. §6.2 said what was true then and what was
+owed, so the gap lived in the document a reviewer reads rather than in a code comment.
+
+*(Closed in the next slice, as intended: D-091 is `TaskRecord.cancellation` and schema version 3's `cancellation_json`
+column, written once at the settle, read back by `GET /tasks/{id}` and printed by `crabby task show` as two facts a user can
+judge — whether the operation stopped, and whether an external effect is in doubt. What made it more than a column is
+`packages/storage/journal.ts`, the runtime's write seam over the real database: `packages/storage/journal.test.ts` now runs a
+whole gated task against SQLite, with the arbiter's rows committing in the same transaction as the task's events, and
+reopens the file afterwards to prove the outcome and every event that carried it survived. The one part of F-46 still open was
+the half that was never this finding's to close: `sideEffects` remained in `PENDING_RECORD_FIELDS`, so `effectsUncertain`
+was `true` for every tool step until a tool declared otherwise — and M2k closed it, because `packages/tools` declares
+`sideEffects` for all eight of its rows (D-098) and the loop now derives the evidence from the declaration instead of
+writing the constant: a cancelled `file.read` is `effectsUncertain: false` and a cancelled `file.delete` is `true`, which
+is the first time §6.2's second fact has been a measurement. What survives of F-46 is nothing; what survives of
+`PENDING_RECORD_FIELDS` is a reporting question and has its own row, F-55.)*
+
+### F-47 — After a restart, a prompt is answerable and nothing can act on the answer
+**Severity: medium, open by choice, and the one thing recovery could not make honest.** §7.1's scan marks every
+non-terminal task `interrupted`, including a task that was in `awaiting_approval` when the process died. Its approval row is
+durable — that was M2c's whole point — so the prompt is still in `GET /approvals?state=pending`, still inside D-064's
+window, and still answerable from all four interfaces. And after the answer, nothing happens: the loop's `SuspendedRun`
+was process memory (M2d says so in its header), there is no checkpoint to resume from, so no party exists that could
+consume the approval and run the action. A user answers a prompt on their phone and the action never runs.
+
+Three fixes were considered and all three were rejected in this slice. **Withdrawing the row** would need a sixth approval
+state or a reuse of `expired` for something that did not expire, and the arbiter's five states are checked into the schema
+by a `CHECK` constraint that M2c's tests assert against the file. **Refusing the answer at the route** for a task in
+`interrupted` would contradict §7.2, which *permits* resuming work covered by a still-valid approval — the surface is not
+the party that gets to narrow a rule the runtime owns (D-084's whole argument). **Rebuilding the run's conversation from
+the event log** is §8's compaction with the log's redaction and 64 KiB truncation applied, so the rebuild would be lossy in
+a way no document describes.
+
+What this slice does instead is make the situation legible: the `task.interrupted` event carries the reason and names the
+approval, the recovery report lists it under `approval` with `resumed: false` as a literal type, and §7.1's new paragraph
+says plainly that the authorization half of §7.2 has nothing to authorize yet. It closes with the runner and the checkpoint
+manager, which are the two things that would make an answer actionable — and until then the prompt expires on its own
+deadline, which is the outcome D-064's gradient was designed to make safe.
+
+*(Half closed by M2i. `packages/agent-runtime/checkpoint.ts` commits D-065's boundary and writes a second kind of
+boundary for a run suspended at a prompt, so the pause is now a durable fact with coordinates — `GET /tasks/{id}/checkpoint`
+names the step the run stopped on, the approval that covers it and D-065's verdict on continuing from it — and the answer
+the user gives is no longer the only durable thing about the run. What is still missing is the party that would act: there
+is no runner in the Gateway, no `packages/tools` for the resumed step to execute and no product provider adapter to call,
+so the answer remains inert and this row stays open. M2k removed the middle item of those three — `packages/tools` exists
+and declares what a resumed file step needs (D-098) — so what this row now waits on is precisely two parties, a runner and
+an adapter, and neither is a tool question. The half that was this finding's to name as absent is gone: the
+`task.cancelled` payload's `checkpoint` field reports a boundary instead of apologising for one, and recovery reports the
+verdict per task rather than saying it has nothing to pass. F-50 is the residue, and it is a different shape: the
+checkpoint turned out not to be the only thing D-044's promise was waiting on.)*
+
+### F-48 — Nothing swept the queue, so a stale prompt was shown as pending and counted as waiting
+**Severity: medium, fixed by D-093, and found by writing recovery rather than by reading the queue.** The arbiter has had
+`sweep` since M2b, and its header states why: "an approval that expires only when someone looks at it is an approval that
+can be answered late by a client reading a stale queue". Until M2g, the only callers were the loop's own expiry path and
+`answer`'s late refusal. So the security property held — a stale prompt could not be *approved*, because the arbiter
+refuses and flips the row — and the display property did not: `GET /approvals?state=pending` listed a row whose deadline had
+passed, and `crabby status` printed it as "1 waiting", which is the number a user reads to decide whether to pick up their
+phone.
+
+That is the F-40 shape again, one layer up: a claim about the world ("something is waiting for you") produced by a query
+that had not been told the clock had moved. Fixed by sweeping on the read that renders the queue, and at startup, with no
+timer (D-093 records why: a timer needs an interval nobody decided, a lifecycle, and a second clock beside the arbiter's).
+The write inside a GET is deliberate and is the part a reviewer should push on, so it is argued in the decision row rather
+than left to the diff. `tests/integration/recovery.test.ts` asserts both halves over HTTP, including that a second read
+does not log the same expiry twice.
+
+### F-49 — D-043's attempt count was "configurable" and no config key reached it
+**Severity: low, fixed by D-094, and found by wiring the ladder rather than by reading it.** D-043 prices the first rung
+of the retry ladder as "at least 5 attempts per failing stage (configurable)", and D-064 prices the delays between the
+rungs (`1s, 2s, 4s, 8s, 16s`, ±25% jitter, a `Retry-After` hint overriding upward). `packages/providers/errors.ts` had
+held both since M1c — `RETRY_SCHEDULE_MS`, `retryDelayMs`, `shouldRetry`, `MAX_ATTEMPTS` — and nothing in the build called
+any of them, so the loop's own header told the truth when it said a provider error fails the task on the first error and
+the event says no retry was attempted. Two gaps sat inside that one and they are not the same size. The behavioural gap
+was one function call wide: `callProvider` had to ask `shouldRetry` and sleep what `retryDelayMs` returned. The
+*configurability* gap had no code at all: `MAX_ATTEMPTS` was a module constant, `limits` held no key that reached it, and
+a user reading D-043's "(configurable)" had nothing to configure. That is F-41's shape turned around — there, a rule was
+stated and a number unpriced; here, a number was priced and no rule existed that could carry it.
+
+Fixed by `limits.providerAttempts`, defaulting to `MAX_ATTEMPTS` (6 = one attempt plus the five delays D-064 priced) with
+`minimum: 5` in the TypeBox schema rather than in a comment, because a floor enforced by the same `validate()` every route
+uses is stronger than a documented one, and because the floor is the part of D-043's sentence that has to survive a user
+editing their own config: the configurable half may lengthen the ladder or shorten it to five, and may not configure it
+out of existence. `loop.test.ts` asserts `LOOP_LIMITS.providerAttempts === MAX_ATTEMPTS` and that `providerAttempts: 4`
+fails validation, so neither package has to remember the other's number — F-40's rule, two packages apart. What is *not*
+fixed is D-044's second rung, and F-47 is the reason it cannot be: ask-the-user-which-model-instead needs a checkpoint to
+resume from and a switch surface to ask on, and neither exists. An exhausted budget therefore fails the task, and the
+`task.failed` payload carries `attempts`, `retried` and a `ladder` sentence naming the rung that is not built, which is
+the honest version of the promise D-044 makes.
+
+### F-50 — D-044 resumes from the checkpoint after a failure, and the state machine has no edge out of `failed`
+**Severity: medium, open, and found by writing a verdict rather than by reading D-044.** D-044's sentence is "on failure
+after the retry budget, Crabby asks the user which model to use instead, and resumes from the checkpoint — never restarts
+the task", and `PROVIDERS_AND_TOOLS.md` §3.6's stage 3 repeats it: "Switching models or exhausting retries **must not
+restart the task from scratch**. Work already completed remains complete; execution continues from the saved checkpoint and
+the pending step that failed." D-083's table makes `failed` terminal and absorbing — §4.1's first rule, enforced by
+`transition()`, which refuses a move out of it and is asserted refusing it in `agent-runtime.test.ts`. So the two
+documents describe one moment from opposite ends and no legal path joins them: a runtime that has failed the task has ended
+it, and a resume would have to un-end it. M2h left the impression that the checkpoint was the only missing piece (F-49's
+last paragraph says the rung cannot be built because there is no checkpoint to resume from); M2i built the checkpoint and
+found a second wall behind it.
+
+Three readings. **Let `failed → running` for this one case** makes the absorbing rule a default with an exception, which is
+the shape §4.1 exists to prevent, and it would ripple into every interface's assumption that a terminal state means the
+story is over — including `GET /tasks/{id}`'s contract, whose `state` is what a client decides whether to keep polling on.
+**Fail the task and keep the prompt open** — ask the user while the task is `failed` — is a state a client cannot render:
+§5.2's rule is that anything a client must act on is retrievable, and a prompt hanging off a terminal task is F-47 with the
+polarity reversed. **Ask before failing** is the reading the three documents agree on once the order is fixed: the ladder's
+exhaustion produces a pause in D-086's shape (`awaiting_approval`, no pending row, a `task.progress` frame naming the spent
+budget and the candidate models, per §3.6's stage-2 labeling rules), the answer records the switch on the task, and the run
+continues from the checkpoint while the task is still moving; only an ask that goes unanswered or is refused moves to
+`failed`, where it belongs. That is what the runner's slice has to implement, and nothing in M2i altered a state machine to
+get there early.
+
+What this slice did settle is the dependency D-044 named. `verdictFor` answers `none` for a failed task with a reason that
+carries both halves — the boundary is durable at step N, and `failed` is why nothing walks back to it — so a reader of
+`GET /tasks/{id}/checkpoint` learns the shape of the missing rung from the record itself rather than from a document. The
+row stays open until a slice either builds that pause or amends D-044 to say the ask happens before the task ends.
+
+### F-51 — §3.1's second half was a promise no code could keep, and a test name read as covering it
+**Severity: medium, fixed by D-096, and found by going to implement the sentence rather than by reading it.**
+`SECURITY.md` §3.1 says "revocation takes effect on the next request **and must also terminate live event streams**", and
+`docs/INTERFACES_AND_API.md` §3.1 repeats the demand as a duty on `crabby auth revoke`. Four slices of Gateway work went
+past it. The reason is structural rather than careless: `GET /events` resolved the caller's identity for the request that
+opened the stream and then forgot it — `requireToken` returns an `Identity`, the route discarded the value, and the bus
+keyed subscribers by nothing at all — so there was no handle a revocation could act *through*, and the delete route said so
+in a `log.warn` ("live streams are not yet bound to identities") instead of pretending. The route's own test was titled
+"revokes an identity so the next request fails, **which is §3.1's whole promise**".
+
+That title is the finding. A requirement with a mechanism missing has nowhere to be tested, so the test written next to it
+drifted into describing the half it could reach, and the drift was invisible because the sentence naming the coverage was
+written by the same hand that stopped there. Fixed in three parts: the event route binds its subscriber to the identity
+that opened it, `closeFor(clientId)` ends those streams in registration order and **returns how many** (a control whose
+effect nobody can observe is a control that rots), and each closed stream gets a named `event: end` frame carrying
+`{end: true, reason: "revoked"}` before the socket goes — because §5.4 already tells a client that a stream which stopped is
+a stream to reconnect through, and a silence is exactly what that rule was written for. The frame has no `id`, because a
+control frame is not an event and must not become a cursor.
+
+What was *not* fixed, because the transport does not have the thing to fix: §3.1's neighbouring sentence — "checked once at
+request start and again when a live event stream is upgraded to an action" — describes an upgrade that does not exist here.
+Every client action is a plain HTTP request (`docs/INTERFACES_AND_API.md` §5.1's reason for choosing SSE over WebSocket),
+so there is no moment at which a stream becomes an action; the sentence is now written against the mechanism that satisfies
+it, in §3.1 of both documents.
+
+### F-53 — §3.1 promised an identity list says "whether it is currently connected", and nothing carried it
+**Severity: low, closed by the same decision as F-51, and the kind of row only a code-aware read finds.**
+`docs/INTERFACES_AND_API.md` §3.1 says `crabby auth list` shows "name, interface, created, last used, granted
+capabilities, and whether it is currently connected", and §4.5's `GET /auth/clients` row repeats the list verbatim. The
+route returned `listIdentities` — id, name, interface, capabilities, created, last used — so the sixth promise had no
+field; `ClientRecord`, which `additionalProperties: false` makes a closed shape and which `tests/integration/gateway.test.ts`
+validates every row against, had no room for one; and `apps/cli/commands/auth.ts` printed `name · interface · paired ·
+caps`, silently one column short. A reader comparing the CLI's output with §3.1 would conclude the *document* had added a
+field out of kindness, which is the failure mode F-08, F-10 and F-11 were about, in a table nobody re-read.
+
+It could not have been fixed before M2j, and that is the useful part of the record: "currently connected" is a fact about a
+live stream belonging to an identity, and until D-096 bound the two together the question had no referent — the bus could
+count subscribers and nothing more. Fixed by one field, `ClientRecord.liveStreams`, computed by the route from
+`bus.countFor` — the same registry the revocation closes streams through, so the list and the control cannot disagree about
+who is watching — and rendered by the CLI as `connected, 2 live streams` or `idle`. Deliberately **one** field and not a
+boolean plus a count: `connected` derived from `liveStreams > 0` in two interfaces would be two definitions of the word,
+and the second consumer this row had been waiting for (`docs/review/TUI.md` T14-03, "prints how many streams it will kill
+first") needs the number anyway. `GET /status`'s `streams.subscribers` stays a process-wide count, because it answers "is
+this Gateway being watched at all" for `crabby status`, and collapsing the two questions into one field would lose whichever
+one the reader did not intend.
+
+### F-52 — `auth.manage` is cited by three routes and enforceable by none, and identity capabilities have no writer
+**Severity: high, open, and found by trying to write the check the documents name.** `docs/INTERFACES_AND_API.md` §4.5
+attaches `auth.manage` (`SECURITY.md` §6.1, "local-only by construction") to `POST /auth/pair-codes`; §3.1 says "managing
+identities requires `auth.manage` … minting or revoking identities from a network-facing interface would let a stolen
+remote token create a second one"; and the §3.1 row for `GET /auth/clients` promises a list that includes *granted
+capabilities*. The Gateway checks none of it: the mint route is guarded by `requireLoopback` plus a token, and listing and
+revoking were guarded by a token alone — so before M2j, a token stolen off any reachable path could enumerate every
+identity on the device and delete the one the owner would use to recover.
+
+The capability cannot simply be checked, and that is the half worth writing down. The plumbing is half-built and the
+decision is missing: `client_identity.capability_json` exists, `createIdentity` and `mintPairingCode` both accept a
+`capabilities` list, and **no caller in the build ever passes one** — the mint route's body is `{name, interface}` and
+nothing more, `crabby auth pair` has no flag that supplies grants, and the `[--restrict caps]` §3.1's usage line advertises
+is in no registry, so every identity this Gateway pairs is created with `capabilities: []`. There is no "restrict" to
+read, only a column to write. Meanwhile
+`packages/policy` asks each `PolicySubject` for `grants` and `removedGrants` — the restricted-client concept D-060 protects
+— so the durable fact and the runtime question have never been joined. A check for `auth.manage` written today would
+therefore refuse *everyone*, the owner's own CLI included: a gate that locks the owner out of the device is not a security
+improvement, it is an outage with better optics.
+
+What M2j did, in D-097, is enforce the property with the one mechanism that exists: `GET /auth/clients` and
+`DELETE /auth/clients/{id}` now require a loopback request, the same guard §4.5's mint row already uses, measured on the
+socket because `trustProxy: false` means a forwarded header cannot move it. That implements "local only" without inventing
+a grant model, and it is deliberately fail-closed about the address itself: the guard accepts the bound loopback addresses
+and not the whole `127/8` range. What remains open is the real control, and its closing condition is named rather than
+implied: a pairing-time grant decision — what `--restrict` means, who may set it, and how `capability_json` becomes
+`PolicySubject.grants` — which is the same unanswered question `POST /admin/*` waits on, so it should be answered once, in
+whichever slice takes it. Until then §4.5's `auth.manage` sentences are a rule the documents state and the build can only
+approximate, and this row is where a reader learns that.
+
+**M2n widened this row instead of closing any of it.** `POST /api/v1/tasks/{id}/cancel` now exists, and §6.1's `task.cancel` is the capability that decides who may stop a task — enforced by nothing beyond the token the guard already demanded, for exactly the reason above: every paired identity holds `capabilities: []`, so a real check would refuse the owner's own CLI. That makes `task.cancel` a second capability routes cite and no code can enforce, and it makes the missing writer load-bearing for a second reason. The task *handoff* — `POST /tasks` passing a created task to the runner that now exists — is deliberately not written, and this row is why: `LoopSubject.grants` would come from `Identity.capabilities`, so a run started from a route would hold no grants and `packages/policy` would refuse every tool it proposed. A Gateway that started runs which could do nothing would be worse than one that says plainly it starts none, so the honest state is recorded here: the runner exists and nothing composes it, the cancellation half of §6 is wired because stopping work needs no grants, and the pairing-time grant decision now blocks three things — `POST /admin/*`, the handoff, and `crabby task run` — rather than one.
+
+**This slice answers two of F-52's three questions and locates the third precisely.** The decision, recorded as D-102:
+an identity's baseline is `SECURITY.md` §6.1's vocabulary for the interface it was paired for, less the two §9 shell
+capabilities no fresh install holds (`shell.run`, `shell.privileged`), less the two §6.1 marks local-only that
+`telegram` does not hold (`auth.manage`, `tunnel.enable`) — so a remote client never receives a wider set than a local
+one (§5.3). D-032 ("interface type may narrow only what the user configures, never what the core allows") is not
+contradicted by that withholding, and the reason is worth stating because it is the first objection a reviewer will
+raise: §6.1's table *is* the core's allowance, and its `auth.manage` row reads "Local-only by construction: no remote
+or agent-facing path may grant it". `restrict` then narrows the baseline and nothing else. It is an intersection, so
+`--restrict shell.run` is refused with the rule named instead of enabling the shell — D-054, which says a restriction
+removes capabilities and never converts one into an approval the same restricted client must answer; an unknown name is
+refused with the vocabulary named; an empty list is refused, because a restriction naming nothing is not a restriction
+and an identity holding nothing can only fail. The mint route refuses the *whole* request when anything is refused
+(§2's rule 03) and its answer carries the granted set, so a caller can see that a narrowing took effect without a
+second read.
+
+Four sentences above are therefore no longer true of this build, and are corrected here rather than deleted, because
+the row is a record of what was found and when. There *is* now a caller that passes `capabilities`: the mint route, and
+the bootstrap identity `crabby gateway start` pairs first. `crabby auth pair` *does* have a flag that supplies a
+restriction, and §3.1's `[--restrict caps]` is in the registry rather than in no registry. A freshly paired identity
+does *not* hold `capabilities: []` — it holds the baseline above, which `crabby auth list` prints and §3.1's row
+promised. And the capability refusal a caller gets names §6.1 instead of pointing at `--help`, which never held the
+vocabulary. What is *unchanged* is the enforcement, for a reason about this build rather than about the rule: D-097's
+socket guard still decides `POST /auth/pair-codes`, `GET /auth/clients` and `DELETE /auth/clients/{id}`, because no
+migration gives capabilities to an identity paired before assignment existed — replacing the guard would lock such an
+owner out of their own recovery path, exactly the outage D-097 named — and because no route has a `PolicySubject` to
+ask. In v1 the two conditions agree, since §13 admits no tunnel and a caller off the loopback socket cannot be holding
+a local interface's baseline.
+
+The third question — how `capability_json` becomes `PolicySubject.grants` — is now a located absence rather than an
+open one. `packages/policy` has the function that would do it: `grantsFor(capabilities, { roots })` expands
+`scope: "none"` to the bare name, `scope: "root"` to one `name:root` grant per configured workspace root, and withholds
+*with a reason* rather than silently a root-scoped grant when no root is configured and every `net.egress` host-set
+grant in any build, because nothing in `config.json` supplies a host set. It is tested and it has no
+caller for a run, because nothing composes a runner into `POST /api/v1/tasks` — `docs/ROADMAP.md` §4's "still absent:
+the handoff" sentence. That handoff is the slice that joins the durable fact to the runtime question, and until it
+lands `auth.manage` and `task.cancel` stay cited by routes that decide on something else, which is what this row has
+said since M2j and what it will keep saying until it can stop.
+
+**The handoff landed, and with it the answer to the third question.** `POST /api/v1/tasks` reads the identity that asked
+before it writes anything, calls `grantsFor(client.capabilities, { roots })` with the roots the composition root was
+given, logs every withheld grant with the reason `packages/policy` produced rather than dropping it, and hands
+`runner.start` a subject of `{ grants, removedGrants, clientKind: client.interface }`. So `capability_json` becomes
+`PolicySubject.grants` at the route, once per task, from the durable fact D-102 started writing at pairing — and
+`tests/integration/tasks.test.ts` asserts the join end to end over HTTP: a run that completes and really writes a file,
+and a narrowed identity whose refused write is reported §13's way.
+
+The second half of the subject is the finding this slice made rather than read. `PolicySubject.removedGrants` had no
+writer either, and without it `§13`'s own sentence is unreachable from a Gateway-composed run: an unheld capability
+answers `deny` — "needs `fs.write`, which this identity does not hold" — which reads as something the user could go and
+grant, when for a restricted client it is a feature that is not available and must not be laundered into an approval it
+cannot answer. `removedGrantsFor(capabilities, interface)` is the missing writer: the interface's baseline minus what the
+identity holds, so an unrestricted pairing has nothing in it and §9's withheld shell and §6.1's local-only marks are
+*not* reported as somebody's narrowing. Only the integration test could have caught this; reading the two packages
+showed two correct halves and no seam between them.
+
+What this row still says, and now more precisely. `auth.manage` and `task.cancel` remain enforced by D-097's socket
+guard rather than by a grant, but the reason has lost one of its two legs: a route *does* now have a `PolicySubject` to
+ask. What is left is the migration — no code gives capabilities to an identity paired before assignment existed, and
+such an identity holds `[]`, so a grant test on `POST /auth/pair-codes` or on `POST /api/v1/tasks` would refuse the
+owner's own CLI and lock them out of the recovery path, which is the outage D-097 named. `POST /api/v1/tasks` therefore
+records a task from any paired identity and enforces nothing at the door; the enforcement it does perform is per tool
+call, inside the run, where the subject exists. That is the closing condition, stated once: a migration that gives every
+existing identity its interface's baseline, after which the socket guard can be replaced by the grant test the documents
+have described since §3.1.
+
+
+**One more sentence in §13 was untypeable, and it took the handoff to notice.** The narrowing bullet reads
+`crabby auth pair --restrict shell,config`, and both of those names are families rather than vocabulary entries, so the
+mint route refused the document's own example as two unknown words. Worse, the refusal it gave was the *typo* refusal,
+which sends an operator to check a spelling they got right. `restrictCapabilities` now reads a dot-less token as the
+family it names and expands it to the members the baseline holds, and the two refusals are separate sentences: a token
+that is neither a name nor a family is a typo, and a family no baseline holds is a rule — `shell`, which §9 keeps out of
+every baseline, so `--restrict shell` cannot be honoured on any install and says so with its members listed. Expansion
+cannot widen anything, because what it adds is still intersected, so D-054 and §5.3 are untouched by it; and the example
+in §13 is now `--restrict task,session`, which mints an identity that can read and drive tasks and sessions and nothing
+else. The finding is recorded here rather than as a new row because it is F-52's subject — what a restriction means and
+who may set it — and this row is where a reader looks for that answer.
+
+**Amendment (thirtieth slice): `task.cancel` now has a path where the capability *is* the control.** §4.2's three task
+rows are executed inside a run (`packages/tools/task.ts`, D-105), and a run is the one place this build has a
+`PolicySubject`, so a `task.cancel` tool call is gated by the `task.cancel` grant the identity holds and refused §13's way
+when it does not hold one. That is the enforcement this row has described since §3.1, and until now it had only ever
+applied to file and scheduler tools. The route half is unchanged and stays exactly as this row says it:
+`POST /api/v1/tasks/{id}/cancel` decides on the token the guard demanded, because it has no subject to ask and D-097's
+migration is still what stands between that and a grant test. What changed is the *shape* of the gap, and the new shape is
+the one a reader can act on: the same act is gated on one path and not on the other, so an identity minted with
+`--restrict task` cannot stop a task from inside a run and can still stop one over HTTP with its token. That is worse than
+a uniform gap in one specific way — it makes the capability real enough to be relied on and partial enough to be wrong
+about — and it is the reason the closing condition below is now sharper rather than softer: one migration, and both paths
+decide on the same fact.
+
+**Amendment (thirty-second slice): `config.json` supplies a host set, so the withheld-grant half of this row is closed.**
+The sentence above said `grantsFor` withholds "every `net.egress` host-set grant in any build, because nothing in
+`config.json` supplies a host set". `net.allowList` is now that something (D-106): `egressHosts` normalizes it once, the
+composition root hands it to `EvalContext.egressAllowList` — a field that existed before any caller filled it — and
+`grantsFor` mints `net.egress:allow-list` for every identity whose baseline holds the name, whether the list is empty or
+not. The grant names the *set* rather than its members, and the reason is this row's own subject: a per-host expansion
+would have denied every host nobody curated, so §4.3's "T2 with the host named in the prompt" would have been reachable
+from a document and not from an install. The third question's other half is unchanged and stays open exactly as the
+paragraph above says it: `POST /api/v1/tasks/{id}/cancel` still decides on the token the guard demanded rather than on a
+grant, and one migration (D-097's) is what stands between that and a grant test.
+
+**Amendment (thirty-third slice): the same act is now gated on one path and not on the other, on the file that decides
+permissions.** §4.2's two configuration rows are executed (`packages/tools/config.ts`, D-107) and §4.4's three `/config`
+paths are built, so `config.write` has both halves at once and they do not decide on the same fact. Inside a run the
+capability *is* the control: a run has a `PolicySubject`, so a `config.set` call is gated by the grant the identity holds
+and priced at **T3**, which the arbiter turns into a prompt and D-085 confines to the TUI and the Web control UI — on this
+build the request parks and expires, which is asserted rather than assumed (`tests/integration/config.test.ts` drives a
+real run into that park and then has the CLI refused with the arbiter's own `surface-not-allowed`). Over HTTP the route
+decides on §2's token and never asks the arbiter, for the reason the thirtieth-slice amendment gives: a route has an
+identity and no subject, and D-097's migration is still what stands between. So an identity minted with
+`--restrict config` cannot change configuration from inside a run and can still change it with `PUT /api/v1/config` and
+its token — the asymmetry this row named for `task.cancel`, now on the document that decides workspace roots, retention
+and the egress allow-list. Two things keep it from being worse than that sentence sounds. The write is not unguarded: it
+requires the token the read answered, so a client that has not read the document cannot write it, and a stale one is told
+so with both tokens named. And the user's own interface writing the user's own configuration is the act §4.2's **T3**
+exists to gate rather than a caller of it — D-084's rule is that only the loop opens an approval, so a settings screen
+that had to approve itself would be a prompt with nobody to answer it. What the closing condition below now buys is
+therefore specific: one migration, and `PUT /api/v1/config` can refuse an identity that does not hold `config.write`
+instead of refusing only a document that moved.
+
+### F-54 — §4.4's first check is a *type* check, and a schema that arrives as data cannot be type-checked
+
+**Severity: low, open, and named in the code that skips it.** `PROVIDERS_AND_TOOLS.md` §4.4 fixes the order of checks —
+"schema validation → capability check → tier/approval → execution" — and §4.1 says `inputSchema` is "validated before
+policy evaluation". M2k had to make that check runnable, because `packages/tools` publishes an `inputSchema` per tool and
+the loop validates arguments before it asks policy anything. What it found is that the sentence hides two spellings: in
+this repository a schema is a **typebox** object where it is checked and a **JSON Schema** where it is published (a
+provider's tool list, `GET /tools`, an MCP server's `describe`). `validateToolArguments` in `packages/api-contracts` is the
+one place the two are reconciled, so the cast lives beside a reason instead of at every call site that needs one.
+
+The gap is the second spelling. A schema that arrived as *data* carries no typebox `Kind` symbol, and typebox's visitor
+throws "Unknown type" on it instead of answering, so the type half of step 1 is **skipped** rather than crashed. Skipping
+is recorded, not designed: the argument *names* are still compared against the declaration before policy is asked
+(`ToolCall.declaredArgs`, §4.3's "arguments it did not declare → reject before policy"), so a discovered tool cannot be
+called with invented parameters, and what it loses is only the types, ranges and required-ness of the ones it was given.
+Every schema this repository authors is typebox, so today the skip fires for a discovered MCP tool and for nothing else —
+and there is no MCP client in the build, which is why this is `low` rather than `medium`: the affected party does not exist
+yet, and the row exists so that when it does, the skip is a known debt with a closing condition rather than a validator
+that quietly passed.
+
+**Closing condition:** a JSON Schema validator in the tree (or a compile-at-registration step that turns a discovered
+JSON Schema into a typebox one and refuses the tool when it cannot), so §4.4's step 1 means the same thing for a native
+tool and a discovered one. Until then `validateToolArguments`'s comment is where a reader learns which half ran.
+
+### F-55 — `GET /tools` reports five fields as pending, and the party that could answer them now exists
+
+**Severity: low, open by composition rather than by judgement.** §4.1 describes a tool by ten fields; four come from §4.2's
+registry (`capability`, base tier, tier rules, `availability`) and five are properties of the runtime that executes it —
+`inputSchema`, `outputSchema`, `limits`, `idempotent`, `sideEffects`. `packages/policy/availability.ts` lists those five in
+`PENDING_RECORD_FIELDS` and `GET /tools` prints the list, because naming a gap in a response is cheaper than inventing a
+default: `sideEffects: "none"` for `file.delete` would be a lie a recovery path could act on.
+
+M2k removed the reason the fields were unanswerable and left the reason they are unreported. `packages/tools` declares all
+five for the eight rows it implements (D-098), and `ToolDeclaration` in `packages/api-contracts` is the shape they arrive
+in precisely so a registry row and an executor's declaration can be merged without either inventing the other's half. What
+is missing is a party to merge them: the Gateway composes no executor, so no route holds a declaration to publish, and the
+honest response is still the pending list. A runner — the slice that makes `crabby task run` real — composes
+`createFileTools` and passes its `declares` to the loop; the same value answers `GET /tools`, and F-46's closed half shows
+what the merge buys: §6.2's evidence and D-065's first permission both read the declaration rather than a constant.
+
+**Closing condition:** the Gateway runner composes an executor, `GET /tools` reports a merged record for the rows an
+executor implements and keeps naming the rest as absent, and `PENDING_RECORD_FIELDS` shrinks to the rows nothing implements
+— which is a smaller list than the one printed today and a truer one. Note the deliberate asymmetry: an *unimplemented*
+tool stays out of the response entirely rather than appearing with empty fields, because §4.2's inventory is a document of
+what the product will do and `GET /tools` is a statement of what this process can do, and F-20 is the finding about
+confusing two copies of one list.
+
+**Amendment (sixteenth slice): the party to merge them exists, and the finding narrows rather than closes.**
+`crabby gateway start` composes `createFileTools` from `config.json`'s `workspace.roots` and hands its `declares` to
+`buildApp`, so `GET /tools` now answers §4.1's runtime fields for the rows an executor implements and prints
+`runtime: {implemented: 7, described: 0, pending: 38}` beside them. Two of the three things the closing condition asked for
+happened; the third did not, and the difference is worth stating rather than rounding:
+
+1. **`PENDING_RECORD_FIELDS` did not shrink — each row's own list did.** The constant still names all five fields, because
+   it is the list of fields the *runtime* owns and that ownership has not changed. What changed is that
+   `toolRecord(spec, facts, source, declares?)` filters it per row, so the seven rows the file executor declares now name
+   `["outputSchema"]` alone and the other thirty-eight still name all five. A row's list is now a fact about that row
+   instead of a fact about the registry, which is the truth the condition was reaching for, arrived at from the other side.
+2. **`described` is 0 and stays 0.** No declaration in `packages/tools` carries an `outputSchema`, so no row is fully
+   described even though seven are partly answered. That is why the route reports two counts: `implemented` says an executor
+   declares the row, `described` says nothing about it is left unanswered, and a client that read the first as the second
+   would render an empty output schema as a check that always passes.
+3. **Eight declarations answer seven rows.** `createFileTools` declares `file.stat`, which has no row in §4.2's table, so
+   one declaration matches nothing and is not counted. That is the merge behaving correctly — it is keyed on the registry's
+   id and cannot invent a policy row for a tool policy never classified — but it is also a second copy of one list drifting,
+   which is F-20's shape, and the honest place to record the drift is here rather than in a count that hides it.
+4. **No configured workspace means no executor, by decision.** `WorkspaceConfig`'s own rule is that a root invented by a
+   default "would be a path the agent may write to that the user never chose", so an install that has chosen no workspace
+   composes nothing and every row keeps naming all five. The Gateway says so on the screen that started it, and `GET /tools`
+   says it as `implemented: 0`.
+
+Still open, therefore: `outputSchema` is answered by nothing, `file.stat` is declared but unclassified, and the thirty-eight
+rows no executor implements are as silent as they were. The remaining work is not a merge but an executor for them.
+
+**Amendment (twenty-eighth slice): an eighth row is implemented, and it is the scheduler's.** `crabby gateway start` now
+composes a second surface beside the file executor — `createSchedulerTools`, which declares `cron.schedule` and nothing
+else — and hands `combineToolSurfaces`'s merged `declares` to `buildApp`, so a Gateway that composes a runner answers
+`runtime: {implemented: 8, described: 0, pending: 37}` where the amendment above answers 7 and 38. Three properties of
+that count are decisions rather than arithmetic, and each is the kind of thing a later slice would otherwise rediscover
+by reading a number and believing it:
+
+1. **The eighth row is declared only where a job can fire.** The combined surface is composed exactly when `drive` is —
+   an executor and a selected model, which is what makes a runner — and a Gateway with no runner keeps the file executor
+   alone and answers `implemented: 7`. §5.1's "hidden is better than failing" is about permissions, but it applies to a
+   subsystem for the same reason: a row advertising a timer nothing would ever fire is a promise the process cannot keep,
+   and `cron.schedule` called on such a Gateway would write a job whose next fire is a lie.
+2. **`described` stays 0, and the new row is why the count is still honest rather than merely unchanged.** The declaration
+   carries `inputSchema`, `limits` (D-074's `sqliteBusyTimeoutMs`, because §5.2 prices no `cron.*` class and the tool's
+   whole cost is two statements against the job table), `idempotent: false` — calling it twice creates two jobs that both
+   fire — and `sideEffects: "local"`, and no `outputSchema`. So `cron.schedule` joins the rows naming `["outputSchema"]`
+   alone, and the eighth implementation raises `implemented` without touching `described`, which is the difference the two
+   counts exist to keep visible.
+3. **A duplicate name is fatal at composition rather than last-one-wins.** `combineToolSurfaces` builds its owner map from
+   `specs()`, throws on a second declaration of one name, and runs `assertRegistrable` over the merge — §4.1's
+   registration rule applied to a *composition* of surfaces instead of to one, which is the point where two executors would
+   otherwise begin silently shadowing each other and a `run` would reach whichever was registered last.
+4. **Nine declarations now answer eight rows, and item 3's drift is unchanged rather than fixed.** `file.stat` still has
+   no row in §4.2's table, so the gap between what executors declare and what policy classifies is one row wide exactly
+   where the sixteenth slice measured it. The count moved and the drift did not, which is worth saying because a reader
+   who saw `implemented` go 7 → 8 and declarations go 8 → 9 could otherwise conclude the two numbers had been reconciled.
+   Nothing in this build classifies `file.stat`, and F-20's shape is still open.
+
+**Amendment (twenty-ninth slice): ten rows are implemented, and the two new ones are conversations.** The same
+composition gained a third surface — `createSessionTools`, declaring `session.list` and `session.rename`, the two rows
+§4.2 prices at T0 and T1 — so a Gateway that composes a runner now answers `runtime: {implemented: 10, described: 0,
+pending: 35}` and a Gateway that composes none still answers 7, with `cron.schedule` and both session rows carrying all
+five pending fields rather than four. Three things about that are worth recording beside the number:
+
+1. **The two new rows are implemented where the scheduler's is, and for a different reason.** `cron.schedule` is composed
+   only beside a runner because a timer nothing would fire is a promise the process cannot keep. `session.list` and
+   `session.rename` would work perfectly well without one — a conversation is a record and not a privilege, and
+   `GET /sessions` answers on a Gateway that drives nothing — but they are declared through the same combined surface,
+   because §4.1 registers a tool by name across the composition a *runner* is given and a second surface for a Gateway
+   with no runner would be a second place to look. The routes are where the no-runner case is answered honestly, and the
+   integration test asserts both counts rather than one.
+2. **`described` is still 0 and now has three rows keeping it there.** Neither session declaration carries an
+   `outputSchema`, so both join the rows naming `["outputSchema"]` alone: ten implemented, none described, thirty-five
+   pending, and the two counts still mean different things.
+3. **Eleven declarations answer ten rows.** The drift item 4 records did not move: `file.stat` is still declared and still
+   unclassified, and a count that rose on both sides would have hidden it.
+
+**Amendment (thirtieth slice): thirteen rows are implemented, and the three new ones act on work rather than on files.**
+The same composition gained a fourth surface — `createTaskTools`, declaring `task.create`, `task.status` and `task.cancel`,
+the rows §4.2 prices at T1, T0 and T1 — so a Gateway that composes a runner now answers
+`runtime: {implemented: 13, described: 0, pending: 32}`, and a Gateway that composes none still answers 7 with all three
+rows carrying their five pending fields. Three things belong beside the number:
+
+1. **The count is asserted in two integration files, and they agree because both harnesses now compose four surfaces.**
+   `tests/integration/jobs.test.ts` said it mirrored `crabby gateway start` while composing three of the four; this slice
+   made the sentence true rather than narrowing it, so 13 is one fact asserted twice instead of two fixtures with two
+   numbers — and the job routes are proved unaffected by a surface they do not use, which is the only way "unaffected" is
+   worth writing down.
+2. **`described` is still 0, with three more rows keeping it there.** None of the three declarations carries an
+   `outputSchema`, for the reason §4.1 gives and the other executors' tests repeat: an empty one would pretend to validate
+   an answer these tools render as prose for a model to read.
+3. **Fourteen declarations answer thirteen rows.** The drift item 4 records is still exactly one row wide: `file.stat` is
+   declared and still unclassified, and both counts rose by three, which is what keeps the drift visible rather than
+   absorbed.
+
+### F-56 — §3.7 gives an adapter a vault handle, and nothing in the build resolves one
+
+**Severity: medium, open, and the same shape as F-52.** §3.7 is specific: provider credentials "are supplied once, stored
+in the vault, and referenced by name in configuration — `provider.groq.key = vault://groq`", and "adapters receive a
+handle that yields the value at call time; the agent never reads it, and it never enters model context". `SECURITY.md` §7
+and D-031 say the same thing from the secrets side, and `docs/DATA_AND_MEMORY.md` §4.1 lists `vault/` at mode `0700` as
+part of the state directory's whole footprint.
+
+What exists is the directory and three honest reports about it. `packages/platform/paths.ts` names `vault/`;
+`crabby doctor` checks that it exists and that its mode is `0700`, and says plainly when it does not exist yet;
+`GET /health` reports `vault: { managed: false }` rather than `locked: false`, because a lock nobody implements is a
+protection nobody has. What does not exist is any code that stores a secret, resolves a `vault://` reference, or hands an
+adapter a handle — so `ProviderConfig.apiKey` is a plain string, and M2l's adapter holds one for the lifetime of the
+process (D-100 records that as what the build does instead, rather than letting a reader assume §3.7 is implemented). The third report is the one a
+user meets first, and M2m added it: `packages/providers/compose.ts` **refuses** a `provider.<id>.key` reference at
+composition, naming this finding and the milestone that closes it, so a keyed endpoint is answered with "the vault
+arrives in M5" instead of being composed with a dropped credential and failing as a `401` from the endpoint (D-101). The
+schema refuses the other shape — an inline key never validates, because §3.3's rule cannot be enforced after a
+mode-`0644` file exists and `crabby config get` prints what is in it.
+
+Not fixed in that slice because the honest fix is a subsystem, not a signature: an encrypted or at-rest-protected store
+whose keys survive a process restart, a `vault://` resolver with a rule for a missing or locked vault, `crabby provider
+add` writing a reference instead of a value, and a decision about what unlocks it on a device with no keyring — which is
+O-065's question ("what a phone's sandbox can actually enforce") and cannot be answered from a laptop. Inventing a
+plaintext file with a `vault://` prefix in front of it would have made the sentence true in a grep and false in every way
+that matters.
+
+**Closing condition:** a vault that stores, resolves and refuses; `ProviderConfig` taking a reference rather than a value;
+and a test that a key never appears in an event payload, a log line or a prompt — which is the property §3.7 and
+`SECURITY.md` §14 are actually about. Until then two duties sit with whoever composes an adapter and are stated in
+`PROVIDERS_AND_TOOLS.md` §3.7 rather than left to a reader: the key must not reach a log line (`packages/core/redact.ts`
+is defence in depth, not the control) and must not enter model context.
+
+### F-57 — §4.3's `POST /tasks` row documents four body fields and the contract accepts two
+
+**Severity: low, open, and the runner's to answer rather than a defect in what exists.** `docs/INTERFACES_AND_API.md`
+§4.3 spells the body out: "Create a task. Body: objective, optional session, **model pin, capability narrowing,
+schedule**. Idempotency key required." `packages/api-contracts/task.ts` answers `CreateTaskBody = { objective,
+sessionId? }` with `additionalProperties: false`, so a client that sends the documented model pin is refused with a
+named-field problem. That is the right behaviour for a field this build does not have and the wrong description of a
+route that does, and the two have sat side by side since M1c.
+
+Two of the three missing fields belong to other milestones: capability narrowing is `SECURITY.md` §13's removal, and
+since D-102 the *per-pairing* half of it is assigned — `--restrict` narrows an identity's baseline at the mint, and
+F-52's amendment records it — while the *per-task* half this row is about is still absent, because no field in
+`CreateTaskBody` can carry it and nothing builds a `PolicySubject` for a run; and `schedule` is the scheduler's, which
+`docs/ROADMAP.md` §4 lists and nothing has built. (Both halves of that last clause have since moved: D-102 gives a run a
+`PolicySubject`, and the twenty-eighth slice built the scheduler — see the amendment below, which is also where the
+`schedule` field's absence stops being an unbuilt milestone and becomes a decision.) The model pin is the one D-101 sharpened, because
+§3.6's sentence has two halves — "The user selects a default model **and may pin a model per task** or per interface
+session; per-task pinning wins" — and M2m implemented the first. So there is now a default with nothing able to override
+it, `TaskRecord` has no `model` column, and a pin would need schema version 6 — M2x spent 5 on §4.5's `job` and `job_run`
+tables — plus an answer about whether a pinned model
+survives a restart (D-065's checkpoint already carries `modelId`, which is the same fact recorded from the other side).
+
+**Closing condition:** the row loses the fields this build refuses, or the contract gains them — and for the model pin the
+second is the honest one, because a runner needs a `modelId` and §3.6 says where it comes from. Until then a runner takes
+the model from composition rather than from the task, and says so.
+
+**Amendment (twenty-eighth slice): `schedule` has a scheduler behind it, and the field stays out of `POST /tasks` on
+purpose.** The subsystem this row named as unbuilt now exists — `packages/agent-runtime/scheduler.ts` over schema version
+5's `job` and `job_run` tables, with `GET /jobs` and the pause verb shipped alongside it as `docs/ROADMAP.md` §4 required —
+and a schedule can be created today, through `cron.schedule`. That is a T2 tool call, so the expression, the name and the
+objective a job will run are shown to the user and approved before the row is written (D-046). What `POST /tasks`'s
+`schedule` field would be is a *second* creation path with no approval anywhere in it: a route cannot open an approval,
+because only the loop does that and only from `policy.evaluate`'s verdict (D-084), so a body field would either write a
+job nobody reviewed or refuse after accepting the request. The same reasoning is why C12-09 refuses `crabby job create`
+and why W16-12's "teach `crabby task run --schedule`" is deferred with this field rather than built beside it. The row in
+§4.3 therefore keeps documenting a field this build refuses, and the honest closing condition for that one is not "add the
+field" but "give the route a way to open the T2 approval the field implies" — which is the same condition `job edit`
+(C12-05) waits on. The other two fields are unchanged: capability narrowing per task still has no carrier, and the model
+pin still needs a `modelId` column and version 6.
+
+**Amendment (thirtieth slice): the pin's schema version moved, because version 6 was spent on conversations.** The two
+sentences above say a model pin "would need schema version 6" and that M2x spent 5 on §4.5's `job` and `job_run` tables.
+M2y then spent 6 on the `session` table and its backfill (D-104), so the pin needs version **7** — and the reason the
+number went stale is F-40's shape inside this file rather than inside a screen: a version printed in prose, away from the
+migration list that produces it. Nothing else here moved. Capability narrowing per task still has no carrier in
+`CreateTaskBody`, `schedule` stays out of `POST /tasks` by the decision the previous amendment records, and the honest
+closing condition for the pin is still the contract gaining the field rather than the row losing it — §3.6 says a user
+"may pin a model per task", and a runner that can only take its model from composition is the half of that sentence this
+build answers.
+
+### F-58 — `POST /approvals/{id}/decision` records the answer and nothing in the process spends it
+
+**Severity: high, closed by the thirty-first slice one commit after it was opened, and kept here in full because the
+shape of it is the lesson — a route that answers a question and holds no party that can act on the answer.** A run that
+reaches a gated step does what §6.3 and D-084 ask: `policy.evaluate` answers `require-approval`, the loop opens the row
+inside the same transaction as the `approval.requested` event and the move to `awaiting_approval`, it writes D-065's
+`prompt` boundary, and it suspends. A user then answers from any interface, the arbiter records the decision, the
+`approval.answered` event is appended, the row leaves the pending queue and carries `approved` beside `answeredBy` — and
+the task stays `awaiting_approval` forever. `Runner.resume(taskId)` exists, holds the `SuspendedRun` in memory, and would
+spend the decision; no route calls it. `packages/gateway/app.ts`'s `registerApprovalRoutes` is not handed a runner, and
+the only callers of `resume` in the repository are tests.
+
+The restart case is *not* this finding and is already honest: `resume` answers `not-parked` with F-47's reason, because
+§7 keeps `call.args` out of the checkpoint (SECURITY.md §8.2, D-095) so a restarted Gateway cannot rebuild the proposed
+call, and D-065's verdict for a step killed at a prompt boundary is `re-ask`. That is an absence with a sentence attached.
+What this finding is about is the same-process case, where the parked run is reachable and nothing asks it — so §6.3's
+"answer from anywhere" is, in this build, "record an answer from anywhere": a user approves a T2 step on Telegram, the
+button says approved, and the agent never continues. The corollary of D-084's rule is the reason it is easy to miss: only
+the loop may open a prompt, so only the loop can spend one, and the loop is the one party a route cannot reach without
+being handed it.
+
+Found by the thirtieth slice rather than by a review pass, and found because a test tried to use it: `task.cancel` with
+`all: true` is §4.2's T2 half, so the run that declares it parks, and the test that approves the prompt and expects the
+cancellations to happen discovered that nothing wakes the run. `tests/integration/task-tools.test.ts` therefore asserts the
+gap and then drives `runner.resume` itself, with a comment naming this finding — the assertions after that call are the
+behaviour the fix has to make reachable from a route, and they stay as they are when it does.
+
+**Closing condition:** the decision path wakes the parked run — either the route is handed the runner, or the arbiter is,
+and the second is the better seam because a decision answered over a socket and one answered inside the process then take
+the same path — for `approve` *and* for `deny`, since `loop.resume` spends both and a denial nobody delivers leaves a task
+parked on a question already answered. With it: a test that a T2 prompt answered over HTTP ends with the gated step
+executed and the task terminal, containing no `resume` call of its own; §4.3's decision row and §7.1's `approval approve`
+row losing the sentence this slice added; and `docs/review/TELEGRAM.md`'s approve element checked against it, because
+"approved" printed on a phone has to mean something happened on the device.
+
+**Amendment (thirty-first slice): closed, with the route handed the runner rather than the arbiter.** The seam chosen is
+the first of the two the closing condition named, and the reason is §9's: the arbiter owns one row and one event, and a
+`decide` that also started runs would give it a second responsibility and a dependency on the runtime it exists to be asked
+by (`packages/agent-runtime/approvals.ts` holds no runner today and its store interface has no opinion about tasks). So
+`registerApprovalRoutes` takes the runner the process composed, and `wakeParkedRun` does the four things the condition
+asked for: it wakes on **both** decisions, because `loop.resume` spends a denial by making it the step's result and a
+denied task parked on an answered question is this finding with the opposite sign; it wakes **after** the answer's
+transaction commits, because a run resumed against a rolled-back row would execute a step nobody approved — D-084 inverted;
+it wakes **after** the `approval.answered` event is published, so a client watching the task sees the reason before the
+state moves; and it **reports** what it did, as two new fields on the decision response — `resumed` and the Gateway's own
+`note` — because the three cases where nothing was woken (no runner in this process, no run parked in it, one already
+moving) need different next actions and `resumed: false` alone is a fact with no sentence attached.
+`crabby approval approve` prints both. What is still true and stays recorded: a run parked in a *previous* process is not
+reachable, because `SuspendedRun` carries the proposed call in memory and SECURITY.md §8.2 keeps `call.args` out of the
+checkpoint — that is F-47's absent `POST /tasks/{id}/resume`, and `Runner.resume`'s `not-parked` sentence is carried
+through to the caller verbatim rather than flattened into a `false`. Asserted by two tests in
+`tests/integration/task-tools.test.ts`, neither of which contains a `resume` call: a T2 `task.cancel {all: true}` prompt
+approved over HTTP ends with every cancellable task asked to stop and the `interrupted` one untouched, and the same prompt
+denied over HTTP ends with the run completing on the refusal, one `tool.execution.blocked` event carrying the reason, and
+the task the user refused to let it stop still `queued`.
+
+### F-59 — §4.2 prices egress by host, and nothing in the documents prices it by class of host
+
+**Severity: medium, open, and found by building the tool rather than by reading the table.** `net.fetch` is executed
+(M2ab, D-106) and its destination is priced exactly as §4.3 says: a host on the user's `net.allowList` is §4.2's **T1**,
+and every other host is **T2** with that host named in the approval's `exact` field. What no document does — `SECURITY.md`
+§6.1 and §8, `PROVIDERS_AND_TOOLS.md` §4.2/§4.3/§5.2, `AGENT_RUNTIME.md` §4.4 — is distinguish a *class* of destination.
+Three families therefore arrive at the same price as any other new host: this machine's own loopback, including the
+Gateway's own listener; link-local and cloud-metadata addresses, of which `169.254.169.254` is the one with a documented
+history of answering questions it should not; and private-range hosts on whatever LAN the device happens to be joined to.
+
+The consequence is bounded, and stating the bound precisely is the point of recording this rather than escalating it. An
+approval names the host, so the user is shown `169.254.169.254` and not "a URL"; the Gateway answers a fetch that carries
+no bearer token with `401` (D-097), so a tool cannot drive the process it is running inside by fetching it; and F-56's
+absence means there is no credential store for a destination to be handed. What is *not* bounded is the LAN and metadata
+case on a device whose network the user did not choose — a phone on a café Wi-Fi, which is this product's primary platform
+— where an approved fetch into a private range is a request into a network §13's "loopback only" posture was written to
+keep the rest of the world out of. The tier is the same T2 either way, and T2 is ten minutes and one tap.
+
+Closing condition: a rule in `SECURITY.md` (§6.1's table or §8's containment) that classes destinations — loopback,
+link-local, private — and says whether each is refused, priced above its row's tier, or priced the same with a louder
+prompt; and an executor that enforces whatever it says, which `packages/tools/net.ts` already has the seam for (it parses
+every URL and every hop, and it already refuses a hop whose host differs from the one that was priced). Deliberately not
+closed inside that executor by the slice that opened this: a refusal the arbiter did not ask for is a second policy with
+no document behind it, which is D-099's split enforced from the wrong side, and D-106's fourth part names this finding
+instead of inventing the rule.
+
 ## 3. Checks That Passed
 
 | Check | Result |
@@ -652,7 +1449,7 @@ was measured against it, because "could not reproduce" without the measurements 
 | Every item in an open-questions list cites the decision or section that owns it | ✓ (rule 15, added because of F-18; negative-tested by blanking a citation) |
 | The section 8 counters and the `P-` row arithmetic are printed by a tool, not remembered | ✓ (`scripts/count-inventory.py --register-counters`) |
 | `allowed-tools` in an imported skill cannot grant a privilege | ✓ (D-071, `EXTENSIONS.md` §4.3 — F-19) |
-| Documents compared with the code they describe (`scripts/parity.ts`, `npm run test:parity`) | ✓ (12 routes, 45 tool rows, 32 capabilities, 25 matrix rows, 67 CLI commands; it exists because of F-08/F-10/F-11 and it found F-32 and F-35 — the first two findings in this file that a prose-against-prose check could not have seen) |
+| Documents compared with the code they describe (`scripts/parity.ts`, `npm run test:parity`) | ✓ (it exists because of F-08/F-10/F-11 and it found F-32 and F-35 — the first two findings in this file that a prose-against-prose check could not have seen. What it compares is not quoted here any more: this row used to carry the counts, and they were two milestones stale by M2d, which is F-40's rule about a number printed away from the expression that produces it. `npm run test:parity` prints them.) |
 | Markdown tables are rectangular, so a generator reads the same row a human does | ✓ (rule 16, added because of F-21; 4 pre-existing rows fixed) |
 | A count written inside `docs/review/` equals the count the file's rows produce | ✓ (rule 18, added because of F-22) |
 | A count quoted by a summary document equals what the inventories hold today | ✓ (rule 18 widened because of F-24; negative-tested with three planted wrong figures) |

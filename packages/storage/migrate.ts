@@ -75,6 +75,213 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // D-084's queue, and the reason `ApprovalStore` was made a seam instead of a query API: this table is the only
+    // place an approval exists, so "answer from anywhere" (SECURITY.md §6.3) is a property of the row rather than of
+    // whichever surface wrote it.
+    version: 2,
+    name: "approvals",
+    up(db) {
+      db.exec(`
+        CREATE TABLE approval (
+          id           TEXT PRIMARY KEY,
+          task_id      TEXT NOT NULL REFERENCES task (id) ON DELETE CASCADE,
+          tool         TEXT NOT NULL,
+          tier         TEXT NOT NULL,
+          binding      TEXT NOT NULL,
+          state        TEXT NOT NULL CHECK (state IN ('pending','approved','denied','expired','consumed')),
+          requested_at INTEGER NOT NULL,
+          expires_at   INTEGER NOT NULL,
+          answered_at  INTEGER,
+          answered_by  TEXT,
+          consumed_at  INTEGER,
+          supersedes   TEXT REFERENCES approval (id) ON DELETE SET NULL,
+          request_json TEXT NOT NULL
+        );
+        -- The queue read (?state=) and the expiry sweep are the only two queries M2 needs. The order a client sees is
+        -- the rowid order ApprovalStore.all() asks for, and it is deliberately NOT indexed: rowid is not even a
+        -- nameable index column in SQLite (underscore-rowid is), which the first run of this migration reported, and leaving
+        -- it that way is the decision rather than the error -- a covering index that happens to return rows in
+        -- insertion order is a temptation to make an ordering a contract on a table that holds a phone's handful of
+        -- pending prompts. Backticks are absent from this block on purpose: a template literal ends at the first one.
+        CREATE INDEX approval_state   ON approval (state);
+        CREATE INDEX approval_expiry  ON approval (state, expires_at);
+        CREATE INDEX approval_task    ON approval (task_id);
+      `);
+    },
+  },
+  {
+    // F-46's fix: §6.2 requires the cancellation uncertainty to be recorded *on the task*, and until this migration the
+    // only place it lived was the `task.cancelled` event — durable, per-task and retrievable, but not on the record a
+    // client reads when it polls `GET /tasks/{id}`. One JSON column rather than five, for the reason `approval`'s
+    // `request_json` has: no query needs these fields apart, and a column nobody filters on is cheap to move later.
+    version: 3,
+    name: "task-cancellation",
+    up(db) {
+      db.exec(`
+        ALTER TABLE task ADD COLUMN cancellation_json TEXT;
+      `);
+    },
+  },
+  {
+    // D-065's checkpoint, and D-095's first rule: **one row per task, replaced at each committed step boundary**. §7.1
+    // restores "the latest valid task state", and a history of boundaries would be a second event log with a retention
+    // rule nobody priced — the boundary before the latest one is only useful to a resume that intends to repeat work,
+    // which §7.3 forbids. `record_json` holds the whole record (the run's working context included), redacted on the way
+    // in like every other payload that reaches this file, and the columns beside it are the ones a reader or a verdict
+    // needs without parsing it. `ON DELETE CASCADE` because a checkpoint is saved state *for* a task and not a record
+    // *about* one: deleting the task deletes the transcript that only existed to resume it.
+    version: 4,
+    name: "checkpoints",
+    up(db) {
+      db.exec(`
+        CREATE TABLE checkpoint (
+          task_id     TEXT PRIMARY KEY REFERENCES task (id) ON DELETE CASCADE,
+          boundary    TEXT NOT NULL CHECK (boundary IN ('step','prompt')),
+          state       TEXT NOT NULL,
+          step        INTEGER NOT NULL,
+          last_seq    INTEGER NOT NULL,
+          model_id    TEXT NOT NULL,
+          written_at  TEXT NOT NULL,
+          bytes       INTEGER NOT NULL,
+          record_json TEXT NOT NULL
+        );
+        -- No index beyond the primary key: every read this table has is by task, and that is the key.
+      `);
+    },
+  },
+  {
+    // The scheduler's two tables (D-046, D-057, and F-57's third field: `schedule` is the scheduler's, and this is the
+    // schema version 5 that finding said a schedule would need). Two tables rather than one because §4.5 makes the *runs*
+    // the auditable half — "every execution of a scheduled job is a fresh policy evaluation", and a run that could not get
+    // approval "stops and records" why — and a job row that carried only its last outcome would be a standing authority
+    // whose history nobody could review a month later (W16-09's "approval trail per run").
+    //
+    // `client_id` deliberately has no `REFERENCES client_identity`: a revocation deletes the identity row (O-071), and a
+    // cascade would erase the record of who authorised a timer that may already have run work. §4.5's sentence is that a
+    // job "runs under the identity that created it, so audit records name a person rather than 'cron'", and a person's
+    // name has to outlive their credential. The scheduler refuses to *fire* a job whose identity is gone, which is the
+    // enforcement; this table keeps the attribution.
+    //
+    // `task_id` does cascade — as a `SET NULL`, not a delete: `docs/DATA_AND_MEMORY.md` §7 removes a conversation's tasks,
+    // and a run row that vanished with its task would take the outcome of work that already happened with it.
+    //
+    // The column is triggered_by and not trigger, because TRIGGER is a SQLite keyword and a column that needs quoting in
+    // every statement is a column somebody will eventually write without them.
+    version: 5,
+    name: "jobs",
+    up(db) {
+      db.exec(`
+        CREATE TABLE job (
+          id                 TEXT PRIMARY KEY,
+          name               TEXT NOT NULL,
+          schedule           TEXT NOT NULL,
+          objective          TEXT NOT NULL,
+          state              TEXT NOT NULL CHECK (state IN ('active','paused')),
+          session_id         TEXT NOT NULL,
+          client_id          TEXT NOT NULL,
+          client_name        TEXT NOT NULL,
+          client_interface   TEXT NOT NULL CHECK (client_interface IN ('cli','tui','web','telegram')),
+          capability_json    TEXT NOT NULL,
+          utc_offset_minutes INTEGER NOT NULL,
+          created_at         TEXT NOT NULL,
+          updated_at         TEXT NOT NULL,
+          next_run_at        TEXT,
+          last_run_at        TEXT,
+          missed             INTEGER NOT NULL DEFAULT 0
+        );
+        -- The tick's one question is "what is active and due", so that is the index. A phone holds a handful of timers
+        -- and the scan would be cheap anyway; the index exists so the query the scheduler runs every thirty seconds is
+        -- the query the file is organised around.
+        CREATE INDEX job_state_next ON job (state, next_run_at);
+
+        CREATE TABLE job_run (
+          id              TEXT PRIMARY KEY,
+          job_id          TEXT NOT NULL REFERENCES job (id) ON DELETE CASCADE,
+          due_at          TEXT NOT NULL,
+          recorded_at     TEXT NOT NULL,
+          settled_at      TEXT,
+          outcome         TEXT NOT NULL CHECK (outcome IN
+                            ('fired','waiting_on_approval','skipped','missed','refused',
+                             'completed','failed','cancelled','interrupted')),
+          triggered_by    TEXT NOT NULL CHECK (triggered_by IN ('schedule','run-now','backlog')),
+          task_id         TEXT REFERENCES task (id) ON DELETE SET NULL,
+          reason          TEXT,
+          occurrences     INTEGER NOT NULL DEFAULT 1,
+          acknowledged_at TEXT
+        );
+        -- One missed row stands for many occurrences, and the occurrences column says how many: §4.5's rule against a
+        -- burst needs the count, and a phone does not need ten thousand rows to carry it.
+        CREATE INDEX job_run_job     ON job_run (job_id, due_at);
+        CREATE INDEX job_run_open    ON job_run (outcome);
+        CREATE INDEX job_run_backlog ON job_run (job_id, outcome, acknowledged_at);
+      `);
+    },
+  },
+  {
+    // Conversations become records. Until this migration a session existed only as an id on a task: `createTask` mints
+    // `newId("ses")` when a caller names none and `task.session_id` is `NOT NULL`, so every install already holds
+    // conversations that nothing owns — no title, no origin, no last activity, and nothing for `crabby session ls`
+    // (`docs/review/CLI.md` C11-01), the Web sidebar (W15-01) or the TUI switcher (T16-01) to list. §4.2 prices two tools
+    // against the record (`session.list` T0, `session.rename` T1) and §4.3 gives it four paths, and a tool that reads a
+    // table nobody wrote is the mock this build refuses to ship.
+    //
+    // Three columns are decisions rather than conveniences, and D-104 records them:
+    //
+    //   - **`title` is nullable.** W15-03: "the new session starts empty and un-named, and the title becomes the first
+    //     question asked in it." A title at creation would be a name the user did not choose, and an empty string is not
+    //     "un-named" — it is a title that happens to be blank, which is what a client would render as a missing label.
+    //   - **`origin_interface` is nullable and has no foreign key.** W15-11 wants "which interface created it … the list
+    //     is where a user notices 'this appeared on its own'", and the rows this migration backfills have no recorded
+    //     origin: they were minted by whatever created their first task, in a build that did not write the fact down. The
+    //     honest value is `NULL` rendered as `unknown`, not a guess that reads as an attribution.
+    //   - **`revision` is the §2 concurrency row's token** — "`If-Match`-style version tokens on config and session
+    //     mutations, so two interfaces editing the same thing do not silently overwrite". A title is the one field four
+    //     interfaces can edit inline at the same moment (W1-02, W15-04, T16-05), so it is the field where a silent
+    //     overwrite is most likely and least noticed.
+    //
+    // The backfill is part of the migration and not a startup repair, because a database that has been upgraded and a
+    // database that has been repaired are two different facts about the same file, and only the first is recorded in the
+    // ledger. One row per distinct `session_id` a task carries: the title is the *first* task's objective clipped, which
+    // is the closest thing this build has to W15-03's "first question asked in it" while no message store exists, and
+    // `created_at`/`last_activity_at` come from the tasks rather than from the moment of the migration — a conversation
+    // that ran last Tuesday did not become active when the schema caught up with it.
+    version: 6,
+    name: "sessions",
+    up(db) {
+      db.exec(`
+        CREATE TABLE session (
+          id               TEXT PRIMARY KEY,
+          title            TEXT,
+          model            TEXT,
+          origin_interface TEXT CHECK (origin_interface IN ('cli','tui','web','telegram')),
+          created_at       TEXT NOT NULL,
+          updated_at       TEXT NOT NULL,
+          last_activity_at TEXT NOT NULL,
+          revision         INTEGER NOT NULL DEFAULT 1
+        );
+        -- C11-01 sorts by last activity and not by creation, "because that is the order a person remembers in", so the
+        -- index is the list's order rather than an optimisation of it.
+        CREATE INDEX session_activity ON session (last_activity_at DESC, id);
+
+        INSERT INTO session (id, title, model, origin_interface, created_at, updated_at, last_activity_at, revision)
+        SELECT t.session_id,
+               (SELECT substr(t2.objective, 1, 80)
+                  FROM task t2
+                 WHERE t2.session_id = t.session_id
+                 ORDER BY t2.created_at ASC, t2.id ASC
+                 LIMIT 1),
+               NULL,
+               NULL,
+               MIN(t.created_at),
+               MAX(t.updated_at),
+               MAX(t.updated_at),
+               1
+          FROM task t
+         GROUP BY t.session_id;
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

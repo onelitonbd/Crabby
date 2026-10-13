@@ -61,10 +61,12 @@ export function deferralFor(
   return { deferred: true, reason: notes };
 }
 
-/** Which §4.1 record fields the registry cannot answer yet, and where they come from. A tool's `inputSchema`,
- *  `outputSchema`, `limits`, `idempotent`, and `sideEffects` are properties of the *runtime* that executes it, and
- *  that runtime is M2 (`docs/ROADMAP.md` §4). Naming the gap in the response is cheaper than inventing defaults:
- *  `sideEffects: "none"` for `file.delete` would be a lie a recovery path could act on. */
+/** Which §4.1 record fields the registry cannot answer, and where they come from. A tool's `inputSchema`,
+ *  `outputSchema`, `limits`, `idempotent`, and `sideEffects` are properties of the *runtime* that executes it — and since
+ *  M2k such a runtime exists: `packages/tools` declares all five for the eight rows it implements (D-098). This list is
+ *  still what `GET /tools` prints, because the Gateway composes no executor, so no route holds a declaration to merge into
+ *  a registry row; `docs/CONSISTENCY_REVIEW.md` F-55 names the runner that will. Naming the gap in the response stays
+ *  cheaper than inventing defaults: `sideEffects: "none"` for `file.delete` would be a lie a recovery path could act on. */
 export const PENDING_RECORD_FIELDS: readonly string[] = [
   "inputSchema",
   "outputSchema",

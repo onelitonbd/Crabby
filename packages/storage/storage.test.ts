@@ -70,7 +70,7 @@ function event(taskId: string, sessionId: string, payload: Record<string, unknow
 }
 
 describe("migrations", () => {
-  it("creates the six M1 tables and records the version in the ledger", () => {
+  it("creates the six M1 tables, M2's approval queue, checkpoint, job pair and session record, and a ledger row per migration", () => {
     const { db, close } = tempDb();
     const names = (
       db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]
@@ -78,20 +78,40 @@ describe("migrations", () => {
       .map((row) => row.name)
       .sort();
     for (const wanted of [
+      "approval",
+      "checkpoint",
       "client_identity",
       "idempotency",
+      "job",
+      "job_run",
       "pairing_code",
       "schema_migration",
       "task",
       "task_event",
     ])
       assert.ok(names.includes(wanted), `missing table ${wanted}`);
-    assert.equal(schemaVersion(db), 1);
-    const ledger = db.prepare("SELECT version, name FROM schema_migration").all() as {
+    assert.equal(schemaVersion(db), 6);
+    // One row per migration, in order, and never an update to an old one: that is what `docs/DATA_AND_MEMORY.md`
+    // §2.6's "configuration migrations must be considered when upgrading" means for this file — a v1 database gains a
+    // table on the next start rather than being rebuilt, so an upgrade cannot silently drop a pending approval.
+    const ledger = db
+      .prepare("SELECT version, name FROM schema_migration ORDER BY version")
+      .all() as {
       version: number;
       name: string;
     }[];
-    assert.deepEqual(ledger, [{ version: 1, name: "tasks-events-clients-idempotency" }]);
+    assert.deepEqual(
+      ledger,
+      [
+        { version: 1, name: "tasks-events-clients-idempotency" },
+        { version: 2, name: "approvals" },
+        { version: 3, name: "task-cancellation" },
+        { version: 4, name: "checkpoints" },
+        { version: 5, name: "jobs" },
+        { version: 6, name: "sessions" },
+      ],
+      "one row per migration and never an update to an old one, so a file can say which version it is on",
+    );
     close();
   });
 
@@ -99,7 +119,7 @@ describe("migrations", () => {
     const { db, close } = tempDb();
     const second = migrate(db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 1);
+    assert.equal(second.version, 6);
     close();
   });
 
@@ -155,7 +175,7 @@ describe("tasks", () => {
     const { db, close } = tempDb();
     const task = createTask(db, { objective: "will run" });
     createTask(db, { objective: "will wait" });
-    setState(db, task.id, "running", new Date().toISOString());
+    setState(db, task.id, "running", { now: new Date().toISOString() });
     assert.deepEqual(
       listTasks(db, { state: "running", limit: 50 }).items.map((t) => t.id),
       [task.id],
@@ -167,9 +187,9 @@ describe("tasks", () => {
   it("carries an error through the record, because §4.3's answer must survive a client that missed the event", () => {
     const { db, close } = tempDb();
     const task = createTask(db, { objective: "will fail" });
-    setState(db, task.id, "failed", new Date().toISOString(), {
-      code: "provider_unavailable",
-      message: "no provider answered",
+    setState(db, task.id, "failed", {
+      now: new Date().toISOString(),
+      error: { code: "provider_unavailable", message: "no provider answered" },
     });
     const record = getTask(db, task.id);
     assert.equal(record?.state, "failed");

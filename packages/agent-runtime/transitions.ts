@@ -21,7 +21,12 @@ export const PERMITTED_TRANSITIONS = {
   // `awaiting_approval` is an *answered* approval, and `transition()` refuses it without the answer in hand. A denial
   // that leaves other work possible re-plans (§5.4's rule, D-043's ladder) rather than dying here.
   awaiting_approval: ["running", "planning", "cancelling", "failed", "interrupted"],
-  running: ["completed", "failed", "cancelling", "interrupted"],
+  // D-087 amends D-083's table with the one edge M2d's loop could not do without: §5's rule 1 evaluates *every*
+  // action, not the first one, so a task that already executed a step and then meets a gated one has to be able to ask
+  // again. Without this edge `running` could only end — the second approval in one task was unrepresentable, and the
+  // only legal way to request it was to fail or interrupt the task. §4.1's table carries the same edge for the same
+  // reason, and `scripts/parity.ts` diffs the two, so the amendment is in the document a reviewer reads.
+  running: ["completed", "awaiting_approval", "failed", "cancelling", "interrupted"],
   // §6.1's Finish-the-Current-Step: after the permitted step settles, the task is marked *cancelled*, never
   // `completed` — the step's output is captured as an event, and the task's outcome stays a cancellation.
   cancelling: ["cancelled", "failed", "interrupted"],

@@ -100,8 +100,13 @@ export const MATRIX: readonly FeatureRow[] = [
   },
   {
     capability: "List/switch sessions",
-    api: "`GET /sessions`",
-    cli: "`chat --session`",
+    // All four paths schema version 6 made answerable, and not the five beside them: `messages`, `compact`, `export`,
+    // `context` and `pin` read a message store and D-027's context manager that do not exist, so listing them here would
+    // put a route in the matrix that nothing answers (F-11's rule is presence, and presence that lies is worse than
+    // absence). `DELETE /sessions/{id}` is absent by decision, not by sequence: destroying a conversation is
+    // `history.deleteConversation` at T3 and is the row below this one's neighbour in §4.2.
+    api: "`GET /sessions`, `POST /sessions`, `GET /sessions/{id}`, `PATCH /sessions/{id}`",
+    cli: "`session ls`, `session new`, `session rename`, `chat --session`",
     tui: "session switcher",
     web: "sidebar",
     telegram: "`/sessions`",
@@ -177,7 +182,8 @@ export const MATRIX: readonly FeatureRow[] = [
     cli: "`config …`",
     tui: "settings",
     web: "settings",
-    telegram: "`/config` (T3 changes confirm in-chat)",
+    telegram:
+      "`/config` (a **T3** change is displayed and may be relayed, never signed in chat — D-085 confines a T3 signature to the TUI and the Web control UI)",
   },
   {
     capability: "Logs / audit",
@@ -222,7 +228,11 @@ export const MATRIX: readonly FeatureRow[] = [
   },
   {
     capability: "Review scheduled jobs",
-    api: "`GET /jobs`, `PATCH /jobs/{id}`, `POST /jobs/{id}/pause`",
+    // Six paths and no `POST /jobs`, and the absence is the decision C12-09 records: creation is `cron.schedule`, a T2
+    // call the user approved, so a route that created a job would be a second creation path with no approval in it.
+    api:
+      "`GET /jobs?state=`, `GET /jobs/{id}`, `PATCH /jobs/{id}`, `POST /jobs/{id}/pause`, " +
+      "`POST /jobs/{id}/resume`, `POST /jobs/{id}/run`, `POST /jobs/{id}/backlog`",
     cli: "`job …`",
     tui: "jobs pane",
     web: "Scheduled screen",

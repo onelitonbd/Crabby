@@ -1,7 +1,7 @@
 // The decision function, in the order `PROVIDERS_AND_TOOLS.md` §4.4 fixes: "schema validation → capability check →
 // tier/approval → execution → result validation. A tool never runs 'to see if it works'." Steps 4 and 5 belong to the
-// runtime that does not exist yet (M2), so this module's job is the first three, and it returns a decision rather than
-// performing work.
+// runtime that executes the tool — since M2k that is `packages/tools` for eight of §4.2's rows (D-098) — so this module's
+// job is the first three, and it returns a decision rather than performing work.
 //
 // Two things the pipeline must not do, both from `SECURITY.md` and both easy to get wrong in the direction of looking
 // more permissive than intended:
@@ -36,6 +36,14 @@ export interface ToolCall {
    *  reject before policy, so a schema mismatch can never be mistaken for permission." Passing this is M2's job, once
    *  tool schemas exist; until then a caller may omit it and the decision says so. */
   readonly declaredArgs?: readonly string[];
+  /** What the runtime *observed* about this call, as distinct from what the caller asked for (D-099). Two of §4.3's
+   *  escalations turn on facts only a party with a filesystem can answer — was this file already there, is that
+   *  destination occupied — and §10's rule that "a declared field is never an authority" means the party asking for the
+   *  permission cannot be the party supplying them. A separate field rather than extra keys in `args`, because `args` is
+   *  checked against the tool's own schema: a fact smuggled in there is either rejected as an argument the tool never
+   *  declared, or accepted as a declaration from the one party whose declaration §10 refuses. Absent means no executor
+   *  answered, and the escalations that need one stay silent. */
+  readonly facts?: Readonly<Record<string, unknown>>;
 }
 
 /** The fields §6.3 requires an approval request to carry, in the order the document lists them. */
@@ -96,12 +104,21 @@ function exactTarget(call: ToolCall): string {
 }
 
 function fingerprint(call: ToolCall, taskId: string): string {
-  const pairs = Object.keys(call.args)
-    .sort()
-    .map((key) => `${key}=${JSON.stringify(call.args[key]) ?? "undefined"}`);
+  const pairs = (source: Readonly<Record<string, unknown>>) =>
+    Object.keys(source)
+      .sort()
+      .map((key) => `${key}=${JSON.stringify(source[key]) ?? "undefined"}`);
+  const observed = pairs(call.facts ?? {});
   // §6.3: "a decision applies to *that* action with *those* arguments in *that* task", so the task id is part of the
   // binding and not a column next to it. Two tasks asking for the same thing are two approvals.
-  return `${taskId}:${call.tool}{${pairs.join(",")}}`;
+  //
+  // The observed facts are in the binding too, and separately bracketed so a reader can see which half is which: the fact
+  // is part of what made the action the action the user priced. An approval signed for "replace a file that was already
+  // there" (T2, §4.2) must not be spendable on "replace a file that was not", and D-084's comparison at the moment of
+  // execution is the mechanism that says so — which only works if the fact is inside what gets compared.
+  return `${taskId}:${call.tool}{${pairs(call.args).join(",")}}${
+    observed.length === 0 ? "" : `(${observed.join(",")})`
+  }`;
 }
 
 /** §4.4's step 1, and the only step that can reject without consulting the registry at all. */
@@ -163,7 +180,12 @@ export function evaluate(
     return { outcome: "deny", class: "policy", tier: spec.tier, reason, reasons: [reason] };
   }
 
-  const { tier, reasons } = escalate(spec, call.args, { ...ctx, grants: subject.grants });
+  const { tier, reasons } = escalate(
+    spec,
+    call.args,
+    { ...ctx, grants: subject.grants },
+    call.facts,
+  );
   const behavior = TIER_BEHAVIOR[tier];
 
   if (tier === "T0" || tier === "T1") {

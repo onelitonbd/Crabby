@@ -3,9 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The §3.1 provider contract, §3.2 descriptors, §3.5 error taxonomy with D-064's retry schedule, the fake reference adapter, and the §7 conformance suite",
+  "description": "The §3.1 provider contract, §3.2 descriptors, §3.5 error taxonomy with D-064's retry schedule, §3.3's configuration rules, the openai-compatible adapter, the fake reference adapter, and the §7 conformance suite",
   "exports": {
     ".": "./index.ts",
     "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@crabby/core": "0.0.0"
   }
 }

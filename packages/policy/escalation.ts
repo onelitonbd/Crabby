@@ -30,7 +30,13 @@ export interface EvalContext {
   /** §4.2's `net.fetch` row: "T1 only for a user-curated allow-list". The list is the user's, so it arrives here and
    *  never defaults to a value this module invents. */
   readonly egressAllowList?: readonly string[];
-  /** D-060's rule that a restricted client may not be pushed into an approval it cannot answer. */
+  /** What the subject already holds, so an escalation can refuse rather than ask: D-054's rule is that removing a
+   *  capability "never converts [it] into an approval the same restricted client must answer", and a prompt for
+   *  `provider.billing` opened for a client that does not hold it is exactly that — a question whose only honest answers
+   *  are "deny" and "deny", asked of somebody who cannot grant it either. (This comment cited D-060 until the
+   *  twenty-eighth slice checked it; D-060 is the toolchain row, which is the kind of wrong a citation gets when nothing
+   *  reads it back — F-27's reason for making citations greppable is only half the rule, because a citation that resolves
+   *  can still resolve to the wrong thing.) */
   readonly grants: readonly string[];
   /** The resolver §8's re-check-after-resolution rule needs. Without it a symlink hop is invisible, so `file.*`
    *  writes are refused rather than allowed on a half-check — the fail-closed direction. */
@@ -38,7 +44,7 @@ export interface EvalContext {
   readonly schemasValidated?: boolean;
 }
 
-type Args = Record<string, unknown>;
+type Args = Readonly<Record<string, unknown>>;
 
 function expandHome(target: string, home: string | undefined): string | undefined {
   if (target.startsWith("/") && home === undefined) return target;
@@ -124,6 +130,7 @@ export function escalate(
   spec: ToolSpec,
   args: Args,
   ctx: EvalContext,
+  facts: Args = {},
 ): { tier: Tier; reasons: string[] } {
   const reasons: string[] = [];
   let tier: Tier = spec.tier;
@@ -176,8 +183,10 @@ export function escalate(
       }
       break;
     }
-    // §4.2's file rows: the path decides. `file.edit` also has the "Crabby did not create it" sentence, which needs a
-    // fact only the runtime has, so it is read from an argument and stays silent when the argument is absent.
+    // §4.2's file rows: the path decides. Two of them — `file.edit`'s "a file Crabby did not create" and `file.move`'s
+    // "onto an existing target" — turn on a fact about the filesystem rather than on an intention the caller declared, so
+    // they read `facts` and not `args` (D-099). A fact nobody observed leaves the row's base tier standing, which is the
+    // only honest reading: this module can raise a tier on evidence, and it cannot invent evidence.
     case "file.edit":
     case "file.write":
     case "file.delete":
@@ -189,7 +198,7 @@ export function escalate(
     case "file.read":
     case "file.list": {
       raise(pathEscalation(args, ctx, spec));
-      if (spec.tool === "file.edit" && boolArg(args, "preExistingUserFile")) {
+      if (spec.tool === "file.edit" && boolArg(facts, "preExistingUserFile")) {
         raise({
           tier: "T2",
           reason:
@@ -199,7 +208,7 @@ export function escalate(
       if (spec.tool === "file.delete" && boolArg(args, "recursive")) {
         raise({ tier: "T3", reason: "recursive delete (§4.2's T3 sentence for this row)" });
       }
-      if (spec.tool === "file.move" && boolArg(args, "overwrites")) {
+      if (spec.tool === "file.move" && boolArg(facts, "overwrites")) {
         raise({ tier: "T2", reason: "moving onto an existing file (§4.2)" });
       }
       break;

@@ -6,8 +6,9 @@
 // The Setup and Gateway rows of §7.1's table plus the `config` verbs D-074 and D-060 need. Everything else is
 // `planned`, so that `--help` can be honest about the difference instead of silently omitting it: a user who reads a
 // list of eleven commands should not have to guess whether the other forty exist somewhere else. A verb is promoted
-// here only when it has a route behind it — `task run` stays `planned` in M1b because an executor is M2's job, and a
-// command that created a task nothing would move would be a mock with an exit code.
+// here only when it has a route behind it — `task run` stays `planned` because the loop that would run it
+// (`packages/agent-runtime/loop.ts`) has no executor, no provider adapter and no Gateway runner, and a command that
+// created a task nothing would move would be a mock with an exit code.
 export interface CommandSpec {
   readonly noun: string;
   readonly verb?: string;
@@ -89,7 +90,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     noun: "auth",
     verb: "pair",
     summary: "redeem a code with --code, or mint one for another interface",
-    flags: ["--code CODE", "--name NAME", "--interface I"],
+    flags: ["--code CODE", "--name NAME", "--interface I", "--restrict <a,b>"],
     status: "ready",
   },
   {
@@ -121,6 +122,18 @@ export const COMMANDS: readonly CommandSpec[] = [
     status: "ready",
   },
   {
+    // `ready` because the rule this registry states is that a verb is listed only when it has a route behind it, and
+    // `POST /api/v1/tasks/{id}/cancel` has one, tested end to end. The flags are §6.1's two phases and §6.2's override:
+    // `--mode immediate` is the override that must beat finish-the-current-step, and `--reason` is the sentence that goes
+    // on the record with the request. Leaving `--mode` off is the common case and the safe one, which is why the route
+    // defaults it rather than demanding a choice at a moment a user is trying to stop something.
+    noun: "task",
+    verb: "cancel",
+    summary: "ask a task to stop (§6.1), and print whether it did and what is in doubt (§6.2)",
+    flags: ["--mode M", "--reason R", "--json"],
+    status: "ready",
+  },
+  {
     noun: "diagnostics",
     summary: "write the sanitized report the Web's Export button produces, and print where it went",
     flags: ["--json"],
@@ -138,8 +151,15 @@ export const COMMANDS: readonly CommandSpec[] = [
     verb: "run",
     summary: "create a task and follow it (blocks; `--detach` for scripts)",
     flags: ["--json", "--detach"],
-    status: "planned",
-    milestone: "M2 (the runtime that executes a task)",
+    // `ready` for the reason `task cancel` and `task watch` are: a route stands behind the verb. `POST /api/v1/tasks`
+    // has stood there since M1c, and `ready` would still have been a lie until a runner was composed into it, because
+    // this verb's contract is that it blocks and follows to an end (§7.1) and a task nothing drives has no end to
+    // reach — it would print an id and then watch it sit in `queued`, which is what the milestone field used to say.
+    // What is *still* absent is named rather than implied: `--wait-approval <n>`, §7.1's opt-in to keep blocking
+    // through a prompt, is in no registry, so a run that parks at an approval exits 3 at once; and
+    // `POST /tasks/{id}/resume` has no route, so the reattach line this verb prints names `task watch` rather than the
+    // `task resume` the row in §7.1 was written around (F-47).
+    status: "ready",
   },
   {
     noun: "chat",
@@ -149,21 +169,21 @@ export const COMMANDS: readonly CommandSpec[] = [
     milestone: "M2 (the runtime that answers a prompt)",
   },
   {
+    // `ready` for the reason `task cancel` is: the rule is whether a route stands behind the verb, and `GET /events` has
+    // stood behind this one since D-048 — filtered by `taskId`, replaying from `Last-Event-ID`, and answering a cursor
+    // outside its window with §5.4's `gap` frame rather than silence. The milestone this entry carried named "event
+    // delivery and gap handling", and both halves were already delivered server-side, so what was missing was the command
+    // that reads them.
     noun: "task",
     verb: "watch",
     summary: "follow one task's events, NDJSON per line with `--json`",
-    flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (event delivery and gap handling)",
+    // `--types` is not a new promise: D-048 already accepted that `GET /events` filters by query (`sessionId`,
+    // `taskId`, `types`), and the Gateway has split that value on commas and matched it as a prefix since the route was
+    // written. What the flag adds is a terminal that can ask for the filter it was already entitled to.
+    flags: ["--types <a,b>", "--json"],
+    status: "ready",
   },
-  {
-    noun: "task",
-    verb: "cancel",
-    summary: "ask for cancellation and report the settled state",
-    flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (cancellation manager)",
-  },
+
   {
     noun: "task",
     verb: "resume",
@@ -173,28 +193,41 @@ export const COMMANDS: readonly CommandSpec[] = [
     milestone: "M2 (recovery that cannot bypass approvals)",
   },
   {
+    // `ready` because the milestone named a service that has been composed into the Gateway since before this entry was
+    // written: `createApprovals` is built in `buildApp`, `registerApprovalRoutes` registers both §4.3 routes, and the
+    // sweep the queue depends on (D-093) runs inside the read. `--state` is passed through to the route rather than
+    // checked here, so a typo is refused by the Gateway naming all five states instead of being coerced into a filter
+    // that matched nothing.
     noun: "approval",
     verb: "ls",
-    summary: "the pending approval queue for this client",
-    flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (the approval service)",
+    summary: "the approval queue for this client, `pending` unless `--state` says otherwise",
+    flags: ["--state <state>", "--json"],
+    status: "ready",
   },
   {
+    // The `--yes` this entry used to advertise is gone rather than implemented: it would have skipped a confirmation
+    // prompt, and no code asks for one — `approval approve <id>` is itself the deliberate act, so the flag's only effect
+    // would have been to tell a user that a prompt exists. There is no `--scope` either, and the reason is D-052 rather
+    // than an oversight: this release admits exactly one answer shape, so every value but `once` is a refusal the arbiter
+    // owes a sentence about, and a knob that can only fail is not a knob. The body's `scope` stays a string on the HTTP
+    // surface precisely so that refusal can be provoked and tested there.
     noun: "approval",
     verb: "approve",
     summary: "approve one action, once (D-052: the only answer shape)",
-    flags: ["--yes"],
-    status: "planned",
-    milestone: "M2 (the approval service)",
+    flags: ["--json"],
+    status: "ready",
   },
   {
+    // The summary promised "record why" and the route cannot keep that promise: `ApprovalDecisionBody` carries `decision`
+    // and an optional `scope`, and no reason field, so a `--reason` here would have been read, accepted, and dropped —
+    // losing silently the one thing the user offered. The summary is narrowed to what the record does hold, which is §14's
+    // audit fields written by the route from the answering identity: who decided, from which surface, and what they
+    // decided. Adding a reason is a change to §4.3's body and to the arbiter's record, not to a CLI flag.
     noun: "approval",
     verb: "deny",
-    summary: "deny one action and record why",
-    flags: [],
-    status: "planned",
-    milestone: "M2 (the approval service)",
+    summary: "deny one action, once",
+    flags: ["--json"],
+    status: "ready",
   },
   {
     noun: "provider",
@@ -303,34 +336,46 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "session",
     verb: "ls",
-    summary: "list conversations",
-    flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (the session manager)",
+    summary: "conversations: id, title, last activity, state word, model, origin (C11-01)",
+    flags: ["--origin I", "--quiet", "--json"],
+    // `ready` because the record behind it is: schema version 6 gave a conversation a row of its own, so
+    // `GET /api/v1/sessions` answers with titles, state words and last activity instead of ids that nothing owns — which
+    // is C11's whole reason for the noun, "without `session ls` the only way to resume on a phone is to remember an id".
+    // Sorted by last activity and not by creation, because C11-01 says that is "the order a person remembers in", and
+    // `--quiet` is ids alone for the pipe §10 promises.
+    status: "ready",
   },
   {
     noun: "session",
     verb: "new",
-    summary: "start a conversation, optionally titled",
-    flags: ["--title T"],
-    status: "planned",
-    milestone: "M2 (the session manager)",
+    summary: "start a conversation, optionally titled (C11-02)",
+    flags: ["--title T", "--json"],
+    // W15-03's shape: with no `--title` the session is created un-named and takes its title from the first question asked
+    // in it, so the flag is optional rather than required. The verb prints the id *and* the command that uses it, because
+    // C11-02's own sentence is "a created thing you cannot address is a bug".
+    status: "ready",
   },
   {
     noun: "session",
     verb: "show",
-    summary: "one conversation with its tail",
+    summary: "one conversation: title, turns, tasks, budget, pinned items (C11-03)",
     flags: ["--json"],
+    // Planned and not missing, and the distinction is the whole row. C11-03's content is five fields and three of them —
+    // turns, budget, pinned items — need a message store and D-027's context manager. `GET /api/v1/sessions/{id}` answers
+    // the two that exist and names the other three in its `absent` list, so the route is honest about it; a verb that
+    // printed the same zeroes at a person would be printing a screen full of nothing.
     status: "planned",
-    milestone: "M2 (the session manager)",
+    milestone: "the release that stores messages (§4.3's `messages` paths, C11-03, D-027)",
   },
   {
     noun: "session",
     verb: "rename",
-    summary: "change a conversation's title",
-    flags: [],
-    status: "planned",
-    milestone: "M2 (the session manager)",
+    summary: "change a conversation's title (C11-04)",
+    flags: ["--json"],
+    // Writes through `PATCH /api/v1/sessions/{id}` with the revision the read carried, so the Web title and the TUI list
+    // change with it rather than after it (C11-04) and two interfaces editing one title cannot silently overwrite each
+    // other (§2's concurrency row, W1-02, W15-04, T16-05).
+    status: "ready",
   },
   {
     noun: "session",
@@ -343,50 +388,67 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "job",
     verb: "ls",
-    summary: "scheduled jobs and their next run",
-    flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (the scheduler, D-046)",
+    summary: "scheduled jobs: name, schedule, next run, last outcome, state word (C12-01)",
+    flags: ["--state S", "--quiet", "--json"],
+    // `ready` because the route behind it is: `GET /api/v1/jobs` answers from the job table whether or not this Gateway
+    // composed a scheduler, and says which of those it is (`driven`) instead of listing rows that cannot fire. `--quiet`
+    // is ids only, for §10's scripting contract.
+    status: "ready",
   },
   {
     noun: "job",
     verb: "show",
-    summary: "one job's plan and last runs",
+    summary: "one job: the capability set it holds, who it runs as, its last runs (C12-02)",
     flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (the scheduler)",
+    status: "ready",
   },
   {
     noun: "job",
     verb: "pause",
-    summary: "stop a job firing until resumed",
-    flags: [],
-    status: "planned",
-    milestone: "M2 (the scheduler; a job you cannot pause is standing authority, D-057)",
+    summary: "stop a job firing until resumed; takes effect before the next tick (C12-03)",
+    flags: ["--json"],
+    status: "ready",
   },
   {
     noun: "job",
     verb: "resume",
-    summary: "start a paused job again",
-    flags: [],
-    status: "planned",
-    milestone: "M2 (the scheduler)",
+    summary:
+      "start a paused job again, re-evaluating the grants rather than trusting the last evaluation (C12-03)",
+    flags: ["--json"],
+    status: "ready",
   },
   {
     noun: "job",
     verb: "run-now",
-    summary: "trigger one run without changing the schedule",
-    flags: [],
-    status: "planned",
-    milestone: "M2 (the scheduler)",
+    summary:
+      "one run outside the schedule, followed to its end; exit 3 if it stops at an approval (C12-04)",
+    flags: ["--json", "--detach"],
+    status: "ready",
+  },
+  {
+    noun: "job",
+    verb: "backlog",
+    summary:
+      "answer for the runs that passed while the host was down: --latest or --skip, recorded either way (C12-06)",
+    flags: ["--latest", "--skip", "--json"],
+    // Not in §7.1's inventory row when it was written, and added to it by the slice that built it: C12-06 documents the
+    // verb, `POST /api/v1/jobs/{id}/backlog` answers it, and §4.5's sixth rule is the reason it exists. A noun whose
+    // documented behaviour no interface can perform is the parity rule broken in the direction nobody notices.
+    status: "ready",
   },
   {
     noun: "job",
     verb: "edit",
     summary: "change what a job runs",
     flags: [],
+    // Planned and not missing, and the distinction is the whole row. C12-05's content is "schedule, objective, model,
+    // recipients" — the material half — which §4.5 prices as re-approval, and no route in this build can open an approval
+    // (D-084): a verb that wrote the objective would be a material change riding on the old authorisation, exactly what
+    // C12-05 says cannot happen. The non-material half does have a route, `PATCH /api/v1/jobs/{id}` (name and schedule,
+    // with `objective` absent from the body schema so the refusal is structural), which W16-06's edit sheet uses; the verb
+    // arrives when an edit can carry a re-approval with it rather than implying one happened.
     status: "planned",
-    milestone: "M2 (the scheduler; T2/T3 by what changes)",
+    milestone: "the first release that can re-approve a material change (§4.5, D-084)",
   },
   {
     noun: "logs",

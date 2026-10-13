@@ -142,7 +142,15 @@ export interface ProviderConfig {
   readonly headers?: Readonly<Record<string, string>>;
 }
 
-export type ConfigValidation = { ok: true } | { ok: false; reason: string };
+/** §3.1's `validateConfig` result. The accepted arm can carry warnings, because §3.3 requires one: "a clear warning if
+ *  the host is not loopback while the key would be sent over plain HTTP". A warning is not a refusal — a LAN `llama-server`
+ *  on plain HTTP is a setup §3.3 accepts and the risk is the user's to take — so an adapter that rejected it would be
+ *  making a decision the document assigned to the user, and one that stayed silent would be dropping the requirement.
+ *  `warnings` is read by whoever composes the adapter (`crabby provider add` prints them); nothing here decides what a
+ *  UI does with a sentence. */
+export type ConfigValidation =
+  | { ok: true; warnings?: readonly string[] }
+  | { ok: false; reason: string };
 
 export interface Provider {
   readonly id: string;

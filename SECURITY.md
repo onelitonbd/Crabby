@@ -124,7 +124,25 @@ Pairing requirements:
 - The pairing artifact is short-lived, single-use, and carries a TTL; the long-lived credential is delivered once and never logged.
 - Every credential is bound to a client name and an interface type so audit records say *which* client acted.
 - Revocation takes effect on the next request and must also terminate live event streams.
+  **Implemented (M2j, D-096).** `GET /events` binds each live subscriber to the identity that opened it, `closeFor(clientId)`
+  ends those streams in registration order and returns how many it ended (the revoke route logs the number, because a
+  control nobody can count is a control that quietly stops working), and each closed stream gets a named `event: end` frame
+  carrying `reason: revoked` before its socket closes, and `GET /auth/clients` reports each identity's `liveStreams` from
+  the same registry — the count is a fact about the binding, so the list and the control read one source. The frame is the part with a security reason rather than a
+  politeness one: §5.4 of `docs/INTERFACES_AND_API.md` tells every client that a stream which stopped is a stream to
+  reconnect through, so silence after a revocation is an instruction to come back, and the client that obeys it pays a
+  `401` to learn what the Gateway could have said. Termination is not a replacement for the first half — the next request
+  is still refused on the deleted token, and the frame is a courtesy on top of a control, not instead of one.
 - Unauthenticated requests are rejected before routing, including `GET /health` and event subscriptions.
+  Listing and revoking identities are rejected before routing on a second condition as well — the request must come from
+  the machine the Gateway runs on (D-097). `auth.manage` is assigned now: pairing gives an identity §6.1's baseline for
+  its interface, which holds this capability for `cli`, `tui` and `web` and withholds it from `telegram`, and a
+  `restrict` list may only narrow that baseline (D-054, D-102). The socket test stays anyway, for two reasons about this
+  build rather than about the rule: no migration gives capabilities to an identity paired before assignment existed, so
+  replacing the guard would lock an owner's existing CLI out of its own recovery path, and no route yet has a
+  `PolicySubject` to ask — the step `docs/CONSISTENCY_REVIEW.md` F-52's last question names. In v1 the two conditions
+  agree, because §13 admits no tunnel, so a caller that is not on the loopback socket cannot be holding a local
+  interface's baseline.
 
 Token format and lifetime are fixed by D-051 (opaque token, no expiry; revocation is the control). **O-019** is closed by D-067:
 `crabby auth pair` prints the URL and an 8-character code **each on their own line**, because selection on a phone is a
@@ -168,7 +186,7 @@ Permissions are named capabilities, not free-form text. Initial proposed vocabul
 | `session.read` / `session.write` | Read or modify conversation and session state. |
 | `task.create` / `task.cancel` / `task.read` | Start, cancel, and inspect tasks. `task.read` is the read-only half: state, history, and results. |
 | `fs.read:<root>` / `fs.write:<root>` | File access scoped to a configured root. |
-| `net.egress:<hostset>` | Outbound network from tools, scoped by host set. |
+| `net.egress:<hostset>` | Outbound network from tools, scoped by host set. The set is `net.allowList` in `config.json` (M2ab, D-106): a curated host is §4.2's **T1**, every other destination is **T2** with the host named in the approval, and an empty list is that second state rather than a refusal. The grant names the set, not its members, so no host is denied for being uncurated. Turning egress off is `crabby auth pair --restrict net.egress` (§13), which removes the name instead of pricing it. |
 | `shell.run` | Execute commands through the shell tool. |
 | `shell.privileged` | Commands touching package managers, services, system config. |
 | `provider.invoke` / `provider.billing` | Call a provider / call a paid endpoint. |
@@ -201,12 +219,22 @@ Rules:
 - Tier assignment is a property of the tool and the *argument shape*, not of the model's confidence. `rm -rf` and `ls` are never the same tier even though both are "shell".
 - A tool may raise its own tier; it may not lower it. Configuration may raise strictness but never below the tier's floor.
 - Unknown, unclassified, or newly imported extensions default to **T2** until classified.
+- A **T3 answer is signed in the TUI or the Web control UI.** Another interface may display the request and relay an
+  answer made elsewhere; when it tries to sign, it is refused and the request stays pending for a surface that may
+  (D-085). This is a rule about *signing*, not about reach: §6.3's "answerable from all four interfaces" says every
+  interface can see and answer a prompt, and this says which tiers each may put its name to. The distinction is
+  recorded because `packages/policy` had been enforcing the Telegram half of it while citing §6.2 for a sentence §6.2
+  did not contain, and a rule that lives in one package's `if` and not in the document it cites gets deleted by the
+  next person reading the document (F-39).
 
 ### 6.3 Approval workflow
 
-An approval request must carry: task id, tool, tier, human-readable action summary, the exact command or path or destination host, expected effects, reversibility, and an explicit "what could go wrong". It must be answerable from all four interfaces, with an expire-on-timeout default so a stale prompt cannot be approved much later.
+An approval request must carry: task id, tool, tier, human-readable action summary, the exact command or path or destination host, expected effects, reversibility, and an explicit "what could go wrong". It must be answerable from all four interfaces, with an expire-on-timeout default so a stale prompt cannot be approved
+much later. "Answerable" is about reach and not about authority: which surface may *sign* which tier is §6.2's rule,
+and it is enforced where an answer is recorded (D-084, D-085) rather than in each interface, because a queue shared by
+four surfaces cannot be guarded four different ways.
 
-Expiry is per tier, decided in D-064 (closing O-041): **T1 15 minutes, T2 10 minutes, T3 5 minutes.** The direction of that gradient is the whole point — the more an approval grants, the less time an unattended prompt should stay answerable, because the window in which a phone is left unlocked and a request is left standing is exactly the window this rule covers. The countdown is rendered by every interface (Web W-A5, TUI T-A5, Telegram G-A1) with the reason it expires.
+Expiry is per tier, decided in D-064 (closing O-041): **T1 15 minutes, T2 10 minutes, T3 5 minutes.** The direction of that gradient is the whole point — the more an approval grants, the less time an unattended prompt should stay answerable, because the window in which a phone is left unlocked and a request is left standing is exactly the window this rule covers. The countdown is rendered by every interface (Web W-A5, TUI T-A5, Telegram G-A1) with the reason it expires. Expiry is applied by the arbiter's sweep, which runs at startup (§7.1's recovery) and on the read that renders the queue (D-093), and by `answer` refusing a row whose deadline passed — so a stale prompt is neither shown as live nor answerable, whichever a client reaches first.
 
 Approval binding: a decision applies to *that* action with *those* arguments in *that* task. Approval must never be interpreted as a general license, and re-approval is required when the action materially changes (targets a new path, host, or destination) — per `AGENT_RUNTIME.md` §5.
 
@@ -217,14 +245,14 @@ in one place, individually revocable, unavailable for T3 entirely, and it must n
 action. This is the honest reading of the parity promise: approval fatigue (T-05) is better answered by asking less
 often — fewer, larger, reversible steps — than by pre-authorizing the dangerous ones.
 
-Denials are recorded and respected; the agent must not rephrase a denied action to obtain a different answer, and repeated denial of the same class should pause the task and surface it to the user rather than loop.
+Denials are recorded and respected; the agent must not rephrase a denied action to obtain a different answer, and repeated denial of the same class should pause the task and surface it to the user rather than loop. "Repeated" is priced in `AGENT_RUNTIME.md` §5.2 (D-086): two refusals of the same tool in one task, and the pause is a state a client can read — the task stays `awaiting_approval` with nothing in the queue and the reason in its event log — rather than a silence. What the arbiter reports and what the loop decides stay separate (D-084), so the count is a fact and the pause is a policy.
 
 ## 7. Secrets Handling
 
 Requirements (mechanism **selected: D-031** — OS keychain with encrypted-file fallback):
 
 - Secrets live outside the conversation database and outside ordinary configuration files. Never interleave keys with session records that a user might export or share.
-- Redaction is applied at the logging and event-serialization layer, not only at the UI. If an error object can contain a header, the serializer must strip it (see `AGENT_RUNTIME.md` §9.3).
+- Redaction is applied at the logging and event-serialization layer, not only at the UI. If an error object can contain a header, the serializer must strip it (see `AGENT_RUNTIME.md` §9.3). The obligation covers durable payloads that are neither logs nor events: a checkpoint's saved working context is redacted on the way into the database (`docs/DATA_AND_MEMORY.md` §2.2, D-095), because a record a resume reads back is a second chance for a secret to reach a model — and it is why a checkpoint never holds the arguments of an approved action, since a redacted copy of an action is not the action and could not be executed faithfully anyway. It reaches an answer *about configuration* too: `GET /api/v1/config` and the `config.get` tool are scrubbed by one derivation (`configForReading` in `packages/core`) rather than by each caller remembering, because `PROVIDERS_AND_TOOLS.md` §4.2's read row is secret *names* only and never values, and a settings body rendered in a browser or quoted by a model into a provider request is a serializer with a longer reach than a log line (D-107). A terminal printing the owner's own file back to them is the one surface that does not scrub, and the asymmetry is stated rather than left to be found: `crabby config get` shows the value the user has to fix, §3.3 refuses an inline key at the keystroke, so in a document the schema accepts there is nothing there to withhold.
 - Provider keys, bot token, and tunnel credentials must not be sent into model context unless a tool genuinely requires it, and then only via the provider adapter path — the agent should be able to use a credential without reading it.
 - Files containing secrets: owner-only permissions (`0600`), excluded from backups by default, and never included in diagnostics bundles without explicit opt-in.
 - Rotation and revocation must be a documented, one-command user action.
@@ -248,12 +276,45 @@ Fallback rules:
 
 ## 8. Filesystem and Workspace Security
 
-- All file tools operate relative to one or more **configured workspace roots**. Absolute paths, `..` traversal, and symlink resolution must be normalized and re-checked *after* resolving links.
+- All file tools operate relative to one or more **configured workspace roots** (`workspace.roots` in `config.json`; `crabby init` creates `$HOME/crabby-workspace` and records it, D-101). A root that *is* the home directory is refused by `crabby doctor` as a failing check, because the sentence below would otherwise be the only boundary left. Absolute paths, `..` traversal, and symlink resolution must be normalized and re-checked *after* resolving links.
 - The default install grants no filesystem access outside the workspace; the home directory is not a workspace.
 - Sensitive default deny-list (configurable, user-owned): `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gh`, browser profile directories, `.env*` files, `*.pem`, `*.key`, `credentials*`, and the Crabby data directory itself. Deny applies to read as well as write; agents routinely leak by reading.
 - Writes should prefer atomic write + rename; destructive overwrites of pre-existing user files are T2.
 - Trash-or-rename should be offered in place of hard delete where the platform supports it; hard delete is T2/T3.
 - Path checks are enforced in the tool adapter, and the tool must not accept a caller-provided path that it then re-interprets (e.g. shell redirection as a "read" call is still a write).
+
+**What M2k implemented, and what it had to decide to do so (D-098, D-099).** `packages/tools` is the first executor in the
+tree, so five of the bullets above stopped being requirements and became behaviour — and each one needed a choice that is
+recorded here rather than only in a code comment, because §8 is the section a reviewer reads before trusting a file tool.
+
+- **The adapter is the enforcement point.** `checkPath` (`packages/policy/paths.ts`) runs before any syscall in the
+  executor, on every argument that names a path, and its verdict is what the tool acts on — the executor does not re-derive
+  a path from an argument it was handed. It follows no symlink that the check did not resolve, and `file.stat` reports the
+  *resolved* path (plus `brokenLink` when only `lstat` answers), so the fact §4.3 prices and the file the executor touches
+  are the same file. That is what makes "re-checked *after* resolving links" a property of the call rather than of the
+  first check.
+- **Atomic write + rename, with the create made atomic too.** Both writing tools write a temporary file in the target's own
+  directory and rename over the destination, so a crash mid-write leaves the previous bytes. `file.write` is create-only and
+  creates through a *hard link* onto the destination, because that is the only create which fails atomically when the path
+  appeared between the check and the write; where the filesystem has no hard links — Termux's shared storage is a FUSE mount
+  that often does not — it renames instead, and the outcome says which happened rather than implying a guarantee the device
+  did not give. An overwrite is `file.edit`'s job, and §4.2 prices the two rows differently, so the refusal is a tier
+  boundary and not a convenience.
+- **"Pre-existing user file" means *the path exists*, and that is weaker than the sentence above.** This build keeps no
+  ledger of what Crabby created, so a file the agent itself wrote one step earlier still prices at T2 when it is edited. The
+  conservatism is one-sided on purpose: guessing "the agent created this" would *lower* a tier on evidence that does not
+  exist, while guessing the other way costs one prompt for a file the agent wrote itself. When a created-by ledger arrives,
+  the observation narrows and the tier falls with no change to this section. The observation itself travels on a channel the
+  model cannot write to (D-099), because a fact an argument could set would be a declared field acting as an authority —
+  which §10 forbids two sections below.
+- **Trash-or-rename is the default delete, not an offer.** `file.delete` renames the target into the task's scratch trash,
+  which D-064 prunes 24 h after the task ends; `hard: true` is the exception and §4.2 prices it. Where the target is a
+  directory on a different device from scratch — a rename across `EXDEV` — the tool refuses and names the option instead of
+  silently hard-deleting, because the platform not supporting the courtesy is a fact the user should see rather than a
+  fallback the runtime should choose.
+- **A search is not a traversal.** `fs.search` walks configured roots only, follows no symlink, and is bounded by the output
+  cap and the 10 s `fs.*` deadline (D-074), so a walk that would take longer ends as a partial result that says it is
+  partial (§4.4's truncation rule) rather than as a task that owns the device.
 
 ## 9. Shell and Process Execution
 
@@ -273,7 +334,7 @@ Crabby's agent consumes text that it did not author: web pages, files, tool resu
 Requirements:
 
 - **Instruction precedence** must be explicit and documented: system/security policy > user request in the current session > approved configuration > skill and memory content > retrieved or external content. Lower tiers may inform, never authorize.
-- External content is wrapped with structural delimiters and metadata (source, fetch time, trust label) so both the model and the audit log can attribute it.
+- External content is wrapped with structural delimiters and metadata (source, fetch time, trust label) so both the model and the audit log can attribute it. **The marker's shape (M2k, D-098):** `wrapUntrusted` in `packages/tools` emits `<external-content source="…" subject="…" trust="untrusted" at="…">` … `</external-content …>`, and *both* halves carry a nonce that is rolled per call. The nonce is the whole point: bytes inside a user's file that read `</external-content>` must not be able to end the block they are inside, so a collision re-rolls the nonce up to six times and then throws rather than emitting an ambiguous boundary — a wrapper that can be closed by its own content is a wrapper in name only. Two consequences follow and are rules, not details: the §4.4 output cap applies to the **wrapped** text, because capping the content first could truncate the delimiter and leave the block unclosed; and any label, truncation note or runtime commentary sits **outside** the markers, because a note inside untrusted content is content. Markers inside the content are *not* neutralised: rewriting what the user asked to read is a worse lie than an attributed block that says it is untrusted, and this section's rule is about attribution, not sterilisation.
 - Policy-relevant decisions must never be derived from content inside a tool result. Even if a model is persuaded, the Policy Engine still denies a capability that was not granted — this is why §2 rule 02 exists.
 - A declared field is never an authority: no manifest key and no skill frontmatter field can lower a tier, widen a
   capability, or pre-approve a tool. `allowed-tools` in an imported `SKILL.md` is read into the capability diff and
@@ -312,8 +373,15 @@ Default posture: **loopback only**. Requirements for the optional remote mode:
 - Remote clients authenticate with the same mechanism as other clients (§5.1) over TLS to the tunnel. Without a valid token, the Gateway must reject every route, including health and SSE.
 - Remote access must not add capabilities. **Selected (D-032):** Crabby applies no tunnel-specific hardening on top of normal policy — a remote client may use exactly what its paired identity is allowed, preserving feature parity (D-005) across local and remote.
 - Residual risk is accepted and must be documented for users: with a valid token, a remote client can drive a shell-capable task. The compensating controls are risk-tier approvals (§6.2), per-action T2/T3 prompts, token revocation, and audit records.
-- Narrowing remains available per client, not per transport: `crabby auth pair --restrict shell,config` produces a
-  limited identity. This keeps parity intact — the *identity* is narrower, the *transport* is not.
+- Narrowing remains available per client, not per transport: `crabby auth pair --restrict task,session` produces a
+  limited identity. A dot-less name is a family — `task` stands for every name in the `task` family that the paired
+  interface's baseline holds — so the shorthand this rule has always been written in is what the mint route reads, and
+  expansion cannot widen anything, because the members it adds are still intersected with the baseline (D-102). This
+  keeps parity intact — the *identity* is narrower, the *transport* is not. The family this line used to name is the one
+  that cannot be honoured anywhere: §9 keeps `shell.run` and `shell.privileged` out of every baseline, so
+  `--restrict shell` is a refusal that names the rule and lists the family's members rather than an unknown word. There
+  is nothing in that family for an intersection to narrow to, and an operator who spelled it correctly should be told
+  that instead of being sent to check their typing.
 - Restriction semantics, so a narrow identity cannot deadlock: `--restrict` **removes** capabilities from that
   identity; it does not convert them into always-deny-with-an-approval-prompt. A removed capability is reported as
   `platform-unsupported`-style "not available to this client" with the reason, rather than queueing an approval the

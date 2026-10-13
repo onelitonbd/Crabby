@@ -10,6 +10,8 @@
 /** The four parameterized families §6.1 writes as `name:<slot>`. A grant carries its parameter (`fs.read:workspace`),
  *  and the parameter is part of the grant — `fs.read:workspace` never authorizes a read in `~/`, and the *host set*
  *  form is why `net.egress` can be T1 for a curated list and T2 for anything else (`PROVIDERS_AND_TOOLS.md` §4.2). */
+import type { ClientInterface } from "@crabby/api-contracts";
+
 export type CapabilityScope = "none" | "root" | "hostset" | "device";
 
 export interface CapabilitySpec {
@@ -133,6 +135,23 @@ export function isKnownCapabilityBase(name: string): boolean {
 /** A grant is well-formed only if its base exists *and* a scoped family carries a parameter: `fs.read` with no root
  *  would mean "every root", which is the one thing a scoped capability may not mean. Refusing it here is cheaper than
  *  explaining a whole-filesystem grant later. */
+/** The name of the one host set this build has: the allow-list a user curates in `config.json` as `net.allowList`
+ *  (D-106). §6.1 writes the parameter as `<hostset>` — a *set*, not a member of one — and §4.3 says why the difference
+ *  matters: "any host not in the allow-list is **T2** with the host named in the prompt". A per-host grant would make
+ *  that sentence unreachable, because a host nobody curated would fail the capability check and be *denied* outright —
+ *  a wall where the document put a price. So the kind is granted once and names the set, and the set's members decide
+ *  the tier in `escalation.ts` rather than the grant list. An empty set still yields this grant for the same reason: a
+ *  fresh install has curated nothing, and "every destination is T2" is precisely the state §4.3 describes it as being
+ *  in. Turning egress off is not an empty list but `crabby auth pair --restrict net.egress` (§13), which removes the
+ *  capability instead of pricing it. */
+export const CURATED_HOST_SET = "allow-list";
+
+/** Which hostset-scoped capability has a set to name, and what it is called. One entry because §6.1 has one `hostset`
+ *  row and `config.json` has one place a user curates hosts. A hostset family absent from this map has no set in this
+ *  build, and `grantsFor` withholds it with the reason below rather than inventing a parameter — which is the same rule
+ *  the `root` branch applies to an install with no workspace. */
+const HOST_SETS: Readonly<Record<string, string>> = { "net.egress": CURATED_HOST_SET };
+
 export function isWellFormedGrant(grant: string): { ok: true } | { ok: false; reason: string } {
   const spec = capabilityFor(grant);
   if (!spec) return { ok: false, reason: `'${baseOf(grant)}' is not in the capability vocabulary` };
@@ -156,4 +175,263 @@ export function holdsGrant(grants: readonly string[], wanted: string): boolean {
     if (parameter === undefined) return true;
     return parameterOf(held) === parameter;
   });
+}
+
+/** The two capabilities §9 keeps off a fresh install. Named once rather than inlined in a filter, because the sentence
+ *  that excludes them is one sentence and the code implementing it should be one line a reviewer can check against it. */
+const NOT_DEFAULT: readonly string[] = ["shell.run", "shell.privileged"];
+
+/** The baseline capability set an identity paired for one interface holds. Every rule here is a sentence in a document
+ *  rather than a preference, and the three of them pull in different directions, which is why they are stated:
+ *
+ *  1. **Parity.** D-005 keeps feature parity "by keeping capability identical and only adapting presentation", and
+ *     §5.3 says the interface label "may only narrow capabilities". So the baseline is the whole vocabulary for every
+ *     interface, and nothing is withheld from a surface for being a terminal rather than a browser.
+ *  2. **Locality.** `grantsRemote: false` and `localOnly` are withheld from an interface whose requests do not
+ *     originate on the Gateway's own host. In v1 that is `telegram` alone — a bot's requests arrive from Telegram's
+ *     servers, while the other three reach the loopback listener `requireLoopback` guards (D-097) — and §5.3's rule is
+ *     that a remote client never receives a wider set than a local one. Both fields exist so that answer is declared
+ *     rather than inferred.
+ *
+ *     D-032 is the row a reviewer will bring to this rule — "Remote access adds no capability narrowing by default
+ *     … Interface type may narrow only what the user configures, never what the core allows" — and withholding
+ *     two names from `telegram` is narrowing no user configured. It is not a contradiction, and the reason is worth
+ *     stating rather than leaving to be worked out: §6.1's table *is* the core's allowance, and its `auth.manage` row
+ *     reads "Local-only by construction: no remote or agent-facing path may grant it". The core does not allow a remote
+ *     identity to hold the capability, so there is nothing below that for an interface label to narrow to. What D-032
+ *     forbids is a label inventing a restriction the documents do not state, and this function invents none: every name
+ *     withheld here is withheld by a row that says so.
+ *  3. **Shell.** `NOT_DEFAULT` is withheld from *every* baseline. §9: shell execution is "never enabled by default for
+ *     a fresh install; enabling it is an explicit act", and the M2 phase row says the same of `crabby init`. A baseline
+ *     carrying them would put arbitrary command execution one pairing away on a fresh install, which is the act §9
+ *     reserves to the user. The opt-in that grants them is a different slice's work, and this function does not
+ *     pre-grant what nobody has chosen. */
+export function capabilitiesFor(iface: ClientInterface): readonly string[] {
+  const remote = iface === "telegram";
+  return CAPABILITIES.filter((spec) => {
+    if (NOT_DEFAULT.includes(spec.name)) return false;
+    if (remote && (spec.grantsRemote === false || spec.localOnly === true)) return false;
+    return true;
+  }).map((spec) => spec.name);
+}
+
+export interface Restriction {
+  /** The set the identity will hold: the intersection, and never a union. */
+  readonly capabilities: readonly string[];
+  /** Every name that could not be honoured, each with the sentence that says why. A caller that finds anything here
+   *  must refuse the whole request rather than mint a narrower identity than was asked for. */
+  readonly refused: readonly { readonly name: string; readonly reason: string }[];
+}
+
+/** Applies a restriction. `SECURITY.md` §5.3 makes this an intersection and nothing else — "the interface label may
+ *  only narrow capabilities" — so a restriction naming something the baseline withholds is refused rather than honoured,
+ *  and `--restrict shell.run` is not a way to enable the shell. An unknown name is refused for the reason §2's rule 03
+ *  is a rule: a capability that is not in the vocabulary cannot be granted, and quietly dropping it would let a typo
+ *  decide an identity's authority.
+ *
+ *  A dot-less token is a family: §13's own example is `--restrict shell,config`, and refusing `config` as a word
+ *  nobody typed would make the document untypeable. Expansion is a shorthand for narrowing and cannot become a way
+ *  around one, because the members it adds are still intersected with the baseline — so `--restrict shell` is refused
+ *  with the rule named (§9 keeps both shell capabilities off every baseline) rather than honoured or mistaken for a
+ *  spelling error.
+ *
+ *  D-054 settles what would otherwise be a guess here: "`--restrict` removes capabilities from an identity; it never
+ *  converts them into an approval the same restricted client must answer." So a withheld name is simply gone from the
+ *  set and nothing else happens — no approval row is opened, no tier is raised, and a restricted client is never asked
+ *  to answer for something it can no longer do. The alternative reading (a restriction demoting a capability to
+ *  ask-first) would have made `--restrict` a way to *add* friction the documents do not describe, and D-054 exists
+ *  because somebody considered it.
+ *
+ *  An empty list is refused too, and deliberately: `restrict` present with nothing in it names no capability, so it is
+ *  not a restriction, and minting an identity that holds nothing would hand back a token that can only fail. Both cases
+ *  arrive as a refusal the caller turns into a `400` naming the offender. */
+/** The members of a family the vocabulary actually has, whether or not any baseline holds them. §6.1's table groups
+ *  its rows by the prefix before the dot — `fs`, `net`, `task`, `config` and eight more — and §13 writes its own
+ *  example in those terms, `crabby auth pair --restrict shell,config`, so a dot-less token has to be readable as the
+ *  family it names. Splitting "the vocabulary has no such family" from "this baseline holds none of it" is what makes
+ *  the two refusals say different true things: the first is a typo, and the second is a rule — §9 keeps the shell off
+ *  every fresh install, so `--restrict shell` cannot be honoured anywhere, and answering it as an unknown word would
+ *  send the operator to check their spelling instead of the rule that stopped them. */
+export function familyMembers(token: string): readonly string[] {
+  return CAPABILITIES.map((entry) => entry.name).filter((name) => name.startsWith(`${token}.`));
+}
+
+export function restrictCapabilities(
+  baseline: readonly string[],
+  restrict: readonly string[],
+): Restriction {
+  const held = new Set(baseline);
+  const capabilities: string[] = [];
+  const refused: { name: string; reason: string }[] = [];
+  if (restrict.every((name) => name.trim().length === 0)) {
+    return {
+      capabilities: [],
+      refused: [
+        {
+          name: restrict.join(","),
+          reason:
+            "a restriction that names no capability is not a restriction; leave it off to mint the baseline set",
+        },
+      ],
+    };
+  }
+  for (const raw of restrict) {
+    const name = raw.trim();
+    if (name.length === 0) continue;
+    if (!name.includes(".")) {
+      // A dot-less token names a family rather than a capability, and every vocabulary name has a dot, so there is no
+      // ambiguity to resolve between the two readings. Expansion happens before the intersection and cannot move it:
+      // what is added to the set is still only what the baseline already held, so a family is a shorthand for narrowing
+      // and never a way to reach a member §9 or §6.1 withheld (§5.3, D-054, D-102).
+      const members = familyMembers(name);
+      if (members.length === 0) {
+        refused.push({
+          name,
+          reason:
+            `'${name}' is not in the capability vocabulary (§6.1), and it is not a family either — the families ` +
+            "are the prefixes the table's rows share",
+        });
+        continue;
+      }
+      const heldMembers = members.filter((member) => held.has(member));
+      if (heldMembers.length === 0) {
+        refused.push({
+          name,
+          reason:
+            `'${name}' names a family whose members are ${members.join(", ")}, and this interface's baseline holds none ` +
+            "of them, so honouring it would widen the set rather than narrow it (§5.3, D-054). Name a family the " +
+            "baseline holds, or leave `--restrict` off to mint the baseline",
+        });
+        continue;
+      }
+      for (const member of heldMembers)
+        if (!capabilities.includes(member)) capabilities.push(member);
+      continue;
+    }
+    if (!capabilityFor(name)) {
+      refused.push({
+        name,
+        reason: `'${baseOf(name)}' is not in the capability vocabulary (§6.1)`,
+      });
+      continue;
+    }
+    if (!held.has(name)) {
+      refused.push({
+        name,
+        reason: `'${name}' is not in this interface's baseline, and a restriction may only narrow`,
+      });
+      continue;
+    }
+    if (!capabilities.includes(name)) capabilities.push(name);
+  }
+  return { capabilities, refused };
+}
+
+export interface GrantExpansion {
+  /** Well-formed grants, every one of them checked by `isWellFormedGrant` before it was emitted. */
+  readonly grants: readonly string[];
+  /** Capabilities held that produced no grant, each with the reason. Withheld rather than dropped, because an
+   *  identity that holds `fs.write` and can write nowhere is a fact the Gateway should be able to report, not a
+   *  silence a user has to diagnose from a denied tool call. */
+  readonly withheld: readonly { readonly capability: string; readonly reason: string }[];
+}
+
+/** F-52's third question — how a capability reaches `PolicySubject.grants`. A capability *name* is only a grant's base:
+ *  §6.1 writes `fs.read:<root>` and `net.egress:<hostset>`, and `isWellFormedGrant` refuses a scoped capability with no
+ *  parameter, so the expansion has to supply one from somewhere honest.
+ *
+ *  For `scope: "root"` the only source is the configured workspace roots, one grant per root. With none configured the
+ *  capability is withheld rather than given a default, because `WorkspaceConfig`'s own reasoning applies: a root
+ *  invented by a default would be a path the agent may write to that the user never chose. For `hostset` there is no
+ *  source in `config.json` at all, so `net.egress` is withheld in every build until one exists — which is fail-closed
+ *  (§2's rule 03) rather than a gap, and it is reported so that a denied `net.fetch` has an explanation.
+ *
+ *  A capability that already carries a parameter is kept as it is rather than re-expanded against the configured roots:
+ *  a parameter somebody chose is a decision, and replacing it with whatever `config.json` says today would let a config
+ *  edit silently move an identity's authority. */
+/** What a restriction took away from an identity — the half of §13's report `grants` cannot carry on its own.
+ *
+ *  `PolicySubject.removedGrants` exists for one reason, and its own contract states it: "an ungranted capability is a
+ *  denial the user can fix, a restricted one is a feature that is not available to this client, and the two must not
+ *  print the same sentence". So the set is the interface's baseline minus what the identity actually holds: an identity
+ *  paired without a restriction has nothing in it, and one paired with `--restrict` names exactly what the restriction
+ *  removed (D-054). Without it, a narrowed client's refusal arrives as `deny` — "needs `fs.write`, which this identity
+ *  does not hold" — which reads as something the user could grant, and §13 asks for the other sentence: "not available
+ *  to this client", reported `platform-unsupported`-style rather than queued as an approval the same restricted client
+ *  may be unable to answer.
+ *
+ *  What is deliberately *not* in it: the capabilities §9 withholds from every fresh install and §6.1 withholds from a
+ *  remote interface. Those were never in the identity's baseline, so no restriction removed them, and reporting a rule's
+ *  own exclusion as somebody's narrowing would send the operator to look at a pairing nobody narrowed. `withheldReason`
+ *  answers those from the registry side instead — "not offered", with the reason the rule gives. */
+export function removedGrantsFor(
+  capabilities: readonly string[],
+  iface: ClientInterface,
+): readonly string[] {
+  const held = new Set(capabilities);
+  return capabilitiesFor(iface).filter((name) => !held.has(name));
+}
+
+export function grantsFor(
+  capabilities: readonly string[],
+  ctx: { readonly roots?: readonly string[] | undefined },
+): GrantExpansion {
+  const grants: string[] = [];
+  const withheld: { capability: string; reason: string }[] = [];
+  const roots = (ctx.roots ?? []).filter((root) => root.trim().length > 0);
+  for (const capability of capabilities) {
+    const spec = capabilityFor(capability);
+    if (!spec) {
+      withheld.push({
+        capability,
+        reason: `'${baseOf(capability)}' is not in the capability vocabulary (§6.1)`,
+      });
+      continue;
+    }
+    if (parameterOf(capability) !== undefined) {
+      const verdict = isWellFormedGrant(capability);
+      if (verdict.ok) grants.push(capability);
+      else withheld.push({ capability, reason: verdict.reason });
+      continue;
+    }
+    if (spec.scope === "none") {
+      grants.push(spec.name);
+      continue;
+    }
+    if (spec.scope === "root") {
+      if (roots.length === 0) {
+        withheld.push({
+          capability: spec.name,
+          reason:
+            `'${spec.name}' is root-scoped and no workspace root is configured, so there is no ${spec.scope} to name — ` +
+            "a root invented by a default would be a path the agent may write to that the user never chose",
+        });
+        continue;
+      }
+      for (const root of roots) {
+        const grant = `${spec.name}:${root}`;
+        const verdict = isWellFormedGrant(grant);
+        if (verdict.ok) grants.push(grant);
+        else withheld.push({ capability: grant, reason: verdict.reason });
+      }
+      continue;
+    }
+    if (spec.scope === "hostset") {
+      const set = HOST_SETS[spec.name];
+      if (set !== undefined) {
+        const grant = `${spec.name}:${set}`;
+        const verdict = isWellFormedGrant(grant);
+        if (verdict.ok) grants.push(grant);
+        else withheld.push({ capability: grant, reason: verdict.reason });
+        continue;
+      }
+    }
+    withheld.push({
+      capability: spec.name,
+      reason:
+        `'${spec.name}' is ${spec.scope}-scoped and nothing in \`config.json\` supplies a ${spec.scope}, so no ` +
+        `well-formed grant can be built for it (${spec.grants})`,
+    });
+  }
+  return { grants, withheld };
 }

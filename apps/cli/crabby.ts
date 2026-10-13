@@ -9,7 +9,7 @@
 // command cannot exist in one interface only.
 import process from "node:process";
 import { EXIT, type ExitCode } from "@crabby/api-contracts";
-import { dataLayout, detectProcess, resolveDataDir } from "@crabby/platform";
+import { dataLayout, detectProcess, homeDirectory, resolveDataDir } from "@crabby/platform";
 import { createRenderer } from "./output.ts";
 
 /** §7.1: "Output must be pipeable." `crabby config get limits | head -4` closes the pipe while there is still output
@@ -30,12 +30,15 @@ function isPipeError(error: unknown): boolean {
   );
 }
 
+import { type ApprovalVerb, runApproval } from "./commands/approval.ts";
 import { type AuthVerb, runAuth } from "./commands/auth.ts";
 import { type ConfigVerb, runConfig } from "./commands/config.ts";
 import { runDiagnostics } from "./commands/diagnostics.ts";
 import { runDoctor } from "./commands/doctor.ts";
 import { type GatewayVerb, runGateway } from "./commands/gateway.ts";
 import { runInit } from "./commands/init.ts";
+import { type JobVerb, runJob } from "./commands/job.ts";
+import { runSession, type SessionVerb } from "./commands/session.ts";
 import { runStatus } from "./commands/status.ts";
 import { runTask, type TaskVerb } from "./commands/task.ts";
 import { runTools } from "./commands/tools.ts";
@@ -139,7 +142,7 @@ export function parseArgs(argv: readonly string[]): Parsed {
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<ExitCode> {
   const parsed = parseArgs(argv);
   const facts = detectProcess();
-  const home = process.env.HOME ?? process.cwd();
+  const home = homeDirectory();
   const layout = dataLayout(
     resolveDataDir({
       home,
@@ -195,7 +198,10 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
   switch (noun) {
     case "init": {
-      return runInit(layout, renderer);
+      // §5 step 3 puts the workspace root at `$HOME/crabby-workspace`, and the home this process resolved is the one
+      // `--data-dir` did not override — so init gets the same `home` the layout was built from rather than reading the
+      // environment a second time and risking two answers.
+      return runInit(layout, renderer, home);
     }
     case "version": {
       return runVersion(facts, readVersion(rootPackageJson), renderer);
@@ -225,8 +231,17 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     case "auth": {
       return runAuth(verb as AuthVerb | undefined, rest, layout, renderer);
     }
+    case "approval": {
+      return runApproval(verb as ApprovalVerb | undefined, rest, layout, renderer);
+    }
     case "task": {
       return runTask(verb as TaskVerb | undefined, rest, layout, renderer);
+    }
+    case "job": {
+      return runJob(verb as JobVerb | undefined, rest, layout, renderer);
+    }
+    case "session": {
+      return runSession(verb as SessionVerb | undefined, rest, layout, renderer);
     }
     case "diagnostics": {
       return runDiagnostics(rest, layout, renderer);

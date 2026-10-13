@@ -110,6 +110,20 @@ genuinely differs.
 | `generic-http` (non-OpenAI-shaped template) | Anything else via a user-supplied request template | No | Rejected (O-033 closed): a user-authored request/response template is its own security review, and `openai-compatible` already covers the practical cases |
 | `mock/fake` | Deterministic test provider | Yes | Required so tests never hit live APIs (`SECURITY.md` §17) |
 
+**Implemented in M2l (D-100): `openai-compatible`.** `createOpenAiCompatibleProvider` in `packages/providers` is the
+first product adapter, and it is this row rather than a vendor's because §3.3's own reasoning is "implement families, not
+N vendors": one adapter serves Groq, OpenRouter, Together, Fireworks, LM Studio, vLLM, Ollama's compatibility layer,
+GitHub Models and D-041's user-defined endpoint, and a **preset is the same adapter with a name, a base URL and a model
+list** — the constructor takes an `id`, so `groq` and a user's own endpoint differ in nothing that could behave
+differently. What the user supplies is §3.3's three required things plus a §3.2 descriptor per model, because that is the
+part no endpoint in this family serves: `GET /models` returns ids and nothing else, so discovery would produce exactly
+what the conformance suite refuses — a model `listModels()` names whose limits are unknowable. What the adapter does with
+a call is §3.1's contract and §3.5's taxonomy, and what it does with a configuration is the "Custom-provider
+requirements" list below, implemented once in `packages/providers/config.ts` and called by the fake too, so the reference
+adapter and the product adapter cannot drift apart on the rules a user's endpoint is checked against. `ollama`'s native
+API, `anthropic`'s message format and `gemini`'s streaming metadata remain absent for the reason this section gives: each
+differs genuinely, and none of them has a caller in this build yet.
+
 Two distinct things, deliberately separated:
 
 - **Bundled presets** (O-028, accepted as the lean set — D-042): `groq`, `openrouter`, `ollama`, `anthropic`,
@@ -123,6 +137,12 @@ Custom-provider requirements:
 
 - Configured through `crabby provider add` or configuration, never through an agent-requested change
   (`config.write` is T3, `PROVIDERS_AND_TOOLS.md` §4.2).
+  **The configuration half is built (M2m, D-101); the verb is still M4's.** `provider.<id>` in `config.json` is §3.7's
+  own namespace, and `packages/providers/compose.ts` turns an entry into an adapter. What composes is an entry that needs
+  no secret: an inline key never validates, because this section's rule cannot be enforced after a mode-`0644` file
+  exists, and a `vault://` reference is refused at composition with the reason §3.7 gives below. `mock` is refused from
+  configuration although this section lists it as a preset — `SECURITY.md` §17 makes it a test instrument, and a task that
+  completed on it would be the demo this phase has refused to ship.
 - Required fields: name, base URL, model name(s); key supplied by reference to the vault (`§3.7`), never inline in
   a conversation or an ordinary config file.
 - Base URL validation: absolute `http(s)` URL, no embedded credentials in the URL, and a clear warning if the
@@ -156,7 +176,7 @@ labels it `estimated` rather than dimming it.
 | `auth` | Bad or expired credential | No | Message must name the credential, never show it |
 | `rate-limit` | 429 / quota window | Yes, with backoff honoring provider hints | Surface remaining quota when provided |
 | `overloaded` | 5xx, capacity | Yes, bounded | Escalate after N attempts |
-| `timeout` | Deadline exceeded | Yes, bounded | Distinguish connect vs first-token vs stall |
+| `timeout` | Deadline exceeded | Yes, bounded | Distinguish connect vs first-token vs stall. Since M2l the error carries which one tripped as a `deadline` field, plus `absolute` for D-074's fourth row — the budget the *runtime* supplies and the adapter reports (D-100), because "the endpoint never answered" and "the call ran out of budget" are different facts with different ladder behaviour. |
 | `context-overflow` | Request too large | Only after compaction | §3.4 |
 | `unsupported-capability` | Model refused a feature it claimed | No | Flag the descriptor for review; report to user |
 | `invalid-response` | Unparsable, truncated, or schema-violating output | Sometimes | Keep the raw fragment in audit, redacted |
@@ -226,6 +246,12 @@ Stage 3 rules:
   Crabby reconciles or asks, it does not blindly repeat.
 - The task record must show the switch: original model, chosen model, reason, stage reached, and whether any step
   was re-attempted.
+- **As far as M2 goes, the saved state this stage needs is real (D-095).** The loop commits a boundary at each committed
+  step, `GET /tasks/{id}/checkpoint` reports it beside the model that produced it — the "original model" of the sentence
+  above, written down before any switch exists to compare it with — and D-065's verdict answers whether a resume may pass
+  the step that failed. What is still unbuilt is the ask and the switch, and one ordering the documents disagree about:
+  stage 2 has to happen *before* the task is failed, because `AGENT_RUNTIME.md` §4.1 makes `failed` terminal and absorbing
+  and no resume travels backwards out of it (`docs/CONSISTENCY_REVIEW.md` F-50).
 - Where a conversation was generated partly on one model and continues on another, the context is re-budgeted for
   the new limits, and the user can see that happened.
 
@@ -238,6 +264,18 @@ is normal operation, a stalled stream is not.
 Provider credentials are secrets under `SECURITY.md` §7 and D-031: they are supplied once, stored in the vault, and
 referenced by name in configuration — `provider.groq.key = vault://groq`. Adapters receive a handle that yields the
 value at call time; the agent never reads it, and it never enters model context (`SECURITY.md` §7).
+
+**What this build does instead, stated rather than glossed (M2l).** There is no vault code: `crabby doctor` checks the
+directory's existence and mode, `GET /health` reports `vault: { managed: false }` rather than claiming a lock it cannot
+show, and nothing resolves a `vault://` reference. Since M2m that absence is also a
+refusal a user meets: `packages/providers/compose.ts` declines to compose an entry whose `key` is a `vault://` reference
+and names the milestone that changes the answer (D-101), because an adapter composed with a dropped credential answers
+`401` from the endpoint and reads as a broken network rather than an absent subsystem. So `ProviderConfig.apiKey` is a plain string and the adapter holds it
+for the lifetime of the process. Two duties follow for whoever composes an adapter, and they are the reason this
+paragraph exists: the key must never reach a log line (`packages/core/redact.ts` is defence in depth, not the control)
+and never enter model context — an adapter that put its own configuration into a prompt would leak the one secret the
+product is built to keep on-device. `docs/CONSISTENCY_REVIEW.md` F-56 records the gap and its closing condition, in the
+same shape as F-52's: a column and a sentence exist, and the writer that would fill them does not.
 
 ### 3.8 Per-model capability override by the user
 
@@ -304,7 +342,66 @@ Every tool — native, first-party, or discovered via MCP client — is describe
 | `availability` | Platform predicate; false yields a documented reason instead of a broken tool. |
 
 Registration rules: duplicate id is fatal at startup; a tool with an unparsable schema cannot register; `describe`
-output is versioned with the API contract so all four interfaces can render it consistently.
+output is versioned with the API contract so all four interfaces can render it consistently. A tool whose name is not in
+§4.2's registry cannot register either (D-098): §5 of `SECURITY.md` requires every tool to be classified before it may be
+exposed, and an executor is the only party that could introduce an unclassified one, so `assertRegistrable` in
+`packages/tools` refuses the declaration rather than letting the registry grow a row nobody priced.
+
+**What this build declares (M2k, D-098).** `packages/tools` implements eight of §4.2's forty-five rows — `file.read`,
+`file.list`, `file.stat`, `file.write`, `file.edit`, `file.delete`, `file.move`, `fs.search` — and each carries the fields
+above that belong to an executor rather than to a registry: `inputSchema`, `limits` (`fsTimeoutMs`, the same 10 s D-074
+set for `fs.*`), `idempotent` and `sideEffects`. The four that answer §7.3 and §6.2 are the interesting ones, and they are
+not uniform within a family:
+
+- reads (`file.read`, `file.list`, `file.stat`, `fs.search`) — `idempotent: true`, `sideEffects: "none"`.
+- `file.edit` — `idempotent: true` (it replaces whole content, so a repeat reaches the same end state and cannot
+  compound), `sideEffects: "local"`.
+- `file.write`, `file.move` — `idempotent: false`. `file.write` refuses a path that already exists, so a repeat corrupts
+  nothing but does not reproduce its outcome either: the first attempt returns ok and the second returns `exists`, and a
+  resume that cannot tell which it is looking at has no business passing the step.
+- `file.delete` — `idempotent: true` **and** `sideEffects: "irreversible"`, which is not a contradiction but the two
+  questions §4.1 asks: `sideEffects` answers whether the user's data can be got back (the executor moves it into the
+  task's scratch trash, which D-064 prunes 24 h after the task ends — a courtesy, not an undo the loop may promise), while
+  `idempotent` answers whether repeating the call makes it worse (a file already gone cannot be deleted twice).
+
+`availability` stays out of the declaration on purpose. Whether a tool is present in a given process is a fact about a
+build and a runner, and a declaration that asserted it would be a second source for what `GET /tools` answers — the reason
+that route still reports these five fields as pending (`PENDING_RECORD_FIELDS`) is that no runner composes an executor
+yet, not that the fields are unknown (`docs/CONSISTENCY_REVIEW.md` F-55).
+
+Two rules came with the executor because §4.4 required them and nothing could implement them before: **the output cap
+(64 KiB, `MAX_TOOL_OUTPUT_BYTES`) is applied to the *wrapped* text**, cut on a UTF-8 boundary, with the whole result
+written to the task's scratch directory and its path printed in the label — capping the unwrapped content instead would
+risk truncating the delimiter itself, and a boundary that no longer closes is §10's defence with the door open; and
+**the delimiter carries a nonce** (`SECURITY.md` §10 has its shape), re-rolled if the content happens to contain the
+closer and thrown rather than emitted if six rolls all collide, because bytes in a user's file must not be able to end
+the block they are inside.
+
+**What this build declares now (M2ab, D-106).** Fourteen of §4.2's forty-five rows have an executor — the eight above,
+the scheduler's `cron.schedule`, the two conversation rows, the three task rows and `net.fetch` — carried as fifteen
+declarations, because `file.stat` shares §4.2's row with `file.list` and has no row of its own. The M2k paragraph above
+stays as its snapshot, including the sentence that `GET /tools` reports the five runtime fields as pending because "no
+runner composes an executor yet": F-55's closing amendment superseded it, and the route now merges an executor's
+declarations into the registry rows and reports `runtime.implemented`, with `pendingRecordFields` surviving only for rows
+nothing declares. What `net.fetch` added to the two rules above is a third, and it is about size rather than framing:
+**the download stops at the cap** instead of the framing cutting afterwards, because a response body's length is chosen
+by whoever answers, and D-064's promise about what the model sees has to be a promise about what lands on a phone too.
+The row is also the first to declare `sideEffects: "external"`, which is what lets §6.2's cancellation evidence say that
+an effect may have landed somewhere this install cannot inspect.
+
+**What this build declares now (M2ac, D-107).** Sixteen of §4.2's forty-five rows have an executor — the fourteen above
+plus `config.get` and `config.set` — carried as seventeen declarations. The M2ab paragraph above stays as its snapshot.
+These two are the first rows whose price is about *who can answer* rather than about how loud a prompt is: `config.set` is
+**T3**, D-085 confines a T3 signature to the TUI and the Web control UI, and M2 ships neither, so a run whose model asks
+to change configuration parks at a prompt no CLI can sign and the request expires rather than runs. That is asserted
+rather than merely documented (`tests/integration/config.test.ts` drives a real run into exactly that park), because a
+tier whose consequence nobody has watched is a tier in a table. What the read added to the rules above is a fourth, and it
+is about the answer rather than the act: **a configuration read is scrubbed by the same derivation the route answers
+with** — `configForReading` in `packages/core`, one implementation and two callers — so §4.2's "secret *names* only, never
+values" is not a rule either of them has to remember. Neither row is wrapped as untrusted, because this is Crabby's own
+state rather than bytes from elsewhere, and both take the `fs.*` clock from D-074's table: the act is a file read and a
+file write, so the tool borrows the deadline of the thing it touches instead of inventing a fifth number for a document on
+the same disk.
 
 ### 4.2 Initial tool set with risk-tier assignment (closes O-020)
 
@@ -325,8 +422,8 @@ may relax only where a floor exists (T3 has no relaxation path in the first rele
 | `task.create` | `task.create` | **T1** | **T2** if the new task itself carries T2 steps; the task inherits its own tier, it does not inherit the caller's. |
 | `task.status` / `task.history` | `task.read` | **T0** | |
 | `task.cancel` | `task.cancel` | **T1** | **T2** for cross-session or "cancel all"; per `ARCHITECTURE.md` §10. |
-| `config.get` | `config.write`-independent read | **T0** | Secret *names* only, never values. |
-| `config.set` | `config.write` | **T3** | Includes changing permissions, roots, or retention. |
+| `config.get` | `config.write`-independent read | **T0** | Secret *names* only, never values. **Executed since M2ac** (`packages/tools/config.ts`, D-107): one dotted key or the whole document, one line per leaf and each marked as a default or as an override, so a model can tell a user whose number a deadline came from. The values a reader may see are scrubbed by `configForReading`, the same derivation `GET /api/v1/config` answers with, and a `provider.<id>.key` that is not a `vault://` name is withheld and named in the answer's `redacted` list. |
+| `config.set` | `config.write` | **T3** | Includes changing permissions, roots, or retention. **Executed since M2ac** (`packages/tools/config.ts`, D-107): one key and never a deletion, because setting and unsetting are different acts on the document that decides permissions and this row prices only the one it names. The concurrency token is read and presented by the sink rather than declared as an argument (D-099: a declared field is never an authority). On a build with no TUI or Web control UI the T3 request parks and cannot be answered (D-085), which is the rule working rather than a fault to retry around; the user's own path to the same act is `crabby config set` or `PUT /api/v1/config`. |
 | `tunnel.status` | read-only | **T0** | |
 | `tunnel.enable` / `tunnel.stop` | `tunnel.enable` | **T3** | Must list which paired identities become reachable (`SECURITY.md` §13). |
 | `ext.list` / `ext.info` | read-only | **T0** | |
@@ -334,7 +431,7 @@ may relax only where a floor exists (T3 has no relaxation path in the first rele
 | `ext.install` (executable kind) | `ext.execute` | **T3** | Blocked in the first release regardless of tier (D-038). |
 | `ext.uninstall` | `ext.install` | **T2** | `--purge-data` is **T3**. |
 | `mcp.connect` / `mcp.tools` | `ext.install` | **T2** | Shows exact command line or URL. |
-| `net.fetch` | `net.egress:<host>` | **T2** | **T1** only for a user-curated allow-list; response is untrusted content. |
+| `net.fetch` | `net.egress:<host>` | **T2** | **T1** only for a user-curated allow-list; response is untrusted content. **Executed since M2ab** (`packages/tools/net.ts`, D-106): GET only, because a method that mutates remote state is the next row's `http.request`; the allow-list that moves this row to **T1** is `net.allowList` in `config.json`, and the grant an identity holds names that *set* rather than its members, so a host nobody curated reaches the tier rule below instead of being denied outright. |
 | `http.request` (non-GET) | `net.egress` | **T2** | Any method that mutates remote state; carries destination host in the approval text. |
 | `provider.invoke` | `provider.invoke` | **T1** | **T2** when the selected model is paid (`provider.billing`). |
 | `shell.run` | `shell.run` | **T2** per command | Capability itself is off by default. Tier computed per command, not per tool; escalation table in §4.3. |
@@ -372,8 +469,21 @@ Tier is computed per call, from the validated arguments:
   in-tree and is versioned with the release (O-032 closed by D-066); it is deliberately not updatable by a skill.
 - Redirection, command substitution, and `;`/`&&` chains force a re-evaluation of the *whole* chain — a `T0`
   command with a `> ~/.bashrc` redirect is a write.
-- `file.*` — escalation by resolved path after symlink resolution.
-- `net.fetch` — escalation by destination: any host not in the allow-list is T2 with the host named in the prompt.
+- `file.*` — escalation by resolved path after symlink resolution, and by two facts about the filesystem: `file.edit`
+  of a path that already exists and `file.move` onto an occupied destination are the §4.2 bumps to T2. Neither can be
+  decided from the arguments, so neither travels in them (D-099): the runtime observes and passes what it saw on
+  `ToolCall.facts`, a channel the model cannot write to, because a fact smuggled in as an argument is either rejected by
+  the rule below or declared in the model-visible schema — and `SECURITY.md` §10's "a declared field is never an
+  authority" is exactly the sentence that forbids the second. The observation is recorded in `tool.call.proposed` and
+  hashed into the approval's binding, so the prompt shows what policy saw and an approval signed against "this file did
+  not exist" cannot be spent on a step that found it did.
+- `net.fetch` — escalation by destination: any host not in the allow-list is T2 with the host named in the prompt. Since
+  M2ab the list is `net.allowList` in `config.json` and this comparison is `packages/policy`'s alone (D-106): the
+  executor is never given the list, because a second copy would be a second opinion about which hosts are cheap. An empty
+  list is not a refusal and not a hole — it is exactly the state this bullet describes, where every destination is a new
+  host. What the executor does judge is the destination a *redirect* reaches: hops are followed while the host stays the
+  one this rule priced and refused the moment a server substitutes another, because spending a T1 auto-allow or a T2
+  approval on a host neither saw would be this bullet's rule enforced against the wrong destination.
 - New provider model discovered → its descriptor is re-validated; a capability that vanished since registration must
   produce `unsupported-capability`, not a silent degradation.
 - Any tool receiving arguments it did not declare → reject before policy, so a schema mismatch can never be
@@ -382,7 +492,9 @@ Tier is computed per call, from the validated arguments:
 ### 4.4 Execution rules
 
 - Order of checks, always: schema validation → capability check → tier/approval → execution → result validation.
-  A tool never runs "to see if it works".
+  A tool never runs "to see if it works". The runtime's observed facts are gathered between validation and the capability
+  check (D-099), because §4.3's file escalations are argument-dependent in the only sense that matters: they depend on
+  what the arguments *are about*, and the party that knows is the one about to touch the filesystem.
 - Every execution carries: timeout, output byte cap, and a cancellation signal. On Termux, spawn in a process
   group so a kill reaches children (`SECURITY.md` §9). A timeout ends the call with the code `timeout` and the class
   name of the deadline that tripped, never as a generic failure — "it took too long" and "it did not work" need
@@ -390,8 +502,15 @@ Tier is computed per call, from the validated arguments:
 - Child environment is an explicit allow-list; the parent's provider keys are not inherited.
 - Temp files live in a per-task scratch directory with a documented lifetime and automatic cleanup on task end,
   with leftovers reported rather than silently retained.
-- Results above the cap are truncated *and labeled*; a tool must not pretend a partial result is complete.
-- Output is delivered to the model as delimited, attributed, untrusted content (`SECURITY.md` §10).
+- Results above the cap are truncated *and labeled*; a tool must not pretend a partial result is complete. Concretely
+  (D-098): the cap is 64 KiB of the **wrapped** text — the same number storage uses for an event payload, so an overflow
+  is cut once, by the executor, rather than twice, by whoever stores it — the cut falls on a UTF-8 boundary so the model
+  never receives half a character, the full bytes go to the task's scratch directory, and the label names both the
+  truncation and the path the rest is at. The label and the runtime note sit *outside* the delimiter, because a note
+  inside untrusted content is content.
+- Output is delivered to the model as delimited, attributed, untrusted content (`SECURITY.md` §10), and since M2k that
+  sentence has a shape rather than an intention: `wrapUntrusted` in `packages/tools` emits the marker §10 specifies, with
+  a nonce in both the opener and the closer.
 
 ### 4.5 Scheduled and background work
 
@@ -437,13 +556,26 @@ interface:
 | Provider — idle stream | 45 s | A stream that goes quiet is dead, not slow. |
 | Provider — absolute | 300 s | The per-call ceiling, not the per-task one. |
 | `fs.*` | 10 s | Storage on a phone can be slow; it cannot be this slow. |
-| `net.fetch` | 20 s total | One request, redirects included, so a redirect chain cannot restart the clock forever. |
+| `net.fetch` | 20 s total | One request, redirects included, so a redirect chain cannot restart the clock forever. Enforced since M2ab by handing the executor the loop's own `AbortSignal` and no timer of its own, and a same-host chain is bounded at five hops (D-106), so a chain can neither restart the clock nor multiply the requests one pricing bought. |
 | `shell.run` | 120 s wall clock | Killed as a process group so children go with it. |
 | SQLite busy | 5 s | `PRAGMA busy_timeout`; longer and the UI starts to look frozen instead of busy. |
 | Extension, MCP | tool class + 5 s | Adapter overhead, so a slow plugin is not blamed on the tool or the host. |
 | Parallel tool steps in one task | 2 | More than two on a phone trades wall-clock time for memory pressure. |
 | Concurrent provider requests | 4 | Per Gateway, shared by all interfaces. |
 | Queued tasks | 5 | `task run` refuses past that, with the count in the message; a silently growing queue is a leak with good manners. |
+| Per-task steps | 25 | Tool calls through the gate, executed **or refused** (D-088). A budget that counted only executions would leave unbounded the loop `SECURITY.md` §6.3 forbids. |
+| Tool calls per completion | 2 | The parallel-steps row above, reused as a per-response cap rather than invented twice (D-088): a completion proposing three is asking for parallelism the device budget does not have. |
+| Provider attempts | 6 | D-043's floor is five and D-064's schedule has five delays, so the default is one attempt plus five retries. `limits.providerAttempts` cannot be set below 5, because "at least 5 attempts (configurable)" is a floor (D-094). |
+| Cancellation settle (`immediate`) | 5 s | How long the runtime waits for a step that will not stop before it stops waiting and records `AGENT_RUNTIME.md` §6.2's uncertainty (D-090). `finish-step` gets no second clock: the step keeps the deadline it was given. |
+
+Four of the limits this section's opening sentence requires still have **no number**, and they are recorded rather than
+priced by guess (F-41, F-45): a per-task wall clock, which would have to exclude D-064's approval window because the two
+clocks are separate by D-074 and a task paused for a human is not a task that is running long; a `finish-step` cancellation window,
+which is deliberately the step's own deadline rather than a second clock beside it (D-090); and a token budget and an
+optional cost ceiling, which both need `AGENT_RUNTIME.md` §8's context accounting and cannot be enforced before it
+exists. The per-tool deadlines below are enforced for the three classes this table prices — `fs.*`, `net.fetch`,
+`shell.run` — and a tool in no class runs under cancellation alone, with `deadlineMs: null` in its
+`tool.execution.started` event so the absence is visible instead of implied.
 
 Every row is a `limits.*` key in `config.json` — readable with `crabby config get limits`, editable in the same screen
 as the output caps (`docs/review/WEB.md` W11-07) so there is one place where the machine's budget lives. Two clocks stay

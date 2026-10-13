@@ -84,7 +84,7 @@ the F-08/F-10/F-11 pattern this set has been built to refuse.
 | `queued` | `planning`, `awaiting_approval`, `cancelling`, `failed`, `interrupted` | §3.1's Plan → Execute is the reason `running` is not reachable from here: nothing executes without a plan, even a one-step plan. A task may need approval before its first step, so `awaiting_approval` is |
 | `planning` | `awaiting_approval`, `running`, `cancelling`, `failed`, `interrupted` | The plan is what the executor consumes; `completed` is unreachable because a plan that finished describing work has not done it |
 | `awaiting_approval` | `running`, `planning`, `cancelling`, `failed`, `interrupted` | `running` only on an answer naming the action it approves (§5.3, D-052's `once` scope); `planning` because a denial that leaves other work possible re-plans rather than dies (§5.5, D-043's ladder) |
-| `running` | `completed`, `failed`, `cancelling`, `interrupted` | The only edge into `completed` in the whole table, and §6.1's step 6 is why `cancelled` is reached through `cancelling` and never from here |
+| `running` | `completed`, `awaiting_approval`, `failed`, `cancelling`, `interrupted` | The only edge into `completed` in the whole table, and §6.1's step 6 is why `cancelled` is reached through `cancelling` and never from here. `awaiting_approval` is D-087's amendment, and M2d's loop is what made it unavoidable: §5's rule 1 evaluates *every* action, so a task that executed one step and then meets a gated one must be able to ask again — as the table stood, a second approval in one task had no legal representation and the only way to request one was to fail or interrupt the task |
 | `cancelling` | `cancelled`, `failed`, `interrupted` | No `completed`: §6.1 allows the current step to finish, capture its output, and then **marks the task cancelled**, which is how a cancellation stays a cancellation. No return to `running`: "the runtime MUST NOT start another ordinary execution step merely because the current step completed after cancellation was requested" |
 | `completed`, `failed`, `cancelled` | — | Terminal and absorbing. §4.1's "distinguish successful completion from cancellation, failure, and incomplete execution" is only true at the end of a task's life if nothing moves it afterwards; a retry is a new task with its own history, not a resurrection |
 | `interrupted` | `queued`, `planning`, `awaiting_approval`, `running`, `cancelling`, `failed` | §7.1 restores "the latest valid task state" and §7.2 decides which of these is reachable for a given task: `running` is legal **only** when the recovery record carries a still-valid approval covering the step, which is why the edge exists in the table and is refused by the runtime otherwise. `completed` is not an option — a task that was interrupted did not complete |
@@ -107,6 +107,18 @@ To keep responsibilities from overlapping across `ARCHITECTURE.md`, `SECURITY.md
 | **Event** | An append-only record that something happened (step started, tool failed, approval answered). | Authoritative current task state, or an approval grant. |
 | **Cancellation** | A request plus its progression against a running task. | Proof that the underlying external operation actually stopped. |
 | **Checkpoint** | Saved state used to resume safely. | A guarantee that external side effects can be reversed or replayed. |
+
+**Decided in M2 (D-095) — where the checkpoint's owner sits, and what the row refuses to hold.** The owner is
+`packages/agent-runtime/checkpoint.ts`: it commits D-065's boundary at each step the run commits, it commits a second kind
+of boundary when a run suspends at an approval, and it computes the verdict a resume reads. The row holds the run's working
+context — the messages a continuation would be built from — plus the step count, the model, and the sequence number the
+boundary was written at; it holds **no grants and no action arguments**, and that absence is the second column of the table
+above made concrete. A record that could hand back a grant is a record that authorizes, which §7.2 forbids; a record that
+copied an approved action's arguments is an action the arbiter never saw, which §5's rule 4 forbids. The third column is
+honoured the same way: the checkpoint does not promise an effect can be undone, it reports whether the log shows one was
+*recorded*, and where the log is silent the answer is `re-ask`. Nothing in this table is enforced by prose: `verdictFor` is
+one function, its four answers are `RESUME_VERDICTS` in `@crabby/api-contracts`, and `checkpoint.test.ts` asserts each one
+against a sentence above.
 
 ### 4.2 Controlled parallelism
 
@@ -177,7 +189,85 @@ arguments is legal, and it records `supersedes` so the chain is readable. An app
 approved is the runtime's lateness and is deliberately **not** counted as a refusal, because a pause caused by our own
 queueing would punish the user for it.
 
-The risk tiers and their per-tool assignment are decided (`SECURITY.md` §6, `PROVIDERS_AND_TOOLS.md` §4.2, D-046), and so is the classifier that nudges `shell.run` upward (D-066, closing O-032 — an escalation hint, never the boundary). Approval **persistence** is decided as *absent* in v1 (D-052), and policy configuration is one file in one format, `config.json`, whose schema is the artifact `crabby config schema --json` prints (D-060). What remains open in this area is a number, not a design: the timeout thresholds and escalation tuning that M2 sets against real usage. `SECURITY.md` owns the policy and threat-model definition.
+Signing is a surface question and the arbiter decides it, so `answer` takes `via` — the interface the answer arrived
+on — and refuses a tier that surface may not sign (D-085, `SECURITY.md` §6.2). Refusing changes nothing: the row stays
+`pending` for a surface that may sign it, and no event is written for a refusal that moved no state. The two §4.3
+routes (`GET /approvals`, `POST /approvals/{id}/decision`) call this same object rather than querying the table, which
+is the only reason "answer from anywhere" is a fact and not a hope; `Idempotency-Key` is accepted on the decision route
+and not required, because the row itself refuses a second answer, so a replay is a convenience and not a guard.
+
+The risk tiers and their per-tool assignment are decided (`SECURITY.md` §6, `PROVIDERS_AND_TOOLS.md` §4.2, D-046), and so is the classifier that nudges `shell.run` upward (D-066, closing O-032 — an escalation hint, never the boundary). Approval **durability** is real from M2 on — one row per request in `crabby.sqlite3`, which is what makes `once` mean
+once *across a restart* (`SECURITY.md` §17) — while approval **reuse** ("remember this") is decided as absent in v1
+(D-052); the two were one word in this paragraph until the table existed, and the sentence is now split so the second
+meaning cannot be read as the first. Policy configuration is one file in one format, `config.json`, whose schema is the artifact `crabby config schema --json` prints (D-060). What remains open in this area is a number, not a design: the timeout thresholds and escalation tuning that M2 sets against real usage. `SECURITY.md` owns the policy and threat-model definition.
+
+### 5.2 The loop that asks
+
+The arbiter answers; something has to ask. `packages/agent-runtime/loop.ts` is that something, and it lives in this
+package for the reason in D-003 — a rule the Gateway owns is a rule only the Gateway can follow. Per action it runs
+`PROVIDERS_AND_TOOLS.md` §4.4's pipeline in order (schema validation → capability check → tier/approval → execution),
+and the six rules above are its behaviour rather than its aspirations: it evaluates before executing (1), the request it
+opens carries §6.3's fields because `packages/policy` builds them (2), the request keeps its task and its binding (3),
+one approval is spent on one action (4), a denial is respected *and the model is told what was refused* so it can plan
+around a fact instead of guessing why nothing happened (5), and the action is re-evaluated at the moment of execution
+(6).
+
+Four properties of that last rule are worth stating, because each is a way the loop could have been written more
+conveniently and less safely:
+
+- **The approval is consumed before the action runs, never after.** The other order buys nothing — a failed execution
+  still spent its `once` (D-052) — and it costs a duplicate side effect if the process dies in between, which is what
+  §7.3 forbids. `consumed` is a state of the row, so it carries an event of its own rather than reusing `answered`.
+- **Policy is asked again at the moment of execution instead of being trusted from the moment the prompt was built.**
+  Two things can change while a prompt is open: the identity's grants — a `crabby auth revoke` landing mid-prompt has to
+  be honoured by *this* execution — and since M2j the *watching* half is answered too, outside this document, because a
+  revoked identity's live streams are ended by the route that owns delivery (`docs/INTERFACES_AND_API.md` §3.1, D-096) —
+  and the tier, because §8's re-check after resolution
+  means a path that resolves outside the workspace is not the action that was signed. In both cases the signed row is left **unspent**: it expires
+  inside D-064's window, and per D-084 an approval the runtime never ran is not a refusal, so it does not count toward
+  the ladder below.
+- **A transaction is synchronous, so no effect happens inside one.** Each write phase commits a state and its events
+  together, and the provider call and the tool execution happen *between* phases — §5.1's pairing rule, and the reason a
+  stream never learns about a write that a rollback took back.
+- **An answer wakes the run, and the party that records the answer is the party that wakes it.** A gated step suspends
+  the run rather than blocking it, so `SECURITY.md` §6.3's "answer from anywhere" needs a second half nobody else can
+  supply: whoever records the decision has to hand it to the run that parked, because the loop cannot poll for an answer
+  it is not executing to see. Both decisions wake it, and that is not symmetry for its own sake — `resume` spends an
+  approval by executing the gated step once and spends a denial by making the refusal the step's result, which is §5's
+  rule 5 (a denial is respected and the model is told) arriving as a continuation rather than as a hang. The wake happens
+  after the answer's transaction commits, never inside it, because a run resumed against a rolled-back row would execute
+  a step nobody approved. Across a restart there is nothing to wake: `SuspendedRun` holds the proposed call in memory and
+  §8.2 keeps `call.args` out of the checkpoint, so D-065's verdict for that boundary is `re-ask` and the honest answer is
+  the one `Runner.resume` gives (`not-parked`), with `POST /tasks/{id}/resume` still absent beside it (F-47, F-58).
+- **The model is offered only the tools policy has cleared for this identity**, which is §4.4's rule applied to the offer
+  list and not only to the call: a model told about a tool its identity cannot use proposes it, and the user is then
+  shown a refusal for something they were never able to ask for. The withheld reasons are ordered by whether the reader
+  can act on them — no Termux on this device, and not shipped in this release, come before a grant the user could add,
+  because a reason that suggests a repair which cannot work is worse than no reason.
+
+**The ladder.** `SECURITY.md` §6.3 requires that repeated denial of the same class pause the task and surface it to the
+user rather than loop, and prices no number; D-086 prices it at **two refusals of the same tool in one task**. The
+arbiter reports the count and the loop decides what the count means, which is D-084's split kept intact. A pause is not
+a tenth state — the nine states of §4.1 are decided — so a paused task sits in `awaiting_approval`, the one non-terminal
+state that means "a human must act", with **no pending request in the queue** and a `task.progress` event naming the
+tool, the count, the reason and the next action. That last field is what makes a pause visible rather than mysterious:
+§7.2 requires a paused task to carry a clear, user-visible reason, and a state with an empty queue and no explanation is
+precisely the silence §6.3 forbids.
+
+The step budget is the other half of "rather than loop", and it counts a refused call as well as an executed one
+(`PROVIDERS_AND_TOOLS.md` §5.2, D-088): a budget that only counted executions would leave unbounded the exact case the
+pause exists for.
+
+What this loop does not have, and does not pretend to: **the retry-then-ask ladder** — a provider error fails the task
+and the `task.failed` event says that no retry was attempted, because D-043's five attempts inside D-064's schedule are
+their own slice; **§6's cancellation settle** — an abort moves the task to `cancelling` and stops, since §6.2's evidence
+about whether the operation stopped is the cancellation manager's to produce and `transition()` refuses the entry
+without it; **§8's context budgeting and compaction**; **a conversation store** — a run suspended at a prompt holds its
+messages in process memory, so a restart is §7.1's and §7.2's business rather than something the loop reconstructs; and
+**any tools of its own** — the loop has an executor interface and no tools built into it, because §19 makes adapters
+implement the runtime's abstractions and never the reverse. `ARCHITECTURE.md` §18's `packages/tools` has existed since M2k
+and implements eight of §4.2's rows (D-098), and the loop still does not import it: a run offers a model only what a
+composed `ToolSurface` declares, and nothing an executor cannot run.
 
 ## 6. Cancellation Behavior
 
@@ -196,6 +286,30 @@ The runtime MUST:
 
 The runtime MUST NOT start another ordinary execution step merely because the current step completed after cancellation was requested.
 
+**Decided in M2 (D-089, D-090).** The six steps are `packages/agent-runtime/cancellation.ts` and the loop's cooperation
+with it, split the way this section splits them: the manager records the request and is what stops new work being
+scheduled (1, 2), the loop is what allows a step to finish and captures its output (3, 4) because only the party running
+the step knows whether it finished, and the manager writes the outcome once the loop reports (5, 6).
+
+**A request is recorded durably without a new table.** The task's state *is* the record that survives a restart —
+`cancelling`, which §7.1 turns into `interrupted` and §7.2 then refuses to resume into `running` — and the event log
+carries who asked, when, in which mode, and why. Only the `AbortController` for the run in flight is process memory,
+because a signal is not a fact about the task and there is nothing to recover. A second request for one task is the same
+fact relayed again and produces no second event, except when it escalates the mode, which §6.2 requires and the log
+records. Step 5's checkpoint half is real since M2i, and the settle
+event reports it rather than promising it: the boundary was written by the loop inside the phase that recorded the step, so
+the manager's job at the settle is to say **where the run stood** — the step, the boundary kind, its sequence number — or to
+say plainly that no boundary was ever committed, which is the sentence that keeps a payload from reading as "there was
+nothing to save". Reading rather than writing is the point: a second writer of one row is how a resume point comes to
+disagree with the log, and §4.4 already gave the two halves different owners.
+
+**Two modes, because §6.2 requires both.** `finish-step` is this section's policy and the default: the step in flight
+keeps the deadline it was already given (D-074's per-tool number, or the provider's absolute ceiling) and gets no second
+clock. `immediate` is §6.2's safety-critical override: it aborts the in-flight call, and it bounds how long the runtime
+waits for a step that will not stop at `limits.cancellationSettleMs` (D-090) — after which it stops waiting and records
+the uncertainty rather than claiming a termination nobody confirmed. An `immediate` request over a recorded `finish-step`
+one escalates and is logged; the reverse is not a thing a second tap may do.
+
 ### 6.2 Cancellation limitations
 
 Some tools and external operations cannot be stopped immediately or may continue after Crabby stops waiting for them.
@@ -204,9 +318,35 @@ The runtime MUST distinguish between a cancellation request and confirmed termin
 
 Where an external action may already have taken effect when cancellation arrived (for example, a message that was already being sent), that uncertainty MUST be recorded explicitly on the task and MUST NOT be resolved by blindly re-executing the action.
 
+**What the two facts mean, decided in M2 (D-089).** §6.2 requires the distinction and does not say how a runtime is
+supposed to *know* either half, which is the question that had to be answered before a row could be written.
+`terminated` is true only when the operation **reported** that it stopped — an executor that returned after its signal, or
+a step that was never started. A step the runtime walked away from, because a deadline fired or an `immediate`
+cancellation stopped the waiting, is `terminated: false`: "we stopped waiting" is a fact about the runtime and this
+sentence is about the operation. `effectsUncertain` was true for **every tool step** that was in flight, because §4.1's
+tool record includes `sideEffects` and no tool declared it (`PENDING_RECORD_FIELDS`), so the runtime could not tell a read
+from a send and failed closed; a tool declaring `sideEffects: none` was named as the only thing that should ever make it
+false, and as a change to make in the registry rather than in the manager. **M2k made that change and left the rule
+standing (D-098).** `packages/tools` declares `sideEffects` for the eight rows it implements, and the loop derives the
+evidence from the declaration: a cancelled `file.read` (`"none"`) is `effectsUncertain: false` and a cancelled
+`file.delete` (`"irreversible"`) is `true`, which is the first time §6.2's second fact has been a measurement rather than
+a posture. A surface that declares nothing still gets the constant, because the fail-closed default is what made it safe to
+wait for a declarer instead of guessing one. A **provider call** in flight is recorded
+as `effectsUncertain: false` — a completion request affects nothing on the user's device beyond the provider having seen a
+prompt it was already sent — and because that is a classification rather than a measurement, `inFlight` travels in the
+event payload beside both booleans, so a reader who disagrees can see which judgement was made.
+
+The evidence is written once, by the manager, into **both** places a reader looks: the `task.cancelled` event, and
+`TaskRecord.cancellation` on the task itself (D-091, closing F-46). The second is the one §6.2's wording asks for and
+§5.2's recovery rule needs — a client that missed the event polls `GET /tasks/{id}`, and a client that has to read the
+event log to learn whether an external effect is in doubt is a client one step from re-running the action, which §7.3
+prohibits. It is written at the settle and is absent while the task is merely `cancelling`, because the state already says
+a request was recorded and the evidence does not exist until the step in flight has settled: a record showing
+`terminated: false` before anything had terminated would be a guess in a field a user reads.
+
 Safety-critical intervention MUST override the normal finish-current-step behavior when continuing an operation would create unacceptable harm or leak sensitive data.
 
-The definition of an atomic execution step is decided — it is the committed step boundary that D-065 resumes across and `SECURITY.md` §6.3 approves at — and the escalation mechanism is the tier ladder in `SECURITY.md` §6. Timeout thresholds remain a tuning value (the 64 KiB and temp-lifetime caps are decided in D-064; a per-tool duration is not), and that distinction is the point: an undecided number is a default to be measured, not a gap in the contract.
+The definition of an atomic execution step is decided — it is the committed step boundary that D-065 resumes across and `SECURITY.md` §6.3 approves at — and the escalation mechanism is the tier ladder in `SECURITY.md` §6. Timeout thresholds are defaults with a named override path rather than undecided: the 64 KiB and temp-lifetime caps are D-064's, three tool classes have durations in D-074's table (`fs.*` 10 s, `net.fetch` 20 s, `shell.run` 120 s) which `packages/agent-runtime` enforces, and the rest of §4.2's tools have no priced duration at all (F-41, F-44) — an unpriced tool runs under cancellation alone and its `tool.execution.started` event carries `deadlineMs: null` so the absence is visible instead of implied. That distinction is still the point: an undecided number is a default to be measured, not a gap in the contract, and inventing one for `memory.save` would be a number nobody decided and nobody could defend.
 
 ## 7. Automatic Recovery and Resume
 
@@ -226,6 +366,24 @@ Recovery MUST account for:
 - Relevant errors and recovery attempts.
 - External side effects that may already have occurred.
 
+**Decided in M2 (D-092).** Recovery is `packages/agent-runtime/recovery.ts`, called by the Gateway at startup beside
+D-065's retention prune, and it does three things. **Every non-terminal task becomes `interrupted`, uniformly** — D-083's
+`recoveryTarget` is a function precisely so this cannot improvise a different answer per state, and a process that died
+mid-round leaves no trustworthy record of what the model had been told. **A cancellation requested before the restart is
+settled rather than resurrected**: the request is on the record (§6.1's step 1, written at the request and not only at the
+settle — that is why D-091 was amended), so recovery moves the task `cancelling` → `cancelled` with §6.2's evidence set to
+the only truthful answer after a crash, `terminated: false`, `effectsUncertain: true` and `inFlight: "unknown"`. Routing it
+through `interrupted` instead would put a task the user asked to stop back in the state a runner resumes from, which is the
+one recovery outcome §6 exists to prevent. **Nothing resumes automatically in this build**, and the report says so per task.
+The saved state is no longer the missing piece — M2i made D-065's boundary durable and recovery reads its verdict — and what
+is missing is the party that would use it: nothing in this Gateway drives a task, so §7.1's "attempt to resume" is
+orchestration without an executor, and `packages/tools` and a product provider adapter arrive with it. What recovery does —
+and does per task — is leave the task paused with a clear, user-visible reason in the `task.interrupted` event, name the
+still-valid approval a runner *would* be allowed to resume under, and carry D-065's verdict on the boundary (`resume`,
+`pass`, `re-ask` or `none`, with the reason beside it), so §7.2's permission, the saved state and the judgement on it are
+three facts on the record instead of inferences a reviewer has to draw. The restart also sweeps the approval queue, because a deadline that passed while the process was dead is expired
+by the clock and not by anybody's opinion.
+
 ### 7.2 Approval interaction (amended rule)
 
 Automatic recovery MUST NOT bypass the approval system. Specifically:
@@ -236,7 +394,14 @@ Automatic recovery MUST NOT bypass the approval system. Specifically:
 - Where the outcome of an external action is uncertain, blind retry is prohibited (see §7.3).
 - Recovery that cannot proceed safely MUST leave the task paused with a clear, user-visible reason.
 
-Full auto-resume therefore means *automatic orchestration of recovery*, not *automatic authorization*.
+Full auto-resume therefore means *automatic orchestration of recovery*, not *automatic authorization*. In this build the orchestration is real, and what is empty is not the authorization alone:
+`packages/agent-runtime/recovery.ts` reports, for each interrupted task, whether a still-valid approval covers it, D-065's
+verdict on the boundary the run left behind (`resume`, `pass`, `re-ask` or `none`, in the `task.interrupted` payload as well
+as in the report), and resumes none — a report whose `resumed` field is the literal `false` rather than a boolean, so no
+caller can read a resumption that did not happen. Since M2i the saved state a resume would need exists; the party that would
+use it does not, and that is the difference this section's rule is about: even a `resume` verdict is not an authorization,
+and the two documents that could have confused them (§7.1's "MUST attempt to resume" and §3.6's stage 3) are kept apart by
+`verdictFor` being a *reading* of the record rather than an act on it.
 
 ### 7.3 Safe recovery
 
@@ -248,15 +413,34 @@ The runtime SHOULD use idempotency mechanisms, operation identifiers, or externa
 
 If the runtime cannot determine whether retrying an action would cause a duplicate or unsafe effect, it MUST use a defined safe fallback rather than blindly repeating the action. Depending on the action and available evidence, this may mean reconciling state, seeking approval, or pausing that step while automatically recovering other safe work.
 
+**Decided in M2 (D-065, D-095).** The reconciliation is one function — `verdictFor` in
+`packages/agent-runtime/checkpoint.ts` — and its four answers are the contract's `RESUME_VERDICTS`. It reads three things:
+the boundary the run last committed, the task's state now, and the log tail after the boundary's sequence number. Nothing
+after the boundary was left unanswered → `resume`. A `tool.execution.started` with no outcome beside it → `pass` if that
+tool's runtime declares it idempotent or its external effect is on the record (D-065's two permissions, both of which
+belong to the runtime that executes the step: `packages/tools` has declared `idempotent` for six of its eight rows since
+M2k, D-098, and `stepFactsFromDeclarations` is the bridge from that declaration to the `StepFacts` this function reads —
+so `pass` is an answer a composed Gateway can give rather than one only a test that invents a declaration can produce. A
+surface that declares nothing still gets neither permission, which is the fail-closed half of the same rule), and `re-ask`
+otherwise. No boundary at all, or a task
+that has ended → `none`, because §4.1's terminal states are absorbing and a `re-ask` on a finished task would be an offer
+nothing can accept. Two properties of the reading matter more than the answers. **The verdict is computed at read time**,
+never stored: all three inputs can move after the boundary is written, and a stored verdict is a guess in the one field a
+recovery path acts on. **The log is the evidence, not a second record**: a step that started and died without reporting
+needs no checkpoint of its own, because *the missing outcome is the finding* — which is also what makes it safe that a
+provider call, an event-less round, is classified as nothing in flight (D-089's classification, the same one cancellation
+uses).
+
 ### 7.4 Recovery limitations
 
 Task recovery is separate from database transaction recovery. A successfully recovered database does not prove that an interrupted external operation was completed correctly.
 
 Crabby MUST NOT claim that every interrupted task can be resumed without information loss or duplicate side effects.
 
-Checkpoint frequency is not a knob: a checkpoint is written at each committed step boundary (D-065), recovery may
-pass only a step that is idempotent or has its effect recorded, and the retry ladder is D-043's floor with D-064's
-schedule inside it. Recovery verification is the `integrity_check` and the committed-state comparison in
+Checkpoint frequency is not a knob: a checkpoint is written at each committed step boundary (D-065), there is no
+`limits.*` key that makes it less frequent (D-095 writes one row per task and replaces it, because "the latest valid state"
+is what recovery restores), recovery may pass only a step that is idempotent or has its effect recorded, and the retry
+ladder is D-043's floor with D-064's schedule inside it. Recovery verification is the `integrity_check` and the committed-state comparison in
 `docs/DATA_AND_MEMORY.md` §2.2. The per-tool timeout numbers are decided as defaults (D-074, table in
 `PROVIDERS_AND_TOOLS.md` §5.2); what remains is re-measuring them on a device in M0, not choosing them, and none of it
 touches the ordering rules above.
@@ -324,6 +508,40 @@ Repeated failures SHOULD trigger an alternative strategy only when that strategy
 
 The Agent MUST NOT bypass security restrictions merely to make a failed task succeed.
 
+**Implemented in M2 (D-094).** The ladder is `packages/agent-runtime/loop.ts`'s provider path, and every number in it was
+already decided: D-043's floor of five attempts per failing stage, D-064's `1s, 2s, 4s, 8s, 16s` with ±25% jitter, a
+`Retry-After` value overriding the schedule *upward* and never downward, and `packages/providers`' `shouldRetry` deciding
+which classes are transient — the loop calls that function rather than restating it, so there is one opinion in the codebase
+about what is retryable. Three things about the wiring are decisions rather than details.
+
+- **The ladder retries provider calls and never tool steps.** The sentence above about establishing whether an operation
+  succeeded applies to a step that may have had an external side effect; a completion request has none on the user's device
+  beyond the provider having seen a prompt it was already sent (the same classification D-089 makes for cancellation). A
+  tool step is the opposite case, and §7.3's answer for one is always "re-ask rather than repeat" — not because nothing
+  declares `idempotent` (M2k's executor declares it for six of its eight rows, D-098) but because that declaration is
+  spent by the *resume* path, where D-065 prices it, and never by a retry ladder: repeating a step with `sideEffects`
+  behind the model's back is the act §7.3 exists to prevent, and a transport-level rung is no place to discover an opinion
+  about a filesystem. So a failed tool result goes back to the model as that tool's answer, which is how §3.2's plan
+  revision happens rather than how a retry loop starts.
+- **A retry is scheduled work, so §6.1 stops it.** A cancellation recorded during a backoff ends the ladder at once and the
+  task settles as `cancelled` rather than `failed`, because waiting out a 16 s rung for a task the user has already stopped
+  is exactly the behaviour §6.3 accuses a loop of.
+- **The budget is a `limits.*` key with D-043's floor in the schema.** `limits.providerAttempts` defaults to `MAX_ATTEMPTS`
+  (6 — one attempt plus the five delays D-064 priced) and cannot be set below 5, because "at least 5 attempts
+  (configurable)" states a floor and not a suggestion; a knob that could turn the ladder off would be a knob against the
+  decision.
+
+What is **not** here is D-044's rung: after the budget is spent, Crabby asks the user which model to use instead and resumes
+from the checkpoint. The checkpoint is durable now (D-095, and `GET /tasks/{id}/checkpoint` reports the verdict on it), so
+what the rung still waits on is a switch surface to ask on and a runner to answer to — and one more thing the documents
+disagree about: an exhausted budget fails the task, `failed` is terminal and absorbing, and a resume would need an edge out
+of it that §4.1 does not have (F-50). The ordering that reconciles them is D-086's — the exhaustion *pauses* and asks, and
+only an ask that goes unanswered or is refused moves the task to `failed` — which is the runner's slice to implement, not
+this one's to assume. So an exhausted budget fails the task today, and the `task.failed` event says how many attempts it
+took and names the missing rung, which is the difference between "we gave up" and "we ran out of ladder". Every rung is logged, `provider.retry.scheduled`
+then `provider.retry.attempt`, because a retry a client cannot see is a retry nobody can bound, and §5.2's `provider.*`
+family exists for exactly that.
+
 ## 10. Task Progress and Observability
 
 ### 10.1 Progress tracking
@@ -381,7 +599,7 @@ table below states each item's disposition instead of leaving a to-do list that 
 | Definition and granularity of an execution step | §7.3, D-065 | — |
 | Risk scoring, permission policy, approval workflow | §5, `SECURITY.md` §6, D-046 | a new tool's tier at review time, per the same table |
 | Cancellation timeouts and escalation | §6; D-074 | nothing structural; the numbers are `limits.*` keys |
-| Checkpoint format, frequency, persistence | §7.3, D-065 | write cost on device storage (M0 P3) |
+| Checkpoint format, frequency, persistence | §7.3, D-065, D-095 | write cost on device storage (M0 P3) |
 | Restart detection and automatic recovery | §7.1 | Android's process-kill semantics (M0 P7) |
 | Uncertain external side effects | §7.3, §7.4 | — |
 | Idempotency and operation reconciliation | §7.3, tool `idempotent` flag in `PROVIDERS_AND_TOOLS.md` §4 | — |

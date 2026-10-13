@@ -10,9 +10,14 @@ const KEY_RE =
   /(authorization|api[-_]?key|token|secret|password|passphrase|private[-_]?key|seed|credential|session[-_]?id)/i;
 const NAME_RE = /(^|[^a-z0-9])(sk|ghp|gho|ghs|github_pat|xox[baprs]|ya29)[.-][A-Za-z0-9_-]{6,}/gi;
 
+/** The one word this build puts where a secret was. Exported because a second spelling in a second module is the drift
+ *  this file's header exists to prevent: a reader of a config answer and a reader of a log line have to see the same
+ *  marker to know the same thing happened. */
+export const REDACTED_MARKER = "[redacted]";
+
 function mask(value: string): string {
-  if (value.length <= 8) return "[redacted]";
-  return `${value.slice(0, 4)}…${value.slice(-2)} [redacted]`;
+  if (value.length <= 8) return REDACTED_MARKER;
+  return `${value.slice(0, 4)}…${value.slice(-2)} ${REDACTED_MARKER}`;
 }
 
 /** Value-level scrub: any string under a key that looks like a credential is replaced, and any string that itself
@@ -26,7 +31,7 @@ export function redact<T>(value: T, depth = 0): T {
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = KEY_RE.test(key) ? "[redacted]" : redact(item, depth + 1);
+      out[key] = KEY_RE.test(key) ? REDACTED_MARKER : redact(item, depth + 1);
     }
     return out as unknown as T;
   }
@@ -36,7 +41,7 @@ export function redact<T>(value: T, depth = 0): T {
 /** Line-level scrub for text a surface is about to show (a provider error body, a tool's stderr). */
 export function redactText(text: string): string {
   let out = text;
-  out = out.replace(/(Authorization\s*:\s*)\S+/gi, "$1[redacted]");
-  out = out.replace(/([?&](?:key|token|access_token)=)[^\s&]+/gi, "$1[redacted]");
+  out = out.replace(/(Authorization\s*:\s*)\S+/gi, `$1${REDACTED_MARKER}`);
+  out = out.replace(/([?&](?:key|token|access_token)=)[^\s&]+/gi, `$1${REDACTED_MARKER}`);
   return out.replace(NAME_RE, (m) => mask(m));
 }

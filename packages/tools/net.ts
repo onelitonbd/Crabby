@@ -59,7 +59,7 @@ import { LIMITS_DEFAULTS } from "@crabby/core";
 import type { ToolCall } from "@crabby/policy";
 import type { ProviderToolSpec } from "@crabby/providers";
 import { assertRegistrable } from "./declare.ts";
-import { cappedRead, type CappedBody, MAX_REDIRECTS, parseUrl, SCHEMES } from "./net-shared.ts";
+import { type CappedBody, cappedRead, MAX_REDIRECTS, parseUrl, SCHEMES } from "./net-shared.ts";
 import { writeOverflowFile } from "./overflow.ts";
 import { capWrapped, defaultNonce, type UntrustedMetadata } from "./untrusted.ts";
 

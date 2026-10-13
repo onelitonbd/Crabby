@@ -81,12 +81,7 @@ export function parseUrl(url: string, base?: URL): URL | undefined {
  *  than a refusal thrown and caught, because both executors need "parsed or the sentence" and neither needs the other. */
 export type ParsedUrl = { url: URL } | { refused: ToolOutcome };
 
-export function parseOrRefuse(
-  url: string,
-  tool: string,
-  code: string,
-  base?: URL,
-): ParsedUrl {
+export function parseOrRefuse(url: string, tool: string, code: string, base?: URL): ParsedUrl {
   const parsed = parseUrl(url, base);
   if (parsed !== undefined) return { url: parsed };
   return {

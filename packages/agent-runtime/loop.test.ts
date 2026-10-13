@@ -1032,7 +1032,11 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
     const merged: LoopLimits = { ...LOOP_LIMITS, ...mapped };
     assert.equal(merged.stepsPerTask, 9, "and the merge the loop performs keeps what was set");
     assert.equal(merged.fsTimeoutMs, 2_000);
-    assert.equal(merged.refusalsBeforePause, 2, "while the fields the config cannot reach keep their defaults");
+    assert.equal(
+      merged.refusalsBeforePause,
+      2,
+      "while the fields the config cannot reach keep their defaults",
+    );
   });
 
   it("publishes every event it stored, in order, and never from inside a transaction", async () => {

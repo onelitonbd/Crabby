@@ -17,6 +17,7 @@ import {
 import {
   createLogger,
   createShutdown,
+  egressHosts,
   LIMITS_DEFAULTS,
   type LogLevel,
   loadConfig,
@@ -48,6 +49,7 @@ import {
 import {
   combineToolSurfaces,
   createFileTools,
+  createNetTools,
   createSchedulerTools,
   createSessionTools,
   createTaskTools,
@@ -267,6 +269,16 @@ async function runStart(
         : askCancelAll(input),
     limits: loaded.limits,
   });
+  /** §4.2's `net.fetch`, the one row in this composition whose subject is not this device. It needs no late binding and
+   *  no workspace root: the two judgements it makes are about a URL and a byte count, and both are its own. What it does
+   *  need is the scratch directory, because D-064's over-cap output goes there exactly as the file tools' does, and
+   *  §5.2's class deadline from `config.json` so the declaration and the clock the loop enforces are one number. The
+   *  allow-list is deliberately *not* passed: `escalation.ts` reads it out of `EvalContext` below, and a second copy in
+   *  the executor would be a second opinion about which hosts are cheap (D-106). */
+  const netTools = createNetTools({
+    scratchDirFor: (taskId) => taskScratch(layout, taskId),
+    limits: loaded.limits,
+  });
   /** The one executor the runner is given, which is a *combination* rather than the file tools alone: §4.1 registers a
    *  tool by name across the whole composition and `combineToolSurfaces` makes a duplicate fatal at startup instead of
    *  last-one-wins. Composed only when a runner will exist, for the reason `createSchedulerTools`'s own header gives —
@@ -275,7 +287,7 @@ async function runStart(
   const composed =
     executor === undefined || !selected.ok
       ? undefined
-      : combineToolSurfaces([executor, schedulerTools, sessionTools, taskTools]);
+      : combineToolSurfaces([executor, netTools, schedulerTools, sessionTools, taskTools]);
   // Both halves of the condition are named again here, for the reason the banner below names them: `composed` is built
   // from `selected`, so "there is an executor" and "a model was selected" are the same fact seen from two places, and
   // TypeScript narrows the second only from a test that mentions it.
@@ -292,6 +304,13 @@ async function runStart(
           ctx: {
             paths: { home: homeDirectory(), dataDir: layout.stateDir, roots },
             realpathOf: defaultRealpathOf,
+            /** §4.3's escalation by destination, wired at last: `EvalContext.egressAllowList` existed before any
+             *  composition filled it, so every host arrived at the same price and §4.2's "**T1** only for a
+             *  user-curated allow-list" had no way to happen. The set is `net.allowList` from `config.json` (D-106),
+             *  normalized once by `egressHosts` because `escalation.ts` compares against a lowercased hostname. An empty
+             *  set is not a refusal and not a hole: it is the state §4.3 describes, where every destination is a new
+             *  host and is priced T2 with that host named in the prompt. */
+            egressAllowList: egressHosts(loaded.config),
           },
         };
   const startedAt = new Date();

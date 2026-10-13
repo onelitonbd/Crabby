@@ -56,6 +56,7 @@ import {
 import {
   combineToolSurfaces,
   createFileTools,
+  createNetTools,
   createSchedulerTools,
   createSessionTools,
   createTaskTools,
@@ -166,6 +167,15 @@ async function boot(options: BootOptions): Promise<Harness> {
     ? undefined
     : combineToolSurfaces([
         files,
+        // The network row, composed exactly where the CLI composes it, with a transport that refuses: no test in this
+        // file asks a run to fetch, and a harness that could reach the network would make a red line depend on one. The
+        // executor's own tests script `Response` objects instead (`packages/tools/net.test.ts`).
+        createNetTools({
+          scratchDirFor: (taskId) => taskScratch(layout, taskId),
+          fetch: async () => {
+            throw new Error("this harness makes no real request");
+          },
+        }),
         schedulerTools,
         // The two surfaces the CLI composes beside these, so that the `GET /api/v1/tools` count below is a fact about a
         // real install rather than about a fixture that happens to omit three tools.
@@ -474,9 +484,9 @@ describe("§4.2's task rows, composed the way a Gateway composes them", () => {
     };
     assert.equal(
       body.runtime.implemented,
-      13,
-      "seven file rows, `cron.schedule`, the two conversation rows and the three task rows: F-55's count is a fact about " +
-        "an install, and it rose by three because three more rows have an executor behind them",
+      14,
+      "seven file rows, `cron.schedule`, the two conversation rows, the three task rows and `net.fetch`: F-55's count is " +
+        "a fact about an install, and it rose by one because §4.2's network row has an executor behind it",
     );
     const byName = new Map(body.items.map((row) => [row.id, row]));
     for (const tool of [TASK_CREATE_TOOL, TASK_STATUS_TOOL, TASK_CANCEL_TOOL])

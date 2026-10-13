@@ -30,7 +30,7 @@ All 16 planning documents now exist. What remains in this phase:
 
 Implementation has not started. M-D (documentation close-out) is **mechanically complete**: `scripts/check-docs.py`
 is green over 22 documents, the human half was reviewed under delegation (D-075), and `docs/CONSISTENCY_REVIEW.md`
-records findings F-01…F-58 with what each one changed. M0 is the phase that closes what remains, because those items
+records findings F-01…F-59 with what each one changed. M0 is the phase that closes what remains, because those items
 are measurements, not opinions — it stays gated on the owner's go-ahead, and the first M0 action is running the
 probes, not writing more documents.
 
@@ -930,7 +930,7 @@ drives `runner.resume` itself with a comment saying whose job that becomes; and 
 five rows and the counter at 105; `docs/CONSISTENCY_REVIEW.md` with F-55 amended a third time for the three new rows, F-57
 amended for the schema version a model pin now needs, and F-58 opened; `docs/INTERFACES_AND_API.md` §4.3's decision row,
 which now says the run stays parked, and its `GET /tools` row, which says where the count comes from; this file's finding
-range at F-01…F-58; and `packages/tools/index.ts`'s header, which named `task.*` and `session.*` as stores this build has
+range, which the checker keeps equal to the highest finding open; and `packages/tools/index.ts`'s header, which named `task.*` and `session.*` as stores this build has
 no manager for and now says what each remaining absence waits on. Gates: `typecheck`, `lint`, `format:check`, `npm test`
 612/612 (20 new: 13 on the executor and the composition it joins, 7 over HTTP against a Gateway composed the way
 `crabby gateway start` composes one), `test:security` 138/138, `test:parity` (24 routes, 45 tools, 32 capabilities, 25
@@ -963,6 +963,43 @@ wakes the run, which then completes on the refusal with one `tool.execution.bloc
 and the thirtieth slice's `all: true` test losing its manual `runner.resume`, which is the fix measured by a test that got
 shorter), `test:security` 138/138, `test:parity` (24 routes, 45 tools, 32 capabilities, 25 features) and `docs:check` (105
 accepted decisions) green.
+
+**Thirty-second slice — `net.fetch`: the allow-list gets a home, and the first tool whose subject is not this device.**
+§4.2's network row was the last of §4's initial tools that had a policy and no executor, and the two halves of the gap
+made each other worse: `escalation.ts` already priced a destination against `EvalContext.egressAllowList`, a field no
+composition ever filled, while `grantsFor` withheld every `net.egress` grant "because nothing in `config.json` supplies a
+host set" — so the row's **T2** half was unreachable too, and a `net.fetch` call from a real identity could only ever be
+denied. Three things landed. `net.allowList` is a key in `config.json` (D-106), hosts rather than URLs, normalized once by
+`egressHosts` because `escalation.ts` compares a lowercased hostname, and absent-and-empty meaning "nothing curated"
+rather than "no egress" — turning egress off is §13's `crabby auth pair --restrict net.egress`, which removes the name
+instead of pricing it. `grantsFor` mints `net.egress:allow-list`: one grant naming the *set*, whether or not it is empty,
+because per-host grants would have denied exactly the hosts §4.3 prices at **T2**, and the parameterization §4.2's
+`net.egress:<host>` cell asks for is performed by the tier rather than by the grant list. And `packages/tools/net.ts`
+executes the row — GET only, since a method that mutates remote state is the next row's `http.request` and cannot share a
+tier or an idempotency declaration with a GET; `http:` and `https:` only, since a `file:` URL is a read spelled as a URL
+and would walk past §8's containment and deny-list; redirects manual and followed while the host stays the host the
+arbiter priced, refused the moment a server substitutes another, bounded at five same-host hops so one pricing buys a
+bounded number of requests inside §5.2's one clock; `credentials: "omit"`, which F-56 makes a fact rather than a
+restriction; §10's nonce-bearing frame around the body with the runtime's note outside it; and, the rule that is new
+rather than borrowed, **the download stops at D-064's cap** instead of the framing cutting afterwards, because a response
+body's length is chosen by whoever answers and a promise about what the model sees has to be a promise about what lands on
+a phone too. `sideEffects: "external"` is declared for the first time, so §6.2's cancellation evidence can say an effect
+may have landed somewhere this install cannot inspect. The executor is never given the allow-list, which is D-099's split
+applied to a destination: policy prices the crossing, the executor refuses the act it was not handed, and a second copy of
+the list would be a second opinion about which hosts are cheap. What is deliberately not here: `http.request`; retries and
+a cache (§5.2 priced one request); `memory.*`, which §6 gives to M4; and any rule about *classes* of destination — a
+loopback, link-local or metadata host is priced like any other new host, and the gap is recorded as F-59 rather than closed
+inside an executor, because a refusal the arbiter did not ask for is a second policy with no document behind it. Documents
+moved beside the code: `PROVIDERS_AND_TOOLS.md` §4.2's row, §4.3's destination bullet, §5.2's clock row and the "what this
+build declares" count, which was M2k's eight and is now fourteen rows carried as fifteen declarations; `SECURITY.md` §6.1's
+`net.egress` row, which now names the key that supplies its host set; `docs/DATA_AND_MEMORY.md` §4.1's `config.json` row;
+`DECISIONS.md` with D-106, §4A's map on three rows and the counter at 106; `docs/CONSISTENCY_REVIEW.md` with F-52 amended
+for the host set that now exists and F-59 opened; and this paragraph. Gates: `typecheck`, `lint`, `format:check`,
+`npm test` 634/634 (19 new on the executor, over scripted `Response` objects and a real scratch directory; one policy test
+that runs the whole chain from `capabilitiesFor("cli")` through `grantsFor` to a **T1** and a **T2** decision, which is the
+reachability claim this slice rests on; and one on `egressHosts`, the normalization that **T1** half is a string
+comparison away from losing), `test:security` 139/139, `test:parity` (24 routes, 45 tools, 32
+capabilities, 25 features) and `docs:check` (106 accepted decisions) green.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

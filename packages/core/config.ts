@@ -3,9 +3,12 @@
 //
 //  1. It owns **only** the keys the documents place in the file. `docs/DECISIONS.md` D-074 is explicit that every
 //     timeout and concurrency number is "a `limits.*` key in `config.json`, visible through `crabby config get
-//     limits`", so `limits` is here; nothing else is, because no other config key is stated anywhere. A key with no
-//     documented default stays absent rather than receiving a plausible number, and the port is the clearest case:
-//     the documents say the listener binds loopback and that the platform reports the port, and they never name one.
+//     limits`", so `limits` is here, and the four namespaces beside it are here because a document placed them in this
+//     file too: `provider.<id>` and `defaultModel` (§3.7 and §3.6, D-101), `workspace.roots` (§8's containment, D-101)
+//     and `net.allowList` (§6.1's `net.egress:<hostset>` and §4.2's "user-curated allow-list", D-106). Nothing else is,
+//     because no other config key is stated anywhere. A key with no documented default stays absent rather than
+//     receiving a plausible number, and the port is the clearest case: the documents say the listener binds loopback
+//     and that the platform reports the port, and they never name one.
 //  2. A file with a bad key is not a reason to refuse to run. `doctor` reports the named problem and the usable part
 //     still applies — on a phone, refusing to boot over a typo turns a config error into an outage.
 import { readFileSync, writeFileSync } from "node:fs";
@@ -123,6 +126,52 @@ export const WorkspaceConfig = Type.Object(
 );
 export type WorkspaceConfig = Static<typeof WorkspaceConfig>;
 
+/** `SECURITY.md` §6.1's `net.egress:<hostset>` and `PROVIDERS_AND_TOOLS.md` §4.2's "**T1** only for a user-curated
+ *  allow-list", as configuration — the host set the capability's parameter names and the list the tier is computed
+ *  from. Until this key existed both sentences described something with nowhere to live: `grantsFor` withheld every
+ *  `net.egress` grant "because nothing in `config.json` supplies a host set" (F-52's amendment), and
+ *  `EvalContext.egressAllowList` was a field no composition ever filled, so §4.3's escalation by destination had no
+ *  allow-list to escalate *from* and every host arrived at the same price.
+ *
+ *  Three rules, each a sentence somewhere rather than a preference:
+ *
+ *  1. **Hosts, not URLs.** §4.3 escalates "by destination" and §6.3's approval row carries the destination *host* in
+ *     its `exact` field, so the unit a user curates is a host. A `https://` prefix in an entry would be a URL compared
+ *     against a hostname, which never matches and reads as a grant that is held.
+ *  2. **Absent and empty are the same state, and it is not an error.** A host invented by a default would be a
+ *     destination the agent may reach that the user never chose — the same reason `workspace.roots` gets no default.
+ *     What an empty list means is stated rather than implied: not "no egress", but "no host is curated", so §4.3's
+ *     other half applies to all of them and every destination is T2 with the host named in the prompt. Turning egress
+ *     off is `crabby auth pair --restrict net.egress` (§13), which removes the capability instead of pricing it.
+ *  3. **The list lowers a price and grants nothing by itself.** `grantsFor` mints one `net.egress` grant naming the
+ *     curated set, and this list decides whether a destination is T1 or T2 (D-106). A host appearing here is therefore
+ *     not a host the agent may reach without the user's knowledge — it is a host the user pre-approved at T1, which is
+ *     §4.2's own cell. */
+export const NetConfig = Type.Object(
+  {
+    allowList: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  },
+  { additionalProperties: false },
+);
+export type NetConfig = Static<typeof NetConfig>;
+
+/** The curated host set, normalized in one place instead of at each of the two that read it (D-106): the composition
+ *  root hands it to `EvalContext.egressAllowList`, where §4.3's escalation compares it against a destination, and to
+ *  the grant expansion, where §6.1's parameter names it. Lowercased because `packages/policy`'s `safeHost` lowercases
+ *  the hostname it reads out of a URL before comparing, so a curated `Example.COM` would never match and the user would
+ *  be asked to approve at T2 a host they had already pre-approved at T1 — one spelling, chosen where the entries are
+ *  read rather than where they are typed. Trimmed and de-duplicated because this array is written by hand into a JSON
+ *  file, and a repeated entry would print a repeated reason. An empty result is a state with a meaning, not an error:
+ *  no host is curated, so every destination is a new one and §4.3 prices it T2 with the host named in the prompt. */
+export function egressHosts(config: ConfigFile): readonly string[] {
+  const hosts: string[] = [];
+  for (const entry of config.net?.allowList ?? []) {
+    const host = entry.trim().toLowerCase();
+    if (host.length > 0 && !hosts.includes(host)) hosts.push(host);
+  }
+  return hosts;
+}
+
 export const ConfigFile = Type.Object(
   {
     limits: Type.Optional(LimitsConfig),
@@ -134,6 +183,8 @@ export const ConfigFile = Type.Object(
      *  <provider/model>` command already uses, so the config value and the command argument are the same string. */
     defaultModel: Type.Optional(Type.String({ minLength: 3 })),
     workspace: Type.Optional(WorkspaceConfig),
+    /** §6.1's host set (D-106). Absent means no host is curated, which leaves every destination at §4.2's base tier. */
+    net: Type.Optional(NetConfig),
   },
   { additionalProperties: false },
 );

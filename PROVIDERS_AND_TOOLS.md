@@ -377,6 +377,18 @@ risk truncating the delimiter itself, and a boundary that no longer closes is §
 closer and thrown rather than emitted if six rolls all collide, because bytes in a user's file must not be able to end
 the block they are inside.
 
+**What this build declares now (M2ab, D-106).** Fourteen of §4.2's forty-five rows have an executor — the eight above,
+the scheduler's `cron.schedule`, the two conversation rows, the three task rows and `net.fetch` — carried as fifteen
+declarations, because `file.stat` shares §4.2's row with `file.list` and has no row of its own. The M2k paragraph above
+stays as its snapshot, including the sentence that `GET /tools` reports the five runtime fields as pending because "no
+runner composes an executor yet": F-55's closing amendment superseded it, and the route now merges an executor's
+declarations into the registry rows and reports `runtime.implemented`, with `pendingRecordFields` surviving only for rows
+nothing declares. What `net.fetch` added to the two rules above is a third, and it is about size rather than framing:
+**the download stops at the cap** instead of the framing cutting afterwards, because a response body's length is chosen
+by whoever answers, and D-064's promise about what the model sees has to be a promise about what lands on a phone too.
+The row is also the first to declare `sideEffects: "external"`, which is what lets §6.2's cancellation evidence say that
+an effect may have landed somewhere this install cannot inspect.
+
 ### 4.2 Initial tool set with risk-tier assignment (closes O-020)
 
 Tiers are per `SECURITY.md` §6.2. "Approval" means the default policy for a fresh install; users may tighten, and
@@ -405,7 +417,7 @@ may relax only where a floor exists (T3 has no relaxation path in the first rele
 | `ext.install` (executable kind) | `ext.execute` | **T3** | Blocked in the first release regardless of tier (D-038). |
 | `ext.uninstall` | `ext.install` | **T2** | `--purge-data` is **T3**. |
 | `mcp.connect` / `mcp.tools` | `ext.install` | **T2** | Shows exact command line or URL. |
-| `net.fetch` | `net.egress:<host>` | **T2** | **T1** only for a user-curated allow-list; response is untrusted content. |
+| `net.fetch` | `net.egress:<host>` | **T2** | **T1** only for a user-curated allow-list; response is untrusted content. **Executed since M2ab** (`packages/tools/net.ts`, D-106): GET only, because a method that mutates remote state is the next row's `http.request`; the allow-list that moves this row to **T1** is `net.allowList` in `config.json`, and the grant an identity holds names that *set* rather than its members, so a host nobody curated reaches the tier rule below instead of being denied outright. |
 | `http.request` (non-GET) | `net.egress` | **T2** | Any method that mutates remote state; carries destination host in the approval text. |
 | `provider.invoke` | `provider.invoke` | **T1** | **T2** when the selected model is paid (`provider.billing`). |
 | `shell.run` | `shell.run` | **T2** per command | Capability itself is off by default. Tier computed per command, not per tool; escalation table in §4.3. |
@@ -451,7 +463,13 @@ Tier is computed per call, from the validated arguments:
   authority" is exactly the sentence that forbids the second. The observation is recorded in `tool.call.proposed` and
   hashed into the approval's binding, so the prompt shows what policy saw and an approval signed against "this file did
   not exist" cannot be spent on a step that found it did.
-- `net.fetch` — escalation by destination: any host not in the allow-list is T2 with the host named in the prompt.
+- `net.fetch` — escalation by destination: any host not in the allow-list is T2 with the host named in the prompt. Since
+  M2ab the list is `net.allowList` in `config.json` and this comparison is `packages/policy`'s alone (D-106): the
+  executor is never given the list, because a second copy would be a second opinion about which hosts are cheap. An empty
+  list is not a refusal and not a hole — it is exactly the state this bullet describes, where every destination is a new
+  host. What the executor does judge is the destination a *redirect* reaches: hops are followed while the host stays the
+  one this rule priced and refused the moment a server substitutes another, because spending a T1 auto-allow or a T2
+  approval on a host neither saw would be this bullet's rule enforced against the wrong destination.
 - New provider model discovered → its descriptor is re-validated; a capability that vanished since registration must
   produce `unsupported-capability`, not a silent degradation.
 - Any tool receiving arguments it did not declare → reject before policy, so a schema mismatch can never be
@@ -524,7 +542,7 @@ interface:
 | Provider — idle stream | 45 s | A stream that goes quiet is dead, not slow. |
 | Provider — absolute | 300 s | The per-call ceiling, not the per-task one. |
 | `fs.*` | 10 s | Storage on a phone can be slow; it cannot be this slow. |
-| `net.fetch` | 20 s total | One request, redirects included, so a redirect chain cannot restart the clock forever. |
+| `net.fetch` | 20 s total | One request, redirects included, so a redirect chain cannot restart the clock forever. Enforced since M2ab by handing the executor the loop's own `AbortSignal` and no timer of its own, and a same-host chain is bounded at five hops (D-106), so a chain can neither restart the clock nor multiply the requests one pricing bought. |
 | `shell.run` | 120 s wall clock | Killed as a process group so children go with it. |
 | SQLite busy | 5 s | `PRAGMA busy_timeout`; longer and the UI starts to look frozen instead of busy. |
 | Extension, MCP | tool class + 5 s | Adapter overhead, so a slow plugin is not blamed on the tool or the host. |

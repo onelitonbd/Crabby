@@ -186,7 +186,7 @@ Permissions are named capabilities, not free-form text. Initial proposed vocabul
 | `session.read` / `session.write` | Read or modify conversation and session state. |
 | `task.create` / `task.cancel` / `task.read` | Start, cancel, and inspect tasks. `task.read` is the read-only half: state, history, and results. |
 | `fs.read:<root>` / `fs.write:<root>` | File access scoped to a configured root. |
-| `net.egress:<hostset>` | Outbound network from tools, scoped by host set. |
+| `net.egress:<hostset>` | Outbound network from tools, scoped by host set. The set is `net.allowList` in `config.json` (M2ab, D-106): a curated host is §4.2's **T1**, every other destination is **T2** with the host named in the approval, and an empty list is that second state rather than a refusal. The grant names the set, not its members, so no host is denied for being uncurated. Turning egress off is `crabby auth pair --restrict net.egress` (§13), which removes the name instead of pricing it. |
 | `shell.run` | Execute commands through the shell tool. |
 | `shell.privileged` | Commands touching package managers, services, system config. |
 | `provider.invoke` / `provider.billing` | Call a provider / call a paid endpoint. |

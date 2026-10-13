@@ -11,6 +11,7 @@ import {
   createLogger,
   createShutdown,
   dataLayoutFor,
+  egressHosts,
   LIMITS_DEFAULTS,
   loadConfig,
   mergeConfig,
@@ -331,6 +332,36 @@ test("config: the printed schema names the sections §3.7 and §8 put in the fil
 function kindOf(record: ReturnType<typeof readLastExit>): string {
   return typeof record === "string" ? record : record.kind;
 }
+
+test("config: the curated egress host set is normalized once, because §4.2's T1 half is a string comparison", () => {
+  const layout = freshLayout();
+  writeFileSync(
+    layout.configPath,
+    JSON.stringify({
+      net: { allowList: ["  API.Example.COM ", "api.example.com", "example.org"] },
+    }),
+  );
+  const loaded = loadConfig(layout);
+  assert.deepEqual(
+    [...egressHosts(loaded.config)],
+    ["api.example.com", "example.org"],
+    "`packages/policy` lowercases the hostname it reads out of a URL before comparing, so a curated `API.Example.COM` " +
+      "left upper-case would never match and the user would be asked to approve at T2 a host they had already " +
+      "pre-approved at T1 — one spelling, chosen where the entries are read rather than where they are typed, and a " +
+      "repeat dropped because a repeated entry would print a repeated reason (D-106)",
+  );
+  assert.deepEqual(
+    [...egressHosts({})],
+    [],
+    "an install with no `net` section is not an error and gets no default: an empty set means every destination is a new " +
+      "host, which is §4.3's T2 with the host named in the prompt, not a refusal",
+  );
+  assert.deepEqual(
+    [...egressHosts({ net: { allowList: ["   "] } })],
+    [],
+    "and an entry that is only whitespace names no host — the schema's `minLength` cannot see it, so the read does",
+  );
+});
 
 function freshLayout() {
   const root = mkdtempSync(join(tmpdir(), "crabby-core-"));

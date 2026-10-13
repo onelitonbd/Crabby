@@ -308,8 +308,10 @@ describe("capability vocabulary (SECURITY.md §6.1)", () => {
     const expansion = grantsFor(["task.read", "fs.read", "net.egress"], { roots: [first, second] });
     assert.deepEqual(
       [...expansion.grants],
-      ["task.read", `fs.read:${first}`, `fs.read:${second}`],
-      "§6.1 writes `fs.read:<root>`, so one configured root is one grant and a flat capability stays flat",
+      ["task.read", `fs.read:${first}`, `fs.read:${second}`, "net.egress:allow-list"],
+      "§6.1 writes `fs.read:<root>` and `net.egress:<hostset>`, so one configured root is one grant, a flat capability " +
+        "stays flat, and a hostset names the *set* rather than its members (D-106) — a per-host grant would deny " +
+        "exactly the hosts §4.3 prices at T2, which is a wall where the document put a price",
     );
     for (const grant of expansion.grants) {
       assert.equal(
@@ -318,12 +320,13 @@ describe("capability vocabulary (SECURITY.md §6.1)", () => {
         `every emitted grant is well-formed: ${grant}`,
       );
     }
-    const egress = expansion.withheld.find((row) => row.capability === "net.egress");
-    assert.ok(
-      egress,
-      "nothing in config.json supplies a host set, so `net.egress` is withheld until something does",
+    assert.deepEqual(
+      [...expansion.withheld],
+      [],
+      "nothing is withheld here: the roots are configured and `net.egress` has a set to name, which since D-106 is " +
+        "`net.allowList` in `config.json` — and an *empty* list still yields the grant, because a fresh install has " +
+        "curated nothing and §4.3's T2-with-the-host-named is exactly the state that install is in",
     );
-    assert.match(egress?.reason ?? "", /hostset/);
 
     const rootless = grantsFor(["fs.write"], {});
     assert.deepEqual(
@@ -895,6 +898,54 @@ describe("decision pipeline (PROVIDERS_AND_TOOLS.md §4.4)", () => {
       /evil\.example/,
       "the host has to be named in the prompt",
     );
+  });
+
+  it("reaches §4.2's `net.fetch` row from a real identity's grants, and prices the two halves of the row apart", () => {
+    // The chain a Gateway actually runs, rather than a subject built by hand: `capabilitiesFor` for the interface,
+    // `grantsFor` against this install's configuration, and then the arbiter. It is here because the two halves of
+    // §4.2's cell — "**T1** only for a user-curated allow-list" and the T2 base — are only both reachable if the grant
+    // expansion names the *set* instead of its members. A per-host expansion would have failed the capability check for
+    // every host nobody curated and answered `deny`, turning "escalation by destination" (§4.3) into a wall, and the
+    // deny would have read as a configuration problem the user could not fix from `config.json` at all.
+    const roots = ["/data/data/com.termux/files/home/work"];
+    const curated = ["api.example.com"];
+    for (const allowList of [curated, [] as readonly string[]]) {
+      const grants = grantsFor(capabilitiesFor("cli"), { roots }).grants;
+      const onList = decide(
+        { tool: "net.fetch", args: { url: "https://api.example.com/v1/status" } },
+        { grants },
+        { egressAllowList: allowList },
+      );
+      const offList = decide(
+        { tool: "net.fetch", args: { url: "https://example.org/v1/status" } },
+        { grants },
+        { egressAllowList: allowList },
+      );
+      const curatedNow = allowList.length > 0;
+      if (curatedNow) {
+        assert.equal(
+          asAllow(onList).tier,
+          "T1",
+          "a host the user curated is §4.2's T1 half: auto-allowed, with the curation as the reason",
+        );
+      } else {
+        assert.equal(
+          asApproval(onList).approval.tier,
+          "T2",
+          "with nothing curated there is no T1 to be had, and the row's base tier is the price — not a denial",
+        );
+      }
+      assert.equal(
+        asApproval(offList).approval.tier,
+        "T2",
+        "a host that is not on the list is T2 whichever list was loaded, which is §4.3's escalation by destination",
+      );
+      assert.match(
+        asApproval(offList).approval.exact,
+        /example\.org/,
+        "and §6.3's exact field carries the destination, so the user approves a host rather than a tool name",
+      );
+    }
   });
 
   it("refuses to answer a T3 from Telegram, and asks normally everywhere else", () => {

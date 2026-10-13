@@ -1097,6 +1097,17 @@ a uniform gap in one specific way — it makes the capability real enough to be 
 about — and it is the reason the closing condition below is now sharper rather than softer: one migration, and both paths
 decide on the same fact.
 
+**Amendment (thirty-second slice): `config.json` supplies a host set, so the withheld-grant half of this row is closed.**
+The sentence above said `grantsFor` withholds "every `net.egress` host-set grant in any build, because nothing in
+`config.json` supplies a host set". `net.allowList` is now that something (D-106): `egressHosts` normalizes it once, the
+composition root hands it to `EvalContext.egressAllowList` — a field that existed before any caller filled it — and
+`grantsFor` mints `net.egress:allow-list` for every identity whose baseline holds the name, whether the list is empty or
+not. The grant names the *set* rather than its members, and the reason is this row's own subject: a per-host expansion
+would have denied every host nobody curated, so §4.3's "T2 with the host named in the prompt" would have been reachable
+from a document and not from an install. The third question's other half is unchanged and stays open exactly as the
+paragraph above says it: `POST /api/v1/tasks/{id}/cancel` still decides on the token the guard demanded rather than on a
+grant, and one migration (D-097's) is what stands between that and a grant test.
+
 ### F-54 — §4.4's first check is a *type* check, and a schema that arrives as data cannot be type-checked
 
 **Severity: low, open, and named in the code that skips it.** `PROVIDERS_AND_TOOLS.md` §4.4 fixes the order of checks —
@@ -1374,6 +1385,32 @@ through to the caller verbatim rather than flattened into a `false`. Asserted by
 approved over HTTP ends with every cancellable task asked to stop and the `interrupted` one untouched, and the same prompt
 denied over HTTP ends with the run completing on the refusal, one `tool.execution.blocked` event carrying the reason, and
 the task the user refused to let it stop still `queued`.
+
+### F-59 — §4.2 prices egress by host, and nothing in the documents prices it by class of host
+
+**Severity: medium, open, and found by building the tool rather than by reading the table.** `net.fetch` is executed
+(M2ab, D-106) and its destination is priced exactly as §4.3 says: a host on the user's `net.allowList` is §4.2's **T1**,
+and every other host is **T2** with that host named in the approval's `exact` field. What no document does — `SECURITY.md`
+§6.1 and §8, `PROVIDERS_AND_TOOLS.md` §4.2/§4.3/§5.2, `AGENT_RUNTIME.md` §4.4 — is distinguish a *class* of destination.
+Three families therefore arrive at the same price as any other new host: this machine's own loopback, including the
+Gateway's own listener; link-local and cloud-metadata addresses, of which `169.254.169.254` is the one with a documented
+history of answering questions it should not; and private-range hosts on whatever LAN the device happens to be joined to.
+
+The consequence is bounded, and stating the bound precisely is the point of recording this rather than escalating it. An
+approval names the host, so the user is shown `169.254.169.254` and not "a URL"; the Gateway answers a fetch that carries
+no bearer token with `401` (D-097), so a tool cannot drive the process it is running inside by fetching it; and F-56's
+absence means there is no credential store for a destination to be handed. What is *not* bounded is the LAN and metadata
+case on a device whose network the user did not choose — a phone on a café Wi-Fi, which is this product's primary platform
+— where an approved fetch into a private range is a request into a network §13's "loopback only" posture was written to
+keep the rest of the world out of. The tier is the same T2 either way, and T2 is ten minutes and one tap.
+
+Closing condition: a rule in `SECURITY.md` (§6.1's table or §8's containment) that classes destinations — loopback,
+link-local, private — and says whether each is refused, priced above its row's tier, or priced the same with a louder
+prompt; and an executor that enforces whatever it says, which `packages/tools/net.ts` already has the seam for (it parses
+every URL and every hop, and it already refuses a hop whose host differs from the one that was priced). Deliberately not
+closed inside that executor by the slice that opened this: a refusal the arbiter did not ask for is a second policy with
+no document behind it, which is D-099's split enforced from the wrong side, and D-106's fourth part names this finding
+instead of inventing the rule.
 
 ## 3. Checks That Passed
 

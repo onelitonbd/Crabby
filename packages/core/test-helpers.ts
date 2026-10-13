@@ -9,6 +9,7 @@ export {
   configSchema,
   createLogger,
   createShutdown,
+  egressHosts,
   LIMITS_DEFAULTS,
   loadConfig,
   mergeConfig,

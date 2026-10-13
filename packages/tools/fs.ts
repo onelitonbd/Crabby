@@ -29,7 +29,7 @@
 // target's own directory and rename over the destination — a crash mid-write leaves the previous bytes, which is also what
 // makes `file.edit`'s `idempotent: true` declaration in `declare.ts` true rather than hopeful.
 
-import { createReadStream, existsSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import {
   copyFile,
   link,
@@ -47,6 +47,7 @@ import { createInterface } from "node:readline";
 import type { ToolOutcome, ToolRunContext } from "@crabby/agent-runtime";
 import { type ToolDeclaration, validateToolArguments } from "@crabby/api-contracts";
 import { checkPath, type PathContext, type PathVerdict, type ToolCall } from "@crabby/policy";
+import { writeOverflowFile } from "./overflow.ts";
 import { capWrapped, type UntrustedMetadata, wrapUntrusted } from "./untrusted.ts";
 
 export interface FileToolEnv {
@@ -631,20 +632,6 @@ function framed(
   const lines = [capped.text];
   if (note !== undefined) lines.push(note);
   return { ok: true, output: lines.join("\n") };
-}
-
-/** D-064's "larger goes to a file in the session scratch with the path printed". Written with mode 0600 in a directory
- *  `taskScratch` already created 0700, because the overflow is a verbatim copy of a file the user's policy allowed this
- *  task to read, and a second copy with looser permissions would be a new fact about the state directory. */
-function writeOverflowFile(dir: string, content: string): string {
-  const file = path.join(
-    dir,
-    `tool-output-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`,
-  );
-  // Synchronous on purpose: this is called from inside the framing of a result that is already in memory, and an async
-  // write here would mean the label could not name the path it just created.
-  writeFileSync(file, content, { encoding: "utf8", mode: 0o600 });
-  return file;
 }
 
 /** §8's "atomic write + rename", plus the part that makes `file.write`'s refusal of an existing path mean something: a

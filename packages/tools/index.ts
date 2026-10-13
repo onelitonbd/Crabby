@@ -7,18 +7,21 @@
 //
 // What is here is the eight file tools `PROVIDERS_AND_TOOLS.md` §4.2 classifies (`file.read`, `file.list`, `file.stat`,
 // `file.write`, `file.edit`, `file.delete`, `file.move`, `fs.search`), the scheduler's one row (`cron.schedule`), the two
-// conversation rows (`session.list`, `session.rename`) and the three task rows (`task.create`, `task.status`,
-// `task.cancel`), with §4.1's record filled in for each. Every one of them is an executor over a sink rather than a
-// subsystem of its own: the file tools do their own I/O because §8's containment is a property of paths and this package
-// owns the path rules, and the other four ask a party that owns a store — the scheduler, the session table, the Gateway's
-// one task act — and render the answer, because a second writer of a fact is how two interfaces start disagreeing (§9).
+// conversation rows (`session.list`, `session.rename`), the three task rows (`task.create`, `task.status`, `task.cancel`)
+// and the network's one row (`net.fetch`), with §4.1's record filled in for each. Every one of them is an executor over a
+// sink rather than a subsystem of its own: the file tools do their own I/O because §8's containment is a property of
+// paths and this package owns the path rules, `net.fetch` does its own because the two judgements it owes are about a
+// destination and a byte count and no other party sees either, and the remaining four ask a party that owns a store — the
+// scheduler, the session table, the Gateway's one task act — and render the answer, because a second writer of a fact is
+// how two interfaces start disagreeing (§9).
 //
 // What is still absent, and why, rather than a list that reads as an oversight: `memory.*` has no store to read —
 // `docs/ROADMAP.md` §6 gives the persistent memory subsystem to M4, and a `memory.search` over nothing would answer
 // "nothing remembered" forever, which is the mock this repository refuses. `config.*` waits on the same slice that gives
-// `config.json` a writer with a concurrency token (§2's other half). `net.fetch` waits on `EvalContext.egressAllowList`
-// and on `limits.http*` being priced, because a fetch with no allow-list is §8's deny-list with the wall removed. And
-// §4.2's remaining rows need a tunnel, an extension registry, a provider or Termux's own API. Absent rows stay absent in
+// `config.json` a writer with a concurrency token (§2's other half). §4.2's `http.request` row stays absent beside the
+// `net.fetch` that is now built: a method that mutates remote state is a different act, and it cannot share a tier or an
+// idempotency declaration with a GET. And §4.2's remaining rows need a tunnel, an extension registry, a provider or
+// Termux's own API. Absent rows stay absent in
 // `crabby tools ls`, which prints them from the registry as planned rather than from an executor as broken.
 //
 // `shell.run` is deliberately not here either. §4.2 says its "capability itself is off by default" and `docs/ROADMAP.md` §4
@@ -54,6 +57,19 @@ export {
 } from "./cron.ts";
 export { assertRegistrable, fileToolDeclarations } from "./declare.ts";
 export { type FileToolEnv, fileFacts, runFileTool } from "./fs.ts";
+export {
+  createNetTools,
+  MAX_REDIRECTS,
+  NET_FETCH_TOOL,
+  NET_TOOL_CODES,
+  type NetToolCode,
+  type NetToolEnv,
+  type NetToolExecutor,
+  type NetToolOptions,
+  netToolDeclarations,
+  runNetTool,
+} from "./net.ts";
+export { writeOverflowFile } from "./overflow.ts";
 export {
   createSessionTools,
   SESSION_LIST_TOOL,

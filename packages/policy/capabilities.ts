@@ -135,6 +135,23 @@ export function isKnownCapabilityBase(name: string): boolean {
 /** A grant is well-formed only if its base exists *and* a scoped family carries a parameter: `fs.read` with no root
  *  would mean "every root", which is the one thing a scoped capability may not mean. Refusing it here is cheaper than
  *  explaining a whole-filesystem grant later. */
+/** The name of the one host set this build has: the allow-list a user curates in `config.json` as `net.allowList`
+ *  (D-106). §6.1 writes the parameter as `<hostset>` — a *set*, not a member of one — and §4.3 says why the difference
+ *  matters: "any host not in the allow-list is **T2** with the host named in the prompt". A per-host grant would make
+ *  that sentence unreachable, because a host nobody curated would fail the capability check and be *denied* outright —
+ *  a wall where the document put a price. So the kind is granted once and names the set, and the set's members decide
+ *  the tier in `escalation.ts` rather than the grant list. An empty set still yields this grant for the same reason: a
+ *  fresh install has curated nothing, and "every destination is T2" is precisely the state §4.3 describes it as being
+ *  in. Turning egress off is not an empty list but `crabby auth pair --restrict net.egress` (§13), which removes the
+ *  capability instead of pricing it. */
+export const CURATED_HOST_SET = "allow-list";
+
+/** Which hostset-scoped capability has a set to name, and what it is called. One entry because §6.1 has one `hostset`
+ *  row and `config.json` has one place a user curates hosts. A hostset family absent from this map has no set in this
+ *  build, and `grantsFor` withholds it with the reason below rather than inventing a parameter — which is the same rule
+ *  the `root` branch applies to an install with no workspace. */
+const HOST_SETS: Readonly<Record<string, string>> = { "net.egress": CURATED_HOST_SET };
+
 export function isWellFormedGrant(grant: string): { ok: true } | { ok: false; reason: string } {
   const spec = capabilityFor(grant);
   if (!spec) return { ok: false, reason: `'${baseOf(grant)}' is not in the capability vocabulary` };
@@ -398,6 +415,16 @@ export function grantsFor(
         else withheld.push({ capability: grant, reason: verdict.reason });
       }
       continue;
+    }
+    if (spec.scope === "hostset") {
+      const set = HOST_SETS[spec.name];
+      if (set !== undefined) {
+        const grant = `${spec.name}:${set}`;
+        const verdict = isWellFormedGrant(grant);
+        if (verdict.ok) grants.push(grant);
+        else withheld.push({ capability: grant, reason: verdict.reason });
+        continue;
+      }
     }
     withheld.push({
       capability: spec.name,

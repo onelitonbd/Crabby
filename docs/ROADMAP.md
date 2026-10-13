@@ -642,9 +642,11 @@ opens the stream first, which is also what `crabby task watch` does.
 What is deliberately not here. `POST /api/v1/tasks` enforces nothing at the door: there is no `task.create` grant test,
 because every identity paired before assignment holds `[]` and a check would lock an owner out of their own Gateway —
 the outage D-097 named — so F-52's closing condition is now exactly that migration and nothing else. `config.json`'s
-`limits.*` still do not reach the loop, because `limits.providerAbsoluteMs` and `LoopLimits.providerCallMs` are not one
-budget under two names, and only `cancellationSettleMs` is read, for the drain budget; mapping half of them would put a
-number in a run that no document promises. There is no `--wait-approval` on `task run`: it is in no registry, and exit
+`limits.*` did not reach the loop at this slice, because `limits.providerAbsoluteMs` and `LoopLimits.providerCallMs`
+were taken as not one budget under two names and only `cancellationSettleMs` was read, for the drain budget; the
+thirty-sixth slice found they are one budget — `LOOP_LIMITS` has always read that number from
+`LIMITS_DEFAULTS.providerAbsoluteMs` — and wired the eight keys the loop enforces, so this sentence records what was
+true then rather than what is true now. There is no `--wait-approval` on `task run`: it is in no registry, and exit
 `3` beside the command that answers is the behaviour D-063 asked for. There is no `POST /api/v1/tasks/{id}/resume` and
 `crabby task resume` stays `planned`, because §7.1's recovery must not become a way past an approval (F-47). The
 scheduler D-046 and D-057 ship with M2 — `cron.schedule`, `GET /jobs`, `job pause` — and that is what §4's list names
@@ -1127,6 +1129,32 @@ form of it: `escalation.ts` has no branch for `http.request`, which is how §4.3
 Gates: `packages/tools/http.test.ts` 21/21, `loop.test.ts`'s class-clock assertion, the `GET /tools` merge test,
 `typecheck` (TS 5.9.2 — repo TS 7 ships no android-arm64 binary), `parity`/`docs:check`; full `npm test` remains
 load-flaky on this phone and the release proof is CI, which is green on linux and macOS for the shell slice.
+
+**Thirty-sixth slice — `config.json`'s `limits.*` reach the loop, and the reason they had not was wrong.** The
+recorded reason was that `limits.providerAbsoluteMs` and `LoopLimits.providerCallMs` were "not one budget under two
+names" and that mapping half of the keys would put a number in a run no document promises. They are one budget:
+`LOOP_LIMITS.providerCallMs` has always read `LIMITS_DEFAULTS.providerAbsoluteMs`, §5.2 prices the row once, and the
+failure text has always told the user to `crabby config set limits.providerAbsoluteMs` — the two names are one fact
+carried from the config's vocabulary into the loop's, and the translation belonged in one function rather than in
+nobody. `loopLimitsOf(limits)` is that function: eight keys map, one per `LoopLimits` field, with the one rename
+written down once instead of at each caller. An absent key is *omitted* rather than passed as `undefined`, because
+the loop merges this over its defaults with a spread and a present `undefined` would erase the number it meant to
+override. The keys that do not map are named rather than dropped in silence — the three provider timings and the
+pool size are §3.1's wrapper's and the Gateway's to enforce, the SQLite busy timeout is the storage layer's, the
+extension overhead is M4's host's, and the queued-tasks refusal is the task manager's — because a key handed to a
+party that does not enforce it is a configuration that answers questions and changes nothing. Two fields have no key
+at all and keep it that way: `refusalsBeforePause`, because D-086's floor is a policy and §5.2's `limits.*` list is
+about timeouts and budgets, and `toolDeadlines`, because D-074 prices classes rather than individual tools — its
+doc-comment had claimed the overrides were editable in `config.json` all along, and no schema row ever carried one,
+so the comment now says what is true. The wiring is three lines of fact: `DriveFacts` gained `limits`, the
+composition root translates once beside the composition, and `createRunner` already accepted a `Partial<LoopLimits>`
+and merged it. What is deliberately not here: no new config key — a key no document prices is a key no document
+describes; no per-tool override path until one does; and the un-mapped `limits.*` keys are still not read by the
+loop, because a number the loop does not enforce must not appear in its run. Gates: `loop.test.ts` 37/37 (the new
+mapper test asserts the eight keys land, the two keyless fields stay out, and a spread over the defaults keeps
+both), `tasks.test.ts` 6/6 (a composition that hands the runner `stepsPerTask: 1` fails a second proposed call with
+`limits.steps_per_task`, the message naming "step limit of 1" — the number travelled from the body to the loop or
+the assertion is false), `typecheck`, `parity`, `docs:check`; CI is the release proof as before.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
+import { type LoopLimits } from "@crabby/agent-runtime";
 import { createScriptedProvider } from "@crabby/agent-runtime/loop-harness";
 import { type Event, isTerminal, type TaskRecord } from "@crabby/api-contracts";
 import { createLogger } from "@crabby/core";
@@ -64,6 +65,9 @@ interface BootOptions {
   readonly workspace?: string | undefined;
   /** Compose no runner at all — what an install with no workspace root, or no selected default model, gets. */
   readonly noRunner?: boolean | undefined;
+  /** §5.2's limits, as the composition root hands them to the runner after `loopLimitsOf` translates them. Absent
+   *  means the loop's class defaults, which is what the other tests in this file run under. */
+  readonly limits?: Partial<LoopLimits> | undefined;
   /** Restart over a data dir that already exists instead of making one. §7.1's recovery is a property of a second
    *  process reading the first one's database, so a test about a kill and a restart has to boot twice over one file. */
   readonly dataDir?: string | undefined;
@@ -96,6 +100,7 @@ async function boot(options: BootOptions): Promise<Harness> {
         tools: executor,
         provider: createScriptedProvider(options.rounds),
         modelId: FAKE_TOOL_MODEL_ID,
+        limits: options.limits,
         // The same §8 resolver the executor defaults to, so the two halves of one path judgement cannot disagree.
         ctx: { paths, realpathOf: defaultRealpathOf },
       };
@@ -341,6 +346,65 @@ describe("the task handoff over http (M2's Exit criterion)", () => {
         /composed into the runner this Gateway drives tasks with/,
         "§4.1's row answers from the composition rather than from the build: with a runner composed, `ready` may mean " +
           "a task will run, and the note names what is still absent instead — F-57's per-task fields and F-47's resume",
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("hands the runner the `limits.*` the composition root translated, so a raised clock is a raised clock (D-074)", async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "crabby-limits-"));
+    const target = path.join(workspace, "notes.md");
+    const h = await boot({
+      workspace,
+      // One executed step and a second proposal: with `stepsPerTask: 1` the second is refused by the loop's own
+      // budget, and the failure names the limit and the key — which is only true if the number travelled from this
+      // body through `DriveFacts.limits` and into the runner rather than the runner keeping its default of 25.
+      limits: { stepsPerTask: 1 },
+      rounds: [
+        [
+          {
+            kind: "tool-call",
+            name: "file.read",
+            arguments: { path: target },
+          },
+        ],
+        [
+          {
+            kind: "tool-call",
+            name: "file.read",
+            arguments: { path: target },
+          },
+        ],
+      ],
+    });
+    try {
+      const created = await h.cli.createTask(
+        { objective: "read notes.md twice" },
+        "idem-limits",
+      );
+      const final = await untilTerminal(h, (created.body as TaskRecord).id);
+      assert.equal(
+        final.state,
+        "failed",
+        `the run ended ${final.state}, and with a one-step budget it cannot complete two calls — ` +
+          `${JSON.stringify(final.error ?? null)}`,
+      );
+      assert.equal(
+        final.error?.code,
+        "limits.steps_per_task",
+        "the failure is §5.2's limit with its own code, so a client sees the class without the log",
+      );
+      assert.match(
+        final.error?.message ?? "",
+        /step limit of 1/,
+        "the number that tripped is the number this body set, so the override reached the loop rather than stopping " +
+          "at the composition root's own reading",
+      );
+      assert.match(
+        final.error?.message ?? "",
+        /limits\.stepsPerTask/,
+        "and §5.2's own sentence: the failure names the limit and how to change it",
       );
     } finally {
       await h.close();

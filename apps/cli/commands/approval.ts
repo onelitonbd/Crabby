@@ -128,11 +128,22 @@ export async function runApproval(
   if ((verb === "approve" || verb === "deny") && decisionId !== undefined) {
     try {
       const response = await connection.client.decideApproval(decisionId, { decision: verb });
-      const body = response.body as { record: ApprovalRow; approvalId: string };
+      const body = response.body as {
+        record: ApprovalRow;
+        approvalId: string;
+        /** F-58's two fields: whether a parked run was woken to spend the answer, and the Gateway's own sentence when it
+         *  was not. Printed rather than inferred from the state, because `approved` on a screen and a task that never
+         *  continues is the exact pair that reads as a hung agent — and the three cases that answer `false` (no runner in
+         *  this process, no run parked in it, one already moving) need different next actions. */
+        resumed: boolean;
+        note: string;
+      };
       const record = body.record;
       renderer.line("state", record.state);
       renderer.line("decided", `${record.request.tier} · ${record.request.tool}`);
       renderer.line("", clip(record.request.exact, 56));
+      renderer.line("run", body.resumed ? "woken" : "not woken");
+      renderer.line("", body.note);
       if (verb === "approve") {
         // Printed because the alternative is a user believing they granted something durable. §6.3's binding is what
         // makes an approval safe to give at all: it applies to that action, with those arguments, in that task, and D-057

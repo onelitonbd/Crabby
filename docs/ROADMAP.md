@@ -936,6 +936,34 @@ no manager for and now says what each remaining absence waits on. Gates: `typech
 `crabby gateway start` composes one), `test:security` 138/138, `test:parity` (24 routes, 45 tools, 32 capabilities, 25
 features) and `docs:check` (105 accepted decisions) green.
 
+**Slice 31 — an answered prompt is spent: the decision route wakes the run that parked on it (F-58, closed).** The
+thirtieth slice opened F-58 by trying to use the thing it found missing: a `task.cancel` with `all: true` is §4.2's T2
+half, so the run parks, the test approved the prompt over HTTP, and nothing happened — the row moved to `approved`, the
+`approval.answered` event was appended, the queue emptied, and the task stayed `awaiting_approval` forever, because
+`Runner.resume` had no caller outside tests. D-084's rule that only the loop may open a prompt has as its corollary that
+only the loop can spend one, and the loop is the one party a route cannot reach without being handed it. So
+`registerApprovalRoutes` is handed the runner the process composed, and one new function does the waking. Four properties
+were decided rather than fallen into: **both** decisions wake, because `loop.resume` spends a denial by making it the
+step's result and a denied task parked on an answered question is the same defect with the opposite sign; the wake happens
+**after the answer's transaction commits**, because a run resumed against a rolled-back row would execute a step nobody
+approved, which is D-084 inverted; **after the event is published**, so a client watching the task sees the reason before
+the state moves; and it **reports what it did**, as `resumed` plus the Gateway's own `note` on the decision response,
+because the three cases where nothing was woken — no runner in this process, no run parked in it (F-47's restart case, with
+`Runner.resume`'s `not-parked` sentence carried through verbatim rather than flattened into a `false`), and one already
+moving — need different next actions. The seam is the route rather than the arbiter, and §9 is the reason: `decide` owns one
+row and one event, and a `decide` that also started runs would give it a second responsibility and a dependency on the
+runtime it exists to be asked by. `crabby approval approve` and `deny` print the pair. What is still absent, named rather
+than implied: a run parked in a *previous* process is unreachable, because `SuspendedRun` holds the proposed call in memory
+and SECURITY.md §8.2 keeps `call.args` out of the checkpoint — that is F-47's `POST /tasks/{id}/resume`, and this slice is
+not a substitute for it. Documents moved beside the code: `AGENT_RUNTIME.md` §5.2 with a fifth property of the loop that
+asks; `docs/CONSISTENCY_REVIEW.md` with F-58's severity line and its closing amendment; `docs/INTERFACES_AND_API.md` §4.3's
+decision row, which lost the sentence the thirtieth slice added and gained the two fields, and §7.1's approval row; and
+this paragraph. Gates: `typecheck`, `lint`, `format:check`, `npm test` 613/613 (one new test — a denial answered over HTTP
+wakes the run, which then completes on the refusal with one `tool.execution.blocked` event and the refused task untouched —
+and the thirtieth slice's `all: true` test losing its manual `runner.resume`, which is the fix measured by a test that got
+shorter), `test:security` 138/138, `test:parity` (24 routes, 45 tools, 32 capabilities, 25 features) and `docs:check` (105
+accepted decisions) green.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

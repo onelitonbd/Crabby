@@ -1321,7 +1321,8 @@ build answers.
 
 ### F-58 — `POST /approvals/{id}/decision` records the answer and nothing in the process spends it
 
-**Severity: high, open, and the composition's to answer rather than a defect in the arbiter or in the runner.** A run that
+**Severity: high, closed by the thirty-first slice one commit after it was opened, and kept here in full because the
+shape of it is the lesson — a route that answers a question and holds no party that can act on the answer.** A run that
 reaches a gated step does what §6.3 and D-084 ask: `policy.evaluate` answers `require-approval`, the loop opens the row
 inside the same transaction as the `approval.requested` event and the move to `awaiting_approval`, it writes D-065's
 `prompt` boundary, and it suspends. A user then answers from any interface, the arbiter records the decision, the
@@ -1352,6 +1353,27 @@ parked on a question already answered. With it: a test that a T2 prompt answered
 executed and the task terminal, containing no `resume` call of its own; §4.3's decision row and §7.1's `approval approve`
 row losing the sentence this slice added; and `docs/review/TELEGRAM.md`'s approve element checked against it, because
 "approved" printed on a phone has to mean something happened on the device.
+
+**Amendment (thirty-first slice): closed, with the route handed the runner rather than the arbiter.** The seam chosen is
+the first of the two the closing condition named, and the reason is §9's: the arbiter owns one row and one event, and a
+`decide` that also started runs would give it a second responsibility and a dependency on the runtime it exists to be asked
+by (`packages/agent-runtime/approvals.ts` holds no runner today and its store interface has no opinion about tasks). So
+`registerApprovalRoutes` takes the runner the process composed, and `wakeParkedRun` does the four things the condition
+asked for: it wakes on **both** decisions, because `loop.resume` spends a denial by making it the step's result and a
+denied task parked on an answered question is this finding with the opposite sign; it wakes **after** the answer's
+transaction commits, because a run resumed against a rolled-back row would execute a step nobody approved — D-084 inverted;
+it wakes **after** the `approval.answered` event is published, so a client watching the task sees the reason before the
+state moves; and it **reports** what it did, as two new fields on the decision response — `resumed` and the Gateway's own
+`note` — because the three cases where nothing was woken (no runner in this process, no run parked in it, one already
+moving) need different next actions and `resumed: false` alone is a fact with no sentence attached.
+`crabby approval approve` prints both. What is still true and stays recorded: a run parked in a *previous* process is not
+reachable, because `SuspendedRun` carries the proposed call in memory and SECURITY.md §8.2 keeps `call.args` out of the
+checkpoint — that is F-47's absent `POST /tasks/{id}/resume`, and `Runner.resume`'s `not-parked` sentence is carried
+through to the caller verbatim rather than flattened into a `false`. Asserted by two tests in
+`tests/integration/task-tools.test.ts`, neither of which contains a `resume` call: a T2 `task.cancel {all: true}` prompt
+approved over HTTP ends with every cancellable task asked to stop and the `interrupted` one untouched, and the same prompt
+denied over HTTP ends with the run completing on the refusal, one `tool.execution.blocked` event carrying the reason, and
+the task the user refused to let it stop still `queued`.
 
 ## 3. Checks That Passed
 

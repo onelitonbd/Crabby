@@ -43,6 +43,7 @@
 // `listen` is given, and `crabby gateway start` refuses a non-loopback host until pairing has something to protect.
 
 import {
+  type ApprovalRecord,
   type Approvals,
   type Cancellation,
   type Checkpoints,
@@ -508,7 +509,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   registerTaskRoutes(app, deps, bus, checkpoints, cancellation, runner);
   registerJobRoutes(app, deps, jobStore, scheduler);
   registerSessionRoutes(app, deps);
-  registerApprovalRoutes(app, deps, bus, approvals);
+  registerApprovalRoutes(app, deps, bus, approvals, runner);
   registerEventStream(app, deps, bus);
 
   const bootstrap =
@@ -1642,11 +1643,21 @@ function registerJobRoutes(
  *  The service is built here rather than reached for a `packages/storage` query, because the rules and the queue view
  *  belong to one arbiter (D-084): `?state=` reads `approvals.list`, the same function a TUI consults, so a phone
  *  cannot be shown a different set of live prompts than the surface that answers them. */
+/** The arbiter's two routes, and the runner beside them.
+ *
+ *  The runner is a new party here and F-58 is the finding that put it in: §6.3's promise is "answer from anywhere", and
+ *  until this slice an answer was *recorded* from anywhere and spent nowhere — the row moved to `approved`, the
+ *  `approval.answered` event was appended, the queue emptied, and the run that had parked stayed `awaiting_approval`
+ *  forever, because `Runner.resume` had no caller outside tests. D-084's rule that only the loop may open a prompt has as
+ *  its corollary that only the loop can spend one, and the loop is the one party a route cannot reach without being handed
+ *  it. So it is handed it. Absent means this process composes no runner, and then the answer says that in as many words
+ *  rather than reporting a resume that cannot happen. */
 function registerApprovalRoutes(
   app: FastifyInstance,
   deps: GatewayDeps,
   bus: ReturnType<typeof createEventBus>,
   approvals: Approvals,
+  runner: Runner | undefined,
 ): void {
   app.get<{ Querystring: Record<string, string> }>("/api/v1/approvals", async (request, reply) => {
     const state = parseApprovalQuery(request.query);
@@ -1770,16 +1781,91 @@ function registerApprovalRoutes(
         });
       }
 
-      const response = { record: outcome.result.record, approvalId: outcome.result.record.id };
-      if (hasKey && typeof key === "string") {
-        remember(deps.db, { key, route, requestHash: hash, response });
-      }
       // Published after the transaction, never inside it: a stream that learned about an answer a rollback later is a
       // client that has to be told the opposite, and §5.4 has no frame for taking an event back.
       if (outcome.published !== undefined) bus.publish(outcome.published);
+      // Woken after the publish and after the commit, and in that order for two reasons. After the commit because
+      // `loop.resume` *spends* the decision — a run resumed against a rolled-back row would execute a step nobody
+      // approved, which is the exact inversion of D-084. After the publish because a client watching the task should see
+      // the answer before it sees the state move, so the move arrives with its reason already on the stream.
+      const woken = wakeParkedRun(runner, outcome.result.record, deps.log);
+      const response = {
+        record: outcome.result.record,
+        approvalId: outcome.result.record.id,
+        // Two fields rather than one, because "did the run continue" and "what should a user be told" are different
+        // answers: `resumed` is a fact a client can branch on (`crabby approval approve` prints the sentence and a TUI
+        // modal can close on it), and `note` is the Gateway's own sentence for the three cases where nothing was woken —
+        // no runner in this process, no run parked in this process (F-47's restart case), or one already moving. A
+        // response that said only `resumed: false` would leave a user who approved on a phone staring at a task that
+        // never continued and no way to ask why.
+        resumed: woken.resumed,
+        note: woken.note,
+      };
+      if (hasKey && typeof key === "string") {
+        remember(deps.db, { key, route, requestHash: hash, response });
+      }
       return reply.send(response);
     },
   );
+}
+
+/** F-58's fix as one function: an answered prompt wakes the run that parked on it.
+ *
+ *  Both decisions wake it, and that is the part worth arguing for. `loop.resume` spends an approval *and* a refusal: on
+ *  `approve` the gated step runs, and on `deny` the refusal becomes the tool's result, which the model reads and the run
+ *  continues or ends on the strength of — §6.3's answer is an input to the run either way. Waking only the approvals would
+ *  leave a denied task parked on a question already answered, which is the same defect with the opposite sign, and a user
+ *  who denied something on a phone would watch a task hang instead of stop.
+ *
+ *  What this cannot do, and says rather than hides: a run parked in a *previous* process is not reachable, because
+ *  `SuspendedRun` carries the proposed call in memory and SECURITY.md §8.2 keeps `call.args` out of the checkpoint, so
+ *  there is nothing to rebuild it from. `Runner.resume` answers that case as `not-parked` with D-065's `re-ask` verdict
+ *  beside it, and the note below carries the sentence through to the caller — F-47's absent `POST /tasks/{id}/resume` is
+ *  the route that would answer it, and this function is not a substitute for that route. */
+function wakeParkedRun(
+  runner: Runner | undefined,
+  record: ApprovalRecord,
+  log: GatewayDeps["log"],
+): { resumed: boolean; note: string } {
+  const taskId = record.request.taskId;
+  if (runner === undefined)
+    return {
+      resumed: false,
+      note:
+        `the answer is recorded and this Gateway composed no runner, so no run was woken: task ${taskId} stays ` +
+        "`awaiting_approval` until a process that drives tasks reads it (§7.1's recovery marks it `interrupted`)",
+    };
+  const result = runner.resume(taskId);
+  if (!result.ok) {
+    log.info("answered approval woke nothing", {
+      approval: record.id,
+      task: taskId,
+      code: result.code,
+      reason: result.reason,
+    });
+    return { resumed: false, note: result.reason };
+  }
+  // Attached rather than awaited: the caller's answer is the row it just wrote, and the run moves the task on its own
+  // clock. A rejection nobody owns would take the Gateway down with it, and a dead Gateway is a worse answer than a
+  // failed task — the same rule `recordAndDriveTask` keeps at its own call site.
+  void result.run.then(
+    (outcome) => log.info("woken run settled", { task: taskId, kind: outcome.kind }),
+    (error: unknown) =>
+      log.error("woken run rejected", {
+        task: taskId,
+        reason: error instanceof Error ? error.message : String(error),
+      }),
+  );
+  log.info("answered approval woke the parked run", { approval: record.id, task: taskId });
+  return {
+    resumed: true,
+    note: `task ${taskId} is running again and will spend this ${record.state} — ${
+      record.state === "approved"
+        ? "the gated step executes once, for that action with those arguments (§6.3)"
+        : "the refusal is the step's result, so the run continues or ends on it rather than waiting for an answer " +
+          "that has already been given"
+    }`,
+  };
 }
 
 // ------------------------------------------------------------------ events (SSE, §5.1/§5.4)

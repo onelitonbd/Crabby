@@ -824,33 +824,29 @@ describe("§4.2's task rows, composed the way a Gateway composes them", () => {
         "and nothing was asked to stop while the prompt was open — the tier is a gate, not a warning printed afterwards",
       );
 
-    await h.cli.decideApproval(prompt?.id as string, { decision: "approve" });
-
     // `all` reaches the parent run's own task too, and which of the two settles first is the loop's business — so the
     // assertions are about the three seeded records and not about the parent's ending. That is not a gap: a run that
     // cancels every task cancels itself, and §6's rule is that the manager settles each one on its own evidence.
-    // The decision is recorded and the queue empties, and the run stays exactly where it parked: F-58. An answered
-    // prompt does not wake a parked run in this build, because the route that answers it holds no runner — so the
-    // assertion below is a gap being named rather than a design being celebrated, and the wake is driven the way
-    // `tests/integration/tools.test.ts` drives one. When F-58 is fixed this call becomes the decision route's job and
-    // every assertion after it stays as it is.
-    const answered = (await h.cli.approvals({ state: "approved" })).body as {
-      items: { id: string; state: string }[];
+    // F-58's fix, asserted from the only place it can be: over HTTP, with no `runner.resume` anywhere in this test
+    // body. The answer is recorded *and* spent, and the response says which happened, so a client can tell "the run
+    // continues" from "nothing was parked in this process to wake".
+    const decided = (await h.cli.decideApproval(prompt?.id as string, { decision: "approve" }))
+      .body as {
+      record: { state: string };
+      resumed: boolean;
+      note: string;
     };
-    assert.ok(
-      answered.items.some((item) => item.id === prompt?.id),
-      "the answer is on the row, so the user's decision is recorded whether or not anything spends it",
+    assert.equal(decided.record.state, "approved");
+    assert.equal(
+      decided.resumed,
+      true,
+      'the run that parked on this prompt is woken by the answer, so §6.3\'s "answer from anywhere" means the work ' +
+        "continues and not only that the row moved",
     );
-    for (const task of [first, second])
-      assert.equal(
-        (getTask(h.db, task.id) as TaskRecord).state,
-        "queued",
-        "and nothing moved on the strength of the answer alone (F-58)",
-      );
-    const woken = h.runner?.resume(parent.id);
-    assert.ok(
-      woken?.ok,
-      "the run that opened the prompt is still parked in this process, so it can be woken",
+    assert.match(
+      decided.note,
+      /running again/,
+      "and the sentence a phone prints is the Gateway's own rather than the verb's guess about what happened",
     );
 
     await until(
@@ -888,6 +884,70 @@ describe("§4.2's task rows, composed the way a Gateway composes them", () => {
     assert.ok(
       parent.id !== first.id,
       "the parent is its own task, so `all` asked at least four — three seeded and the run that asked",
+    );
+  });
+
+  it("wakes the run on a denial too, and the run ends on the refusal instead of waiting for an answer", async () => {
+    const h = await booted({
+      seed: [{ objective: "a task in somebody else's conversation" }],
+      rounds: (seeded) => [
+        // One gated call, then the round the loop drives after the denial is spent: §4.1's `awaiting_approval` →
+        // `planning` edge means a denial that leaves other work possible re-plans rather than dies.
+        [
+          {
+            kind: "tool-call",
+            name: TASK_CANCEL_TOOL,
+            arguments: { taskId: seeded[0]?.id, crossSession: true },
+          },
+        ],
+        [{ kind: "text", text: "then I will leave it alone" }],
+      ],
+    });
+    const seededTask = h.seeded[0] as TaskRecord;
+    const created = await h.cli.createTask({ objective: "the denied question" }, "task-tools-7");
+    const parent = created.body as TaskRecord;
+    await untilState(h, parent.id, "awaiting_approval");
+    const queue = (await h.cli.approvals({ state: "pending" })).body as {
+      items: { id: string; request: { tool: string; tier: string } }[];
+    };
+    const prompt = queue.items.find((item) => item.request.tool === TASK_CANCEL_TOOL);
+    assert.ok(prompt, "the declared crossing parked the run at a T2 prompt");
+
+    const decided = (await h.cli.decideApproval(prompt?.id as string, { decision: "deny" }))
+      .body as {
+      record: { state: string };
+      resumed: boolean;
+      note: string;
+    };
+    assert.equal(decided.record.state, "denied");
+    assert.equal(
+      decided.resumed,
+      true,
+      "a denial wakes the run as well, because `loop.resume` spends both answers: waking only approvals would leave a " +
+        "denied task parked on a question already answered, which is the same defect with the opposite sign",
+    );
+    assert.match(decided.note, /refusal is the step's result/);
+
+    const settled = await untilTerminal(h, parent.id);
+    assert.equal(
+      settled.state,
+      "completed",
+      "and the run continued on the refusal rather than hanging: a denied step is an input to the run, not an end of it",
+    );
+    assert.equal(
+      (getTask(h.db, seededTask.id) as TaskRecord).state,
+      "queued",
+      "the task the user refused to let it stop is untouched, which is the whole content of the refusal",
+    );
+    const blocked = readEvents(h.db, parent.id, { limit: 10_000 }).filter(
+      (event) => event.type === "tool.execution.blocked",
+    );
+    assert.equal(blocked.length, 1, "the denial is one event on the record, with the reason in it");
+    const blockedPayload = blocked[0]?.payload as { reason?: string } | undefined;
+    assert.match(
+      String(blockedPayload?.reason ?? ""),
+      /was denied/,
+      "and the reason names the denial and §5's rule that a denial is respected rather than retried into an approval",
     );
   });
 

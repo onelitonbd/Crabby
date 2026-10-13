@@ -229,6 +229,16 @@ conveniently and less safely:
 - **A transaction is synchronous, so no effect happens inside one.** Each write phase commits a state and its events
   together, and the provider call and the tool execution happen *between* phases — §5.1's pairing rule, and the reason a
   stream never learns about a write that a rollback took back.
+- **An answer wakes the run, and the party that records the answer is the party that wakes it.** A gated step suspends
+  the run rather than blocking it, so `SECURITY.md` §6.3's "answer from anywhere" needs a second half nobody else can
+  supply: whoever records the decision has to hand it to the run that parked, because the loop cannot poll for an answer
+  it is not executing to see. Both decisions wake it, and that is not symmetry for its own sake — `resume` spends an
+  approval by executing the gated step once and spends a denial by making the refusal the step's result, which is §5's
+  rule 5 (a denial is respected and the model is told) arriving as a continuation rather than as a hang. The wake happens
+  after the answer's transaction commits, never inside it, because a run resumed against a rolled-back row would execute
+  a step nobody approved. Across a restart there is nothing to wake: `SuspendedRun` holds the proposed call in memory and
+  §8.2 keeps `call.args` out of the checkpoint, so D-065's verdict for that boundary is `re-ask` and the honest answer is
+  the one `Runner.resume` gives (`not-parked`), with `POST /tasks/{id}/resume` still absent beside it (F-47, F-58).
 - **The model is offered only the tools policy has cleared for this identity**, which is §4.4's rule applied to the offer
   list and not only to the call: a model told about a tool its identity cannot use proposes it, and the user is then
   shown a refusal for something they were never able to ask for. The withheld reasons are ordered by whether the reader

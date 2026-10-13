@@ -22,7 +22,6 @@ import {
   HTTP_REQUEST_TOOL,
   HTTP_TOOL_CODES,
   httpToolDeclarations,
-  MUTATING_METHODS,
 } from "./index.ts";
 
 const TASK = "tsk_http1";

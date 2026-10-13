@@ -143,14 +143,15 @@ export const LOOP_LIMITS: LoopLimits = {
   refusalsBeforePause: 2,
 };
 
-/** D-074's per-tool deadlines, for the three classes the table actually prices: `fs.*` 10 s, `net.fetch` 20 s total,
- *  `shell.run` 120 s wall clock. `undefined` means the table prices no row for that tool, which is F-41's third clause
+/** D-074's per-tool deadlines, for the classes the table actually prices: `fs.*` 10 s, the network class (`net.fetch`
+ *  and, since its own slice, `http.request`) 20 s total, `shell.run` 120 s wall clock. `undefined` means the table
+ *  prices no row for that tool, which is F-41's third clause
  *  recorded rather than filled in — a deadline invented for `memory.save` would be a number nobody decided and nobody
  *  could defend. An unpriced tool runs under the caller's signal alone, and its `tool.execution.started` event carries
  *  `deadlineMs: null` so a reader can see that no clock was set. */
 export function toolDeadlineMs(tool: string, limits: LoopLimits = LOOP_LIMITS): number | undefined {
   if (tool.startsWith("file.") || tool.startsWith("fs.")) return limits.fsTimeoutMs;
-  if (tool === "net.fetch") return limits.netFetchTimeoutMs;
+  if (tool === "net.fetch" || tool === "http.request") return limits.netFetchTimeoutMs;
   if (tool === "shell.run") return limits.shellRunTimeoutMs;
   return undefined;
 }

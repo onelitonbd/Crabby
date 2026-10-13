@@ -54,6 +54,7 @@ import {
   combineToolSurfaces,
   createConfigTools,
   createFileTools,
+  createHttpTools,
   createNetTools,
   createSchedulerTools,
   createSessionTools,
@@ -315,6 +316,15 @@ async function runStart(
     scratchDirFor: (taskId) => taskScratch(layout, taskId),
     limits: loaded.limits,
   });
+  /** §4.2's `http.request` row, composed beside `net.fetch` for the reason the two rows are two rows: the same grant
+   *  (`net.egress`) and the same destination judgements, but `idempotent: false` and **T2 with no T1** — a mutating
+   *  request cannot share a tier or a resume permission with a read. It takes `limits.netFetchTimeoutMs` like its
+   *  sibling (§5.2 prices the network class as one row) and the same scratch directory, because D-064's over-cap
+   *  response body goes where every other capped output goes. */
+  const httpTools = createHttpTools({
+    scratchDirFor: (taskId) => taskScratch(layout, taskId),
+    limits: loaded.limits,
+  });
   /** §4.2's two configuration rows. Both sinks read the file at call time rather than the copy this process loaded at
    *  startup, because a settings answer that described yesterday's document would be a wrong answer with a confident shape
    *  — and the token beside it would be a token for bytes that no longer exist. The write sink owns §2's
@@ -360,6 +370,7 @@ async function runStart(
       : combineToolSurfaces([
           workspaceTools,
           netTools,
+          httpTools,
           configTools,
           schedulerTools,
           sessionTools,

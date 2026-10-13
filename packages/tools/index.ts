@@ -72,6 +72,18 @@ export {
 export { assertRegistrable, fileToolDeclarations } from "./declare.ts";
 export { type FileToolEnv, fileFacts, runFileTool } from "./fs.ts";
 export {
+  createHttpTools,
+  HTTP_REQUEST_TOOL,
+  HTTP_TOOL_CODES,
+  type HttpToolCode,
+  type HttpToolEnv,
+  type HttpToolExecutor,
+  type HttpToolOptions,
+  httpToolDeclarations,
+  MUTATING_METHODS,
+  runHttpTool,
+} from "./http.ts";
+export {
   createNetTools,
   MAX_REDIRECTS,
   NET_FETCH_TOOL,

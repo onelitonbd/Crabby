@@ -59,21 +59,17 @@ import { LIMITS_DEFAULTS } from "@crabby/core";
 import type { ToolCall } from "@crabby/policy";
 import type { ProviderToolSpec } from "@crabby/providers";
 import { assertRegistrable } from "./declare.ts";
+import { cappedRead, type CappedBody, MAX_REDIRECTS, parseUrl, SCHEMES } from "./net-shared.ts";
 import { writeOverflowFile } from "./overflow.ts";
 import { capWrapped, defaultNonce, type UntrustedMetadata } from "./untrusted.ts";
 
 export const NET_FETCH_TOOL = "net.fetch";
 
-/** The two schemes this executor serves, and the reason the list is a constant rather than an inline pair: the same
- *  two are checked on the way in and again at every redirect hop, and a hop that is checked against a different list
- *  than the request is a rule with a hole in the middle. */
-const FETCH_SCHEMES: readonly string[] = ["http:", "https:"];
-
-/** How many redirects one call follows (D-106). The number is about how many requests one pricing buys rather than
- *  about any client's default: §5.2 gives the whole chain one 20 s clock and §4.3 priced one host, so a chain of
- *  same-host hops is one act repeated, and five of them is more than an `http`→`https` upgrade, a trailing slash and a
- *  CDN hop need together. Undici's own default is twenty, which is a transport's patience and not a policy's. */
-export const MAX_REDIRECTS = 5;
+/** The scheme list is `net-shared.ts`'s, because `http.request` checks the same two at the same two places and a hop
+ *  checked against a different list than the request is a rule with a hole in the middle. `MAX_REDIRECTS` is re-exported
+ *  from here because it was this file's public constant first and `net.test.ts` and the Gateway's limits both name it
+ *  from `@crabby/tools`. */
+export { MAX_REDIRECTS } from "./net-shared.ts";
 
 /** A request that says what it is. §10's rule is about attributing foreign bytes to the model; this is the same
  *  instinct pointed the other way, at whoever answers — a fetch with no user agent is indistinguishable from a
@@ -352,7 +348,7 @@ export async function runNetTool(
     current = next;
   }
 
-  const body = await readCapped(response, env.maxOutputBytes);
+  const body = await cappedRead(response, env.maxOutputBytes);
   const finalUrl = current.toString();
   const metadata: UntrustedMetadata = {
     // §10's source and subject: the tool that fetched, and the URL the bytes actually came from, which after a
@@ -419,71 +415,18 @@ function noteFor(input: {
   );
 }
 
-interface CappedBody {
-  readonly text: string;
-  /** Bytes taken off the wire, which is what the note reports: after a cut inside a multi-byte character this is a
-   *  little more than the text holds, and the difference is the half a character this executor chose not to read. */
-  readonly readBytes: number;
-  readonly cutAtSource: boolean;
-}
-
-/** Reads at most `maxBytes` of a response body and stops, instead of reading all of it and letting `capWrapped` cut
- *  afterwards. The difference is memory on a phone: the file tools can read a whole file because those bytes are the
- *  user's and already on the device, while a response body is a stranger's and its length is theirs to choose. The
- *  stream is cancelled rather than left open, because an unread body keeps a connection alive and §5.2's one clock does
- *  not cover a socket this executor decided to stop reading from. */
-async function readCapped(response: Response, maxBytes: number): Promise<CappedBody> {
-  if (response.body === null) {
-    return { text: "", readBytes: 0, cutAtSource: false };
-  }
-  const reader = response.body.getReader();
-  // Streaming decode, so a cut that falls inside a multi-byte character leaves the partial sequence undecoded instead
-  // of turning it into a replacement character: §4.4's cap is about bytes and Bengali text is three bytes a character,
-  // which is the same reason `cutAtByteBoundary` exists on the framing side.
-  const decoder = new TextDecoder("utf-8");
-  let text = "";
-  let readBytes = 0;
-  let cutAtSource = false;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value === undefined) continue;
-      const room = maxBytes - readBytes;
-      const take = value.byteLength <= room ? value : value.subarray(0, Math.max(0, room));
-      readBytes += take.byteLength;
-      text += decoder.decode(take, { stream: true });
-      if (readBytes >= maxBytes) {
-        cutAtSource = true;
-        break;
-      }
-    }
-    // Flushed only when the stream ended on its own: a flush after a deliberate cut would emit a replacement character
-    // for the half a character this executor chose not to read.
-    if (!cutAtSource) text += decoder.decode();
-  } finally {
-    await reader.cancel().catch(() => undefined);
-  }
-  return { text, readBytes, cutAtSource };
-}
-
-function parseUrl(url: string, base?: URL): URL | undefined {
-  try {
-    return base === undefined ? new URL(url) : new URL(url, base);
-  } catch {
-    return undefined;
-  }
-}
-
+/** `CappedBody`, `cappedRead` and `parseUrl` moved to `net-shared.ts` when `http.request` arrived, so that "both network
+ *  rows stop a stranger's body at the cap" and "both refuse a cross-host redirect" are one function each rather than
+ *  two texts that have to be read together to be believed. */
 /** Rule 1 above, applied to the request and to every hop: a scheme outside `http:` and `https:` is refused with the
  *  reason rather than fetched, and a relative `Location` resolved against an `https:` origin inherits its scheme, so
  *  this check is about absolute ones a server substituted. */
 function schemeVerdict(target: URL, code: string): ToolOutcome | undefined {
-  if (FETCH_SCHEMES.includes(target.protocol)) return undefined;
+  if (SCHEMES.includes(target.protocol)) return undefined;
   return refuse(
     code,
     `'${target.protocol}//${target.host}${target.pathname}' is not a scheme this executor serves — ` +
-      `${FETCH_SCHEMES.join(" and ")} only. A \`file:\` URL is a read spelled as a URL and would bypass §8's ` +
+      `${SCHEMES.join(" and ")} only. A \`file:\` URL is a read spelled as a URL and would bypass §8's ` +
       "containment and deny-list, which are rules about paths; a `data:` or `blob:` URL has no destination at all, so " +
       "there is no host for §4.3's approval to have named.",
   );

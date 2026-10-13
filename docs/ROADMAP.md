@@ -1101,6 +1101,33 @@ task-tools 11/11, `typecheck` (TS 5.9.2 — repo TS 7 ships no android-arm64 bin
 full `npm test` is load-flaky on this phone in spawned-gateway files and green in isolation, and the release proof
 moves to CI per the owner's call.
 
+**Thirty-fifth slice — `http.request`, the row `net.fetch` could not hold.** §4.2 splits the two network rows because
+one cell cannot carry three answers at once: a read is idempotent, a resume may pass it, and a curated host lowers it
+to **T1** — a mutating request may be none of those. The executor (`packages/tools/http.ts`) is therefore a second
+file rather than a `method` argument on the first, and it serves `POST`, `PUT`, `PATCH` and `DELETE` verbatim: a read
+verb is refused with a pointer at `net.fetch`, a lowercase spelling is refused because §6.3's approval quotes `args`
+as the user read them, and an unrecognised verb is refused rather than forwarded, since a method the prompt did not
+name is a different act. The destination half moved into `net-shared.ts` when the second executor needed it — the
+http(s)-only scheme list, the same-host redirect rule, D-106's five hops and D-064's capped read, which `net.ts` had
+inline — because a redirect rule with two copies is a rule with two answers, and both rows now refuse a hop that
+changes the host through the same function. Credential headers are refused with §3 rule 06 named rather than stripped
+(F-56: no vault, nothing to attach, and a header a model wrote is a credential it invented); a 303/301/302 turns the
+follow-up into a GET and drops the body, and the report states which method actually ran; an aborted POST reports
+that the request *was sent* and the outcome unknown, the one sentence a mutating row owes that a GET never had to
+say; and a redirect chain refused at the bound is honest that the original and its follow-ups already left the
+device. The clock is the network class's own: `toolDeadlineMs` prices `http.request` from `limits.netFetchTimeoutMs`,
+and §5.2's row now names the class rather than only its first member — a second number for a second crossing of the
+same boundary would be a second opinion about how long a phone waits on a stranger, and the class is still three.
+`runtime.implemented` moves 18 → 19 on an opt-in install (one row, one declaration), and the count in
+`docs/INTERFACES_AND_API.md` §2 moved with it (13 → 17 had already been owed since the network and configuration rows
+landed without the sentence following them; it now enumerates what a composed Gateway actually answers). What is
+deliberately not here: no credential of any kind (F-56), no retries — a retry is a second order inside a budget
+priced for one — no streaming parse of an SSE response body, no `HEAD`/`OPTIONS` aliasing onto this row, and no T1
+form of it: `escalation.ts` has no branch for `http.request`, which is how §4.3's de-escalation stays the GET row's.
+Gates: `packages/tools/http.test.ts` 21/21, `loop.test.ts`'s class-clock assertion, the `GET /tools` merge test,
+`typecheck` (TS 5.9.2 — repo TS 7 ships no android-arm64 binary), `parity`/`docs:check`; full `npm test` remains
+load-flaky on this phone and the release proof is CI, which is green on linux and macOS for the shell slice.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

@@ -379,10 +379,7 @@ describe("the task handoff over http (M2's Exit criterion)", () => {
       ],
     });
     try {
-      const created = await h.cli.createTask(
-        { objective: "read notes.md twice" },
-        "idem-limits",
-      );
+      const created = await h.cli.createTask({ objective: "read notes.md twice" }, "idem-limits");
       const final = await untilTerminal(h, (created.body as TaskRecord).id);
       assert.equal(
         final.state,

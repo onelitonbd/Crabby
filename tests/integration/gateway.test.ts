@@ -11,6 +11,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2268,6 +2269,38 @@ async function waitGone(child: ChildProcess, timeoutMs: number): Promise<void> {
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+describe("`task show` answers its own usage before the Gateway is asked (ROADMAP §4's wart)", () => {
+  it("exits 2 with no id on a machine whose Gateway is down, not 1 as a connection failure", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "crabby-showusage-"));
+    try {
+      // A missing id is a usage question (§7.1's exit 2) about the command, so it is answered before `connect` runs
+      // — the same rule `cancel`, `watch` and `run` already follow. The seventeenth slice left `show` checking after
+      // `connect`, so this exited 1 (a connection failure) instead, and only on a machine whose Gateway was down.
+      const noId = runCli(dir, ["task", "show"]);
+      assert.equal(
+        noId.code,
+        2,
+        `§7.1: exit 2 is usage, answered before connect — output was:\n${noId.stdout}`,
+      );
+      assert.match(
+        noId.stdout,
+        /which task/,
+        "the sentence names the missing argument, not the absent Gateway",
+      );
+      // With an id the answer really is about the Gateway, so the contrast is the assertion: one command, two
+      // different questions, two different exit codes, and only the right one is chosen.
+      const withId = runCli(dir, ["task", "show", "tsk_doesnotexist"]);
+      assert.equal(
+        withId.code,
+        1,
+        "with an id present, the failure is the connection it actually is (exit 1), not a usage question",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("cancellation over http (AGENT_RUNTIME.md §6.1, §6.2)", () => {
   let h: Harness;

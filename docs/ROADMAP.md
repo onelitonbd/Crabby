@@ -652,8 +652,12 @@ true then rather than what is true now. There is no `--wait-approval` on `task r
 scheduler D-046 and D-057 ship with M2 — `cron.schedule`, `GET /jobs`, `job pause` — and that is what §4's list names
 next, beside the remaining initial tools: `shell.run` behind §9's opt-in, `net.fetch`, `session.*`, `task.*` and
 `config.*`. F-57 still needs schema version 5 for a per-task model pin, per-task narrowing and a schedule. And
-`task show`'s ordering flaw, named in the seventeenth slice, is still there: it is a wart about a different verb, and
-fixing it inside a slice about the handoff is how a wart stops being visible.
+`task show`'s ordering flaw, named in the seventeenth slice, is still there at this slice: it is a wart about a
+different verb, and fixing it inside a slice about the handoff is how a wart stops being visible. (It has since been
+closed on its own, after the thirty-sixth: the id check moved ahead of `connect` beside `cancel`'s, `watch`'s and
+`run`'s, so a missing id answers exit 2 on a machine whose Gateway is down instead of a connection failure — the
+seventeenth slice was right to leave it named rather than fold it into a cancellation slice, and right that it
+needed closing somewhere.)
 
 **Twenty-fifth slice — `--restrict` reads a family, so §13's own example became typeable and its impossible half became
 a rule.** `SECURITY.md` §13's narrowing bullet reads `crabby auth pair --restrict shell,config`, and neither of those

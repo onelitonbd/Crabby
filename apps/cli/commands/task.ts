@@ -108,6 +108,16 @@ export async function runTask(
     );
     return EXIT.usage;
   }
+  // `show` reads its id here for the reason the other three do. The seventeenth slice moved `cancel`'s checks ahead of
+  // `connect` and left `show` checking after it, so `crabby task show` with no id on a machine whose Gateway is down
+  // answered "which task?" as a connection failure (exit 1) instead of a usage question (exit 2) — one rule, four
+  // verbs, answered where the typo is made rather than where the process it would have talked to happens to be
+  // unreachable.
+  const showId = verb === "show" ? tail.positionals[0] : undefined;
+  if (verb === "show" && showId === undefined) {
+    renderer.line("task show", "which task? `crabby task ls` prints the ids");
+    return EXIT.usage;
+  }
   const connection = await connect(layout);
   if (connection.state !== "paired") return reportNoGateway(renderer, connection.state);
 
@@ -142,12 +152,10 @@ export async function runTask(
     }
   }
 
-  if (verb === "show") {
-    const id = tail.positionals[0];
-    if (id === undefined) {
-      renderer.line("task show", "which task? `crabby task ls` prints the ids");
-      return EXIT.usage;
-    }
+  if (verb === "show" && showId !== undefined) {
+    // Read and checked before the Gateway was asked, so `showId` is a string here; the `!== undefined` guard is the
+    // narrowing the compiler needs, and the case it excludes already returned at the pre-connect check above.
+    const id = showId;
     try {
       const response = await connection.client.getTask(id);
       const task = response.body as TaskRecord;

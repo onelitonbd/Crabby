@@ -328,6 +328,10 @@ async function boot(options: BootOptions): Promise<Harness> {
       // The scheduler's arm before the listener and the database, which is `packages/core/shutdown.ts`'s order restated in
       // a fixture: an arm that fires after the drain began would create a task nobody is going to watch.
       built.scheduler?.shutdown();
+      // Runs settle before the listener and before SQLite, which is D-066's order and not a fixture's convenience: a run
+      // still writing when the database closes is a crash wearing a drain's clothes, and a fired job's run is started by a
+      // timer nobody awaits.
+      await built.runner?.shutdown(5_000);
       await built.app.close();
       handle.close();
     },

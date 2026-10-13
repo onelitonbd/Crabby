@@ -187,6 +187,9 @@ async function boot(options: {
     creator: { clientId: redeemed.clientId as string, name: "the owner" },
     async close() {
       built.scheduler?.shutdown();
+      // D-066's order: runs settle before the listener and before SQLite, so a run this harness started cannot be writing
+      // when the database closes.
+      await built.runner?.shutdown(5_000);
       await built.app.close();
       handle.close();
     },

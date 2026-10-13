@@ -328,6 +328,10 @@ async function boot(options: BootOptions): Promise<Harness> {
     seeded,
     close: async () => {
       await built.scheduler?.shutdown();
+      // D-066's order, and this file needs it more than the others: a decision answered over HTTP now *starts* a run
+      // (F-58's fix), so the drain is what keeps a woken run from writing to a database the next line closes. A run parked
+      // at a prompt is not in the runner's `running` set, so the two tests that leave one parked do not wait on it.
+      await built.runner?.shutdown(5_000);
       await built.app.close();
       handle.close();
     },

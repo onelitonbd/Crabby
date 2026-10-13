@@ -158,6 +158,10 @@ async function boot(options: BootOptions): Promise<Harness> {
     secondToken: reader.token,
     root,
     async close() {
+      // D-066's order restated in a fixture: runs settle before streams close and before SQLite does. Every task this file
+      // creates is driven by a run the route started and did not await, so a close that skipped the drain would be racing
+      // the loop's last write against `handle.close()`.
+      await built.runner?.shutdown(5_000);
       await built.app.close();
       handle.close();
     },

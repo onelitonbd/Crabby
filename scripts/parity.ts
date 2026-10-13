@@ -182,7 +182,8 @@ export const MATRIX: readonly FeatureRow[] = [
     cli: "`config …`",
     tui: "settings",
     web: "settings",
-    telegram: "`/config` (T3 changes confirm in-chat)",
+    telegram:
+      "`/config` (a **T3** change is displayed and may be relayed, never signed in chat — D-085 confines a T3 signature to the TUI and the Web control UI)",
   },
   {
     capability: "Logs / audit",

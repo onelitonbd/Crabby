@@ -389,6 +389,20 @@ by whoever answers, and D-064's promise about what the model sees has to be a pr
 The row is also the first to declare `sideEffects: "external"`, which is what lets §6.2's cancellation evidence say that
 an effect may have landed somewhere this install cannot inspect.
 
+**What this build declares now (M2ac, D-107).** Sixteen of §4.2's forty-five rows have an executor — the fourteen above
+plus `config.get` and `config.set` — carried as seventeen declarations. The M2ab paragraph above stays as its snapshot.
+These two are the first rows whose price is about *who can answer* rather than about how loud a prompt is: `config.set` is
+**T3**, D-085 confines a T3 signature to the TUI and the Web control UI, and M2 ships neither, so a run whose model asks
+to change configuration parks at a prompt no CLI can sign and the request expires rather than runs. That is asserted
+rather than merely documented (`tests/integration/config.test.ts` drives a real run into exactly that park), because a
+tier whose consequence nobody has watched is a tier in a table. What the read added to the rules above is a fourth, and it
+is about the answer rather than the act: **a configuration read is scrubbed by the same derivation the route answers
+with** — `configForReading` in `packages/core`, one implementation and two callers — so §4.2's "secret *names* only, never
+values" is not a rule either of them has to remember. Neither row is wrapped as untrusted, because this is Crabby's own
+state rather than bytes from elsewhere, and both take the `fs.*` clock from D-074's table: the act is a file read and a
+file write, so the tool borrows the deadline of the thing it touches instead of inventing a fifth number for a document on
+the same disk.
+
 ### 4.2 Initial tool set with risk-tier assignment (closes O-020)
 
 Tiers are per `SECURITY.md` §6.2. "Approval" means the default policy for a fresh install; users may tighten, and
@@ -408,8 +422,8 @@ may relax only where a floor exists (T3 has no relaxation path in the first rele
 | `task.create` | `task.create` | **T1** | **T2** if the new task itself carries T2 steps; the task inherits its own tier, it does not inherit the caller's. |
 | `task.status` / `task.history` | `task.read` | **T0** | |
 | `task.cancel` | `task.cancel` | **T1** | **T2** for cross-session or "cancel all"; per `ARCHITECTURE.md` §10. |
-| `config.get` | `config.write`-independent read | **T0** | Secret *names* only, never values. |
-| `config.set` | `config.write` | **T3** | Includes changing permissions, roots, or retention. |
+| `config.get` | `config.write`-independent read | **T0** | Secret *names* only, never values. **Executed since M2ac** (`packages/tools/config.ts`, D-107): one dotted key or the whole document, one line per leaf and each marked as a default or as an override, so a model can tell a user whose number a deadline came from. The values a reader may see are scrubbed by `configForReading`, the same derivation `GET /api/v1/config` answers with, and a `provider.<id>.key` that is not a `vault://` name is withheld and named in the answer's `redacted` list. |
+| `config.set` | `config.write` | **T3** | Includes changing permissions, roots, or retention. **Executed since M2ac** (`packages/tools/config.ts`, D-107): one key and never a deletion, because setting and unsetting are different acts on the document that decides permissions and this row prices only the one it names. The concurrency token is read and presented by the sink rather than declared as an argument (D-099: a declared field is never an authority). On a build with no TUI or Web control UI the T3 request parks and cannot be answered (D-085), which is the rule working rather than a fault to retry around; the user's own path to the same act is `crabby config set` or `PUT /api/v1/config`. |
 | `tunnel.status` | read-only | **T0** | |
 | `tunnel.enable` / `tunnel.stop` | `tunnel.enable` | **T3** | Must list which paired identities become reachable (`SECURITY.md` §13). |
 | `ext.list` / `ext.info` | read-only | **T0** | |

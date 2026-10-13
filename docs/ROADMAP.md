@@ -1001,6 +1001,77 @@ reachability claim this slice rests on; and one on `egressHosts`, the normalizat
 comparison away from losing), `test:security` 139/139, `test:parity` (24 routes, 45 tools, 32
 capabilities, 25 features) and `docs:check` (106 accepted decisions) green.
 
+**Thirty-third slice — `/config` and §4.2's two configuration rows: one document, one token, and a T3 nobody on this
+build can sign (D-107).** §4.4's three `/config` paths were the last unbuilt row a settings screen needs, and §2's
+concurrency row had been saying out loud why configuration had no token: "there is no config route … a token with nothing
+to present it to is a control nobody can use". Building the routes removed the excuse, so the token's shape is a decision
+rather than a default, and D-107 records it. Three things landed. `GET /api/v1/config` answers two views of one file —
+`file`, which is what `PUT` replaces, and `config`, which has D-074's defaults folded in, so a client can tell an override
+from a default — with the token as the `ETag`, the resolved `limits`, the problems `loadConfig`'s rule 2 kept beside the
+usable part, and the dotted paths whose values were withheld; `GET /api/v1/config/schema` serves the same JSON Schema
+`crabby config schema --json` prints (D-060), so a client can validate before it writes instead of learning from a 400.
+`PUT /api/v1/config` takes a whole document and requires `If-Match`: absent is a 400 naming the header, a token that
+cannot be compared is a 400 with a problem on `if-match`, a stale one is a 409 naming both tokens, and the document is
+checked against the schema *before* the token is compared, because a client told "stale" would re-read and submit the same
+invalid bytes again. Its answer carries `changed` and no second flag, since "the document moved" and "a restart is what
+applies it" are one fact seen from two sides — this Gateway composed its providers, workspace roots, limits and egress
+allow-list at startup. And §4.2's two configuration rows are executed in `packages/tools/config.ts` — the read at **T0**,
+which the row's own words call `config.write`-independent, and the write at **T3** behind that same name — composed as the
+sixth surface in `apps/cli/commands/gateway.ts`, with `crabby config set` now presenting the token it read, so a terminal
+is one of the two interfaces §2's row is about rather than a writer that races them.
+
+The token is sixteen hex characters of SHA-256 over the canonical document (keys sorted at every depth, arrays in order),
+computed from the file and never from the merged view, because D-074's defaults are code and a release that moved one
+would otherwise invalidate every token a client holds without anybody editing anything. D-104 chose an integer for a
+conversation and gave a reason that holds for a row, where the database already keeps one; a file keeps nothing, and a
+counter inside `config.json` would be a field that is not configuration in a document `docs/DATA_AND_MEMORY.md` §4.1 says
+holds "Overrides only". The write is a compare-and-swap and not a transaction — a file has no isolation level to be — so
+the claim is that a silent overwrite becomes a refusal in every case a client can *observe*, and the refusal names both
+tokens so a client can tell an old document from the wrong install. The token is never a declared field: `config.set`'s
+schema is `key` and `value` and nothing else, and the sink reads the token and presents it, for D-099's reason that a
+declared field is never an authority and a token a model could choose would be a write aimed at a document nobody read.
+
+Two false positives turned up while the tests were being written rather than while the code was being read, and both read
+as security claims, which is why they are here. `redact` masks by key *name*, and D-074's `limits.providerFirstTokenMs` —
+a clock whose name contains the word `token` — came back as `[redacted]`, so a configuration read hid a timeout the
+documents promise is visible through `crabby config get limits`; `configForReading` now puts a non-string leaf back as it
+read it and leaves every string to the shared scrub, which is untouched because four other surfaces depend on it erring
+towards masking. And `differingPaths` compared by identity while `redact` copies every array it walks, so a file holding
+`net.allowList` reported that list as withheld on a document where nothing was withheld, and a `PUT /config` log line
+named keys that did not move; it now compares content and still names an array whole rather than per index, because which
+element moved is a question a value would answer and §7 keeps values out of log fields.
+
+A third leak of the same family turned up by *running* the slice rather than by reading it, and it was not in the new
+code: `composeProviders` refused a keyed provider with the reason `'groq' supplies its key by reference (gsk_…)`, quoting
+whatever the field held. On a valid file that is a `vault://` name and harmless, but `loadConfig`'s rule 2 keeps an invalid
+one running, so the sentence printed a raw key on the startup banner — a serializer, and `redact` would not have caught it
+either, because its secret-shaped pattern wants a delimiter after the prefix and `gsk_…` has an underscore. The refusal now
+splits: a reference is named, and a value is withheld with the rule it broke (§3.7), the place the owner may look at it
+(`crabby config get provider.<id>.key`, a terminal that owns the file rather than one with a longer reach) and the finding
+that keeps the vault out of this build (F-56). `isVaultReference` moved into `packages/core` beside the schema pattern it
+reads, so the question "is this §3.7's name or a secret" has one answer in the tree, and `SECURITY.md` §7 now names the
+configuration answer among the serializers it obliges.
+
+What is deliberately not here: no deletion, because setting and unsetting are different acts on the document that decides
+permissions and §4.2 prices the one it names; no second writer, since the route, the command and the tool share one
+read-modify-write against one token; no interface that can sign the **T3** — M3's TUI and Web control UI are what make
+`config.set` usable from inside a run, and until then the honest behaviour is a park and a refusal that says so
+(D-085); and no vault, because F-56 stands: `provider.<id>.key` is a name and nothing resolves one.
+
+Documents moved beside the code: `docs/INTERFACES_AND_API.md` §2's concurrency row, which had been stating the absence,
+§4.4's `/config` row, and §8's matrix cell for Telegram — the last regenerated with `npm run test:parity -- --write`,
+because `scripts/parity.ts` is the source that table is rendered from; `PROVIDERS_AND_TOOLS.md` §4.2's two rows and the
+"what this build declares" count, which was fourteen rows carried as fifteen declarations and is now sixteen carried as
+seventeen; `docs/DATA_AND_MEMORY.md` §4.1's `config.json` row, which now says the file holds no revision counter and never
+will; `DECISIONS.md` with D-107, §4A's map on four rows and the counter at 107; `docs/CONSISTENCY_REVIEW.md` with F-52
+amended for the second path on which the same act is gated and not gated; and this paragraph. Gates: `typecheck`, `lint`,
+`format:check`, `npm test` 666/666 (32 new: 4 on the token and the compare-and-swap, 12 on the executor against sinks a
+test can tell what to answer, 15 over HTTP and inside a real run — the **T3** park, the withheld provider key, the stale
+409 naming both tokens, the `changed: false` write that moves nothing, and the audit line a write makes — and one on the
+provider refusal that used to quote a key; the task-tools harness composes the config surface too now, so its
+`runtime.implemented` pin moved from 14 to 16), `test:security` 140/140, `test:parity` (26 routes, 45 tools, 32
+capabilities, 25 features) and `docs:check` (107 accepted decisions) green.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

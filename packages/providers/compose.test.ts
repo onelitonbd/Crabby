@@ -97,6 +97,36 @@ test("compose: a `vault://` key is refused, because nothing in this build resolv
   );
 });
 
+test("compose: a key that is not a `vault://` name is refused without being printed (§7)", () => {
+  const secret = "gsk_aRawKeyThatReachedCompositionBecauseLoadConfigKeepsRunning";
+  const [result] = composed({
+    groq: entry({ baseUrl: "https://api.groq.com/openai/v1", key: secret } as never),
+  });
+  assert.equal(result?.ok, false);
+  if (result?.ok) return;
+  assert.doesNotMatch(
+    result.reason,
+    /gsk_aRawKey/,
+    "`loadConfig`'s rule 2 keeps a file with a bad key running, so this refusal is reachable with the secret still in " +
+      "the entry — and it is printed on a startup banner and can be written to a log, which makes it a serializer. " +
+      "SECURITY §7 puts the obligation there rather than at the screen, and `redact` would not have caught this one: " +
+      "its secret-shaped pattern wants a delimiter after the prefix and `gsk_…` has an underscore",
+  );
+  assert.match(
+    result.reason,
+    /withheld/,
+    "and the reason says the value was withheld, so the sentence is not read as " +
+      "a field that happens to be empty",
+  );
+  assert.match(result.reason, /§3\.7/, "it names the rule the file broke");
+  assert.match(
+    result.reason,
+    /crabby config get provider\.groq\.key/,
+    "and the one place the owner may look at it: " +
+      "the terminal that owns the file, which is not a serializer with a longer reach",
+  );
+});
+
 test("compose: an inline key is refused by the schema, before it can be written to a 0644 file", () => {
   // §3.3: a key is "supplied by reference to the vault (§3.7), never inline in a conversation or an ordinary config
   // file". The control is the schema rather than a composition check, because composition runs *after* the file exists

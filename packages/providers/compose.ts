@@ -27,7 +27,7 @@
 // refusing to boot over a typo turns a config error into an outage. So this returns a result per entry and the caller
 // decides what an install with none of them means.
 
-import type { LimitsConfig, ProviderEntryConfig } from "@crabby/core";
+import { isVaultReference, type LimitsConfig, type ProviderEntryConfig } from "@crabby/core";
 import { validateProviderConfig } from "./config.ts";
 import type { Provider } from "./contract.ts";
 import { createOpenAiCompatibleProvider, OPENAI_DEADLINE_DEFAULTS } from "./openai.ts";
@@ -82,6 +82,22 @@ function composeOne(
   // point: a `vault://` prefix in front of a plaintext file would make §3.7 true in a grep and false in every way that
   // matters.
   if (entry.key !== undefined) {
+    // Reached with a value that is *not* a reference, because `loadConfig`'s rule 2 keeps a file with a bad key running
+    // and reports the problem beside the usable part rather than refusing to compose. The refusal is printed on a
+    // startup banner and can be written to a log, so it is a serializer, and SECURITY §7 puts the obligation there
+    // rather than at the screen: naming the field is the fix a user needs, and quoting the value would put a secret in
+    // both places at once. `redact` cannot be relied on for this one — its secret-shaped pattern wants a delimiter after
+    // the prefix, and `gsk_…` has an underscore there — so the value is withheld at the source.
+    if (!isVaultReference(entry.key)) {
+      return refused(
+        `'${id}' holds a key value where §3.7 allows only a \`vault://\` name, and the value is withheld here rather ` +
+          "than printed (§7's obligation is at the serializer, and a startup banner is one). `crabby config get " +
+          `provider.${id}.key\` shows it in the terminal that owns the file, and \`crabby doctor\` prints the fix. ` +
+          "Nothing resolves a reference yet either — the vault arrives in M5 (docs/CONSISTENCY_REVIEW.md F-56) — so on " +
+          "this build an endpoint that needs a key cannot be configured, which on this platform means a local server " +
+          "the user runs (D-066, O-034)",
+      );
+    }
     return refused(
       `'${id}' supplies its key by reference (${entry.key}), and nothing in this build resolves a vault reference — ` +
         "the vault arrives in M5 (docs/ROADMAP.md §7, docs/CONSISTENCY_REVIEW.md F-56). Until then an endpoint that " +

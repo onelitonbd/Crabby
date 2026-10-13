@@ -36,6 +36,14 @@ export function runConfig(
   }
 
   if (verb === "get") {
+    // Printed as the file says it, with no `configForReading` scrub — and the asymmetry with `GET /api/v1/config` and the
+    // `config.get` tool is deliberate rather than an oversight, so it is written down here where a reader meets it. Those
+    // two answer *clients*: a browser, a bot, or a model that would quote a value into a provider request, which
+    // SECURITY.md §14 forbids and §7 puts on the serializer. This one answers the owner, on the device that holds the
+    // file, about a file they own — and in a valid document there is nothing to withhold anyway, because §3.3 refuses an
+    // inline key at the keystroke and `provider.<id>.key` is a `vault://` name. The difference is only visible in a file
+    // the schema already refuses, and a terminal is exactly where the user goes to look at the value they have to fix:
+    // redacting it there would hide the mistake behind a marker.
     const key = args[0];
     const value: unknown = key === undefined ? loaded.config : pick(loaded.config, key);
     if (value === undefined) {
@@ -66,14 +74,27 @@ export function runConfig(
   // Written from `loaded.file`, not `loaded.config`: the file holds overrides, and a `set` that round-tripped the
   // merged view would freeze today's defaults into the user's config forever.
   const next = applyConfigKey(loaded.file, key, parseConfigValue(raw));
-  const written = writeConfig(layout, next as ConfigFile);
+  // The token this command read, presented back: §2's concurrency row is about two interfaces editing one configuration,
+  // and a terminal is one of them — a Gateway `PUT /config` that landed between the read above and the write below is
+  // exactly the silent overwrite the row exists to refuse. It is a compare-and-swap and not a lock, because a file has no
+  // isolation level to be (D-107).
+  const written = writeConfig(layout, next as ConfigFile, undefined, { token: loaded.token });
   if (!written.ok) {
     renderer.line("refused", `config ${written.message}`);
-    renderer.fix("the file was not changed");
+    renderer.fix(
+      written.code === "stale"
+        ? "the file changed since this command read it — run `crabby config get` again and write once more"
+        : "the file was not changed",
+    );
     return EXIT.usage;
   }
   renderer.line("wrote", layout.configPath);
-  return renderer.done({ key, value: parseConfigValue(raw), path: layout.configPath });
+  return renderer.done({
+    key,
+    value: parseConfigValue(raw),
+    path: layout.configPath,
+    ...(written.token === undefined ? {} : { token: written.token }),
+  });
 }
 
 function pick(config: Record<string, unknown>, dotted: string): unknown {

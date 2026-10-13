@@ -11,10 +11,12 @@
 //     and that the platform reports the port, and they never name one.
 //  2. A file with a bad key is not a reason to refuse to run. `doctor` reports the named problem and the usable part
 //     still applies — on a phone, refusing to boot over a typo turns a config error into an outage.
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { type Problem, validate } from "@crabby/api-contracts";
+import { type ConfigActionCode, type Problem, validate } from "@crabby/api-contracts";
 import type { DataLayout } from "@crabby/platform";
 import { type Static, Type } from "@sinclair/typebox";
+import { REDACTED_MARKER, redact } from "./redact.ts";
 
 export const LimitsConfig = Type.Object(
   {
@@ -215,6 +217,10 @@ export const DEFAULT_CONFIG: ConfigFile = { limits: { ...LIMITS_DEFAULTS } };
 export interface LoadedConfig {
   /** Defaults applied. This is what the process runs on. */
   readonly config: ConfigFile;
+  /** §2's version token for the file, and the value a `PUT /config` has to present as `If-Match` (D-107). Computed from
+   *  `file` and never from `config`, because `config` carries D-074's defaults: a token that moved when the code changed
+   *  would refuse every edit a client had prepared against yesterday's build. */
+  readonly token: string;
   /** What the file itself says, with no defaults folded in — the only thing `config set` may write back, because a
    *  `set` that saved the merged object would pin every default into the file and make the next default change
    *  unreachable. */
@@ -239,6 +245,10 @@ export function loadConfig(
       return {
         config: structuredClone(DEFAULT_CONFIG),
         file: {},
+        // The empty document's token, and the reason an absent file has one at all: a client that reads a config that
+        // does not exist yet still has to be able to write it, and `If-Match` with no token to present would be a rule
+        // that only applies once the file is there.
+        token: configToken({}),
         limits: { ...LIMITS_DEFAULTS },
         problems: [],
         path: undefined,
@@ -255,6 +265,10 @@ export function loadConfig(
     return {
       config: structuredClone(DEFAULT_CONFIG),
       file: {},
+      // A file that is not JSON is not a document, so it carries the empty document's token. Two different corrupt
+      // files therefore share one token, and that is stated rather than papered over: what a token protects is a write
+      // landing on top of a *document* somebody else edited, and the fix for a corrupt file is to write a good one.
+      token: configToken({}),
       limits: { ...LIMITS_DEFAULTS },
       problems: [
         {
@@ -273,6 +287,7 @@ export function loadConfig(
   return {
     config: mergeConfig(DEFAULT_CONFIG, clean),
     file: clean,
+    token: configToken(clean),
     limits: {
       ...LIMITS_DEFAULTS,
       ...(typeof clean.limits === "object" && clean.limits !== null
@@ -325,20 +340,253 @@ export function parseConfigValue(text: string): unknown {
   }
 }
 
+export interface WriteConfigResult {
+  readonly ok: boolean;
+  readonly message: string;
+  /** Which refusal this was, so a caller can answer with §6's class instead of guessing from the sentence: `invalid` is
+   *  the caller's document, `stale` is §2's concurrency rule, `unwritable` is this device. */
+  readonly code?: ConfigActionCode;
+  /** The token the file now carries, on success. Computed from the document that was written rather than re-read, which
+   *  is the same value a re-read produces: `writeConfig` writes `JSON.stringify(config, null, 2)` and `loadConfig`
+   *  validates it back to `config`, and the token is a hash of the canonical document rather than of the bytes. */
+  readonly token?: string;
+}
+
+/** The token a caller read, presented back. `read` is injectable for the same reason `write` is: a test that has to
+ *  describe a file somebody else changed should not have to create a second process to change it. */
+export interface ExpectedConfigToken {
+  readonly token: string;
+  readonly read?: (path: string) => string;
+}
+
+/** Writes `config.json`, refusing a document the schema rejects and — when the caller presents one — a file that moved
+ *  since the caller read it. That second refusal is §2's concurrency row ("`If-Match`-style version tokens on config and
+ *  session mutations, so two interfaces editing the same thing do not silently overwrite") applied to a file, and it is a
+ *  compare-and-swap rather than a lock: the current document is read through `loadConfig`, so "what the file says" has one
+ *  derivation and the token the route answered with is the token this compares. What it is *not* is a transaction — a
+ *  writer that lands between the compare and the write is still possible, because a file has no isolation level, and the
+ *  honest claim is that a silent overwrite becomes a refusal in every case a client can observe rather than in every case
+ *  that can happen (D-107). */
 export function writeConfig(
   layout: DataLayout,
   config: ConfigFile, // the file's own contents, never the merged view
   write: (path: string, data: string) => void = (file, data) => writeFileSync(file, data),
-): { ok: boolean; message: string } {
+  expected?: ExpectedConfigToken,
+): WriteConfigResult {
   const result = validate(ConfigFile, config);
   if (!result.ok) {
+    // Refused before the token is compared, and the order is the point: a client told "stale" would re-read and submit
+    // the same invalid document again, so the answer that names a defect the caller can fix comes first.
     return {
       ok: false,
+      code: "invalid",
       message: result.problems.map((p) => `${p.path || "<root>"} ${p.message}`).join("; "),
     };
   }
-  write(layout.configPath, `${JSON.stringify(config, null, 2)}\n`);
-  return { ok: true, message: `wrote ${layout.configPath}` };
+  if (expected !== undefined) {
+    const current = loadConfig(layout, expected.read ?? ((file) => readFileSync(file, "utf8")));
+    if (current.token !== expected.token) {
+      return {
+        ok: false,
+        code: "stale",
+        message:
+          `config.json is not the document this write read: the token presented was ${expected.token} and the file now ` +
+          `says ${current.token}. Re-read it and write again — §2's concurrency rule exists so two interfaces editing ` +
+          "one configuration do not silently overwrite each other, and this write would have",
+      };
+    }
+  }
+  try {
+    write(layout.configPath, `${JSON.stringify(config, null, 2)}\n`);
+  } catch (error) {
+    return {
+      ok: false,
+      code: "unwritable",
+      message: `${layout.configPath} could not be written: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+  return { ok: true, message: `wrote ${layout.configPath}`, token: configToken(config) };
+}
+
+/** Whether a value is §3.7's *name* of a secret rather than one. Exported because a second module has to ask the same
+ *  question and must not answer it with its own regular expression: `packages/providers` prints a refusal for a keyed
+ *  entry, and a refusal that quoted the field's value would be a serializer printing a secret — the thing SECURITY §7
+ *  puts the obligation against, and the reason the question is asked here, where the schema's own pattern lives. */
+export function isVaultReference(value: unknown): boolean {
+  return typeof value === "string" && VAULT_REFERENCE.test(value);
+}
+
+/** The configuration as a reader may see it, in one derivation: what the file says, what the process runs on, the
+ *  token a write has to present, and what was withheld on the way out. `GET /api/v1/config` and the `config.get` tool
+ *  both answer from this, because two parties rendering one document is how a settings screen and an agent start
+ *  disagreeing about what the install says (§9's one-derivation rule, applied to a file instead of to a record). */
+export interface ConfigDocument {
+  readonly file: Readonly<Record<string, unknown>>;
+  readonly config: Readonly<Record<string, unknown>>;
+  readonly limits: LimitsConfig;
+  readonly token: string;
+  readonly path: string;
+  readonly exists: boolean;
+  readonly problems: readonly Problem[];
+  readonly redacted: readonly string[];
+}
+
+export function configDocument(
+  layout: DataLayout,
+  read: (path: string) => string = (file) => readFileSync(file, "utf8"),
+): ConfigDocument {
+  const loaded = loadConfig(layout, read);
+  const fileView = configForReading(loaded.file);
+  const mergedView = configForReading(loaded.config);
+  return {
+    file: fileView.file as Readonly<Record<string, unknown>>,
+    config: mergedView.file as Readonly<Record<string, unknown>>,
+    limits: loaded.limits,
+    token: loaded.token,
+    path: layout.configPath,
+    exists: loaded.exists,
+    problems: loaded.problems,
+    redacted: [...new Set([...fileView.redacted, ...mergedView.redacted])],
+  };
+}
+
+/** The canonical form a token is computed from: keys sorted at every depth, arrays in order, primitives as JSON. Two
+ *  files that say the same thing hash the same, so a reformatting is not an edit and does not refuse a client that read
+ *  the document before it; two files that differ in one value hash differently, which is the whole obligation. */
+export function canonicalConfig(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalConfig(entry)).join(",")}]`;
+  if (isRecord(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys
+      .map((key) => `${JSON.stringify(key)}:${canonicalConfig(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** §2's version token for `config.json`: sixteen hex characters of SHA-256 over the canonical document. Opaque on
+ *  purpose — a client presents it back and has no business parsing it, which is the difference from D-104's session
+ *  revision, where the integer is a fact a client can read ("revision 3") because the database already keeps one. A file
+ *  keeps nothing, and a counter stored inside `config.json` would be a field that is not configuration in a document
+ *  `docs/DATA_AND_MEMORY.md` §4.1 says holds "Overrides only". */
+export function configToken(file: ConfigFile): string {
+  return createHash("sha256").update(canonicalConfig(file)).digest("hex").slice(0, 16);
+}
+
+/** §3.7's own spelling of a secret's *name*, taken from the schema rather than spelled a second time: a reference this
+ *  module can compare against is a reference the writer will also accept. */
+const VAULT_REFERENCE = new RegExp(
+  String(
+    (ProviderEntryConfig.properties.key as { pattern?: string | undefined }).pattern ??
+      "^vault://[A-Za-z0-9._-]+$",
+  ),
+);
+
+/** What a read answer may carry, and the two rules that decide it. `PROVIDERS_AND_TOOLS.md` §4.2's `config.get` row is
+ *  "Secret *names* only, never values", and `SECURITY.md` §7 puts the obligation at the serializer rather than at the
+ *  screen — so this runs on the way out of `GET /config` and on the way out of the `config.get` tool, and neither caller
+ *  gets to remember it.
+ *
+ *  The first rule is about a *field*: `provider.<id>.key` holds a `vault://` reference, which is a name and is printed,
+ *  and anything else in that field is a value where §3.7 allows only a name, so it is withheld whatever it looks like.
+ *  The second is `redact`, the scrub every serializer in this build shares, which masks a secret-shaped string anywhere
+ *  in the document. That the second rule is reachable at all is `loadConfig`'s rule 2 — a file with a bad key is not a
+ *  reason to refuse to run — combined with `onlyKnownKeys` being shallow: a raw key fails the schema, so the *merged*
+ *  view drops it, but the bad leaf survives inside its good branch in `file`, which is the view a settings screen edits.
+ *  A read route that echoed `file` would print it. */
+export function configForReading(file: ConfigFile): {
+  readonly file: ConfigFile;
+  readonly redacted: readonly string[];
+} {
+  const redacted: string[] = [];
+  let named: ConfigFile = file;
+  const providers = file.provider;
+  if (providers !== undefined) {
+    const entries: Record<string, unknown> = {};
+    for (const [id, entry] of Object.entries(providers)) {
+      const key = isRecord(entry) ? entry.key : undefined;
+      // Not `typeof key === "string" && !VAULT_REFERENCE.test(key)`: §3.7 allows a `vault://` *name* in this field and
+      // nothing else, so a number or an object that arrived there is withheld on the same rule. The field decides, not
+      // the shape of what landed in it, and a rule that only fires on strings would print whatever a typo put there.
+      if (key !== undefined && !isVaultReference(key)) {
+        redacted.push(`provider.${id}.key`);
+        entries[id] = { ...entry, key: REDACTED_MARKER };
+      } else {
+        entries[id] = entry;
+      }
+    }
+    named = { ...file, provider: entries } as ConfigFile;
+  }
+  const scrubbed = unmaskNonStrings(named, redact(named)) as ConfigFile;
+  for (const path of differingPaths(named, scrubbed, "")) redacted.push(path);
+  return { file: scrubbed, redacted: [...new Set(redacted)] };
+}
+
+/** The repair `configForReading` needs on top of the shared scrub, and the reason is a false positive worth stating
+ *  because it is the kind that survives a review: `redact` masks by key *name* as well as by value shape, and D-074's
+ *  `limits.providerFirstTokenMs` — "time to first token", a clock the documentation promises is visible through
+ *  `crabby config get limits` — matches the credential pattern on the word `token`. A read that answered
+ *  `limits.providerFirstTokenMs = [redacted]` would hide a timeout behind a rule meant for a provider key.
+ *
+ *  A secret in a JSON document is a string, so the repair is narrow rather than a weakening of SECURITY §7's obligation:
+ *  a string leaf keeps the scrub's verdict exactly (both rules, name and shape), a subtree the name rule masked stays
+ *  masked whatever it held, and only a number, a boolean or a null is put back as this module read it. `redact` itself
+ *  is untouched, because four other surfaces depend on it erring towards masking. */
+function unmaskNonStrings(before: unknown, after: unknown, depth = 0): unknown {
+  if (depth > 32) return after;
+  if (typeof before === "string") return after;
+  if (Array.isArray(before)) {
+    if (!Array.isArray(after)) return after;
+    return before.map((item, index) => unmaskNonStrings(item, after[index], depth + 1));
+  }
+  if (!isRecord(before)) return before;
+  if (!isRecord(after)) return after;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(before)) {
+    out[key] = unmaskNonStrings(item, (after as Record<string, unknown>)[key], depth + 1);
+  }
+  return out;
+}
+
+/** The dotted paths where two documents disagree, which is how `configForReading` reports what it withheld without
+ *  knowing every shape a secret can arrive in. Exported because a write has the same question to answer and only names
+ *  and never values may appear in the answer: `PUT /config` logs the keys that moved, and §7's obligation at the
+ *  serializer is the reason a configuration value is not a log field. */
+export function differingPaths(
+  before: unknown,
+  after: unknown,
+  prefix: string,
+  depth = 0,
+): readonly string[] {
+  if (depth > 32) return [];
+  // Identity first, then content: `redact` copies every array and object it walks, so a document compared against its
+  // own scrubbed copy differs by identity everywhere and by content nowhere. Without the second comparison this function
+  // reports `net.allowList` as withheld on a file where nothing was withheld, and a `PUT /config` log line names keys
+  // that did not move — a false positive that reads as a security claim, which is the worst kind to leave in.
+  if (before === after) return [];
+  if (
+    before !== undefined &&
+    after !== undefined &&
+    canonicalConfig(before) === canonicalConfig(after)
+  )
+    return [];
+  if (isRecord(before) && isRecord(after)) {
+    const paths: string[] = [];
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      paths.push(
+        ...differingPaths(
+          before[key],
+          after[key],
+          prefix === "" ? key : `${prefix}.${key}`,
+          depth + 1,
+        ),
+      );
+    }
+    return paths;
+  }
+  return [prefix];
 }
 
 /** When a file has a bad key, the good keys still load (see rule 2 above), so this keeps the valid subset rather

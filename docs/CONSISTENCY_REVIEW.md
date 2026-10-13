@@ -1108,6 +1108,25 @@ from a document and not from an install. The third question's other half is unch
 paragraph above says it: `POST /api/v1/tasks/{id}/cancel` still decides on the token the guard demanded rather than on a
 grant, and one migration (D-097's) is what stands between that and a grant test.
 
+**Amendment (thirty-third slice): the same act is now gated on one path and not on the other, on the file that decides
+permissions.** §4.2's two configuration rows are executed (`packages/tools/config.ts`, D-107) and §4.4's three `/config`
+paths are built, so `config.write` has both halves at once and they do not decide on the same fact. Inside a run the
+capability *is* the control: a run has a `PolicySubject`, so a `config.set` call is gated by the grant the identity holds
+and priced at **T3**, which the arbiter turns into a prompt and D-085 confines to the TUI and the Web control UI — on this
+build the request parks and expires, which is asserted rather than assumed (`tests/integration/config.test.ts` drives a
+real run into that park and then has the CLI refused with the arbiter's own `surface-not-allowed`). Over HTTP the route
+decides on §2's token and never asks the arbiter, for the reason the thirtieth-slice amendment gives: a route has an
+identity and no subject, and D-097's migration is still what stands between. So an identity minted with
+`--restrict config` cannot change configuration from inside a run and can still change it with `PUT /api/v1/config` and
+its token — the asymmetry this row named for `task.cancel`, now on the document that decides workspace roots, retention
+and the egress allow-list. Two things keep it from being worse than that sentence sounds. The write is not unguarded: it
+requires the token the read answered, so a client that has not read the document cannot write it, and a stale one is told
+so with both tokens named. And the user's own interface writing the user's own configuration is the act §4.2's **T3**
+exists to gate rather than a caller of it — D-084's rule is that only the loop opens an approval, so a settings screen
+that had to approve itself would be a prompt with nobody to answer it. What the closing condition below now buys is
+therefore specific: one migration, and `PUT /api/v1/config` can refuse an identity that does not hold `config.write`
+instead of refusing only a document that moved.
+
 ### F-54 — §4.4's first check is a *type* check, and a schema that arrives as data cannot be type-checked
 
 **Severity: low, open, and named in the code that skips it.** `PROVIDERS_AND_TOOLS.md` §4.4 fixes the order of checks —

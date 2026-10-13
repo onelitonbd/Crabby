@@ -8,7 +8,8 @@
 // What is here is the eight file tools `PROVIDERS_AND_TOOLS.md` §4.2 classifies (`file.read`, `file.list`, `file.stat`,
 // `file.write`, `file.edit`, `file.delete`, `file.move`, `fs.search`), the scheduler's one row (`cron.schedule`), the two
 // conversation rows (`session.list`, `session.rename`), the three task rows (`task.create`, `task.status`, `task.cancel`)
-// and the network's one row (`net.fetch`), with §4.1's record filled in for each. Every one of them is an executor over a
+// the network's one row (`net.fetch`) and the two configuration rows (`config.get`, `config.set`), with §4.1's record
+// filled in for each. Every one of them is an executor over a
 // sink rather than a subsystem of its own: the file tools do their own I/O because §8's containment is a property of
 // paths and this package owns the path rules, `net.fetch` does its own because the two judgements it owes are about a
 // destination and a byte count and no other party sees either, and the remaining four ask a party that owns a store — the
@@ -18,7 +19,8 @@
 // What is still absent, and why, rather than a list that reads as an oversight: `memory.*` has no store to read —
 // `docs/ROADMAP.md` §6 gives the persistent memory subsystem to M4, and a `memory.search` over nothing would answer
 // "nothing remembered" forever, which is the mock this repository refuses. `config.*` waits on the same slice that gives
-// `config.json` a writer with a concurrency token (§2's other half). §4.2's `http.request` row stays absent beside the
+// `config.json` a writer with a concurrency token (§2's other half) — which it now has, so `config.get` and `config.set`
+// are built and that sentence is history rather than a plan. §4.2's `http.request` row stays absent beside the
 // `net.fetch` that is now built: a method that mutates remote state is a different act, and it cannot share a tier or an
 // idempotency declaration with a GET. And §4.2's remaining rows need a tunnel, an extension registry, a provider or
 // Termux's own API. Absent rows stay absent in
@@ -48,6 +50,18 @@ import { assertRegistrable, fileToolDeclarations } from "./declare.ts";
 import { type FileToolEnv, fileFacts, runFileTool } from "./fs.ts";
 import { defaultNonce } from "./untrusted.ts";
 
+export {
+  CONFIG_GET_TOOL,
+  CONFIG_SET_TOOL,
+  CONFIG_TOOL_CODES,
+  type ConfigToolCode,
+  type ConfigToolExecutor,
+  type ConfigToolOptions,
+  type ConfigToolRead,
+  type ConfigToolWriteResult,
+  configToolDeclarations,
+  createConfigTools,
+} from "./config.ts";
 export {
   createSchedulerTools,
   SCHEDULER_TOOL,

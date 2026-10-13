@@ -7,14 +7,20 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   applyConfigKey,
+  canonicalConfig,
+  configDocument,
+  configForReading,
   configSchema,
+  configToken,
   createLogger,
   createShutdown,
   dataLayoutFor,
+  differingPaths,
   egressHosts,
   LIMITS_DEFAULTS,
   loadConfig,
   mergeConfig,
+  REDACTED_MARKER,
   readLastExit,
   redact,
   redactText,
@@ -360,6 +366,273 @@ test("config: the curated egress host set is normalized once, because §4.2's T1
     [...egressHosts({ net: { allowList: ["   "] } })],
     [],
     "and an entry that is only whitespace names no host — the schema's `minLength` cannot see it, so the read does",
+  );
+});
+
+test("config: §2's token is a hash of the document and not of the bytes, so a reformatting is not an edit (D-107)", () => {
+  const layout = freshLayout();
+  writeFileSync(layout.configPath, JSON.stringify({ limits: { fsTimeoutMs: 15000 } }));
+  const first = loadConfig(layout);
+  assert.match(
+    first.token,
+    /^[0-9a-f]{16}$/,
+    "sixteen hex characters, opaque on purpose: a client presents it back " +
+      "and has no business parsing it, which is the difference from D-104's session revision, where the integer is a " +
+      "fact a client can read because the database already keeps one",
+  );
+
+  // The same document, written the way a human or a formatter would write it: keys in the other order, two-space
+  // indent, a trailing newline. Nothing the process runs on has moved, so nothing a client presented may be refused.
+  writeFileSync(layout.configPath, `{\n  "limits": {\n    "fsTimeoutMs": 15000\n  }\n}\n`);
+  assert.equal(
+    loadConfig(layout).token,
+    first.token,
+    "a token over the bytes would make every reformatting look like a concurrent writer, and the client that read the " +
+      "document before it would be told its own settings had moved",
+  );
+  assert.equal(
+    canonicalConfig({ b: 1, a: { d: [2, 1], c: null } }),
+    canonicalConfig({ a: { c: null, d: [2, 1] }, b: 1 }),
+    "keys sorted at every depth — and arrays in order, because `[a, b]` and `[b, a]` are two different allow-lists",
+  );
+
+  writeFileSync(layout.configPath, JSON.stringify({ limits: { fsTimeoutMs: 15001 } }));
+  assert.notEqual(
+    loadConfig(layout).token,
+    first.token,
+    "one value changed, so the token changed: that is the whole obligation, and a token that missed it would let a " +
+      "second interface overwrite the first in silence",
+  );
+
+  const absent = dataLayoutFor(join(mkdtempSync(join(tmpdir(), "crabby-core-empty-")), STATE));
+  assert.equal(
+    loadConfig(absent).token,
+    configToken({}),
+    "no file is the empty document, and the empty document has " +
+      "a token, because a first write is still a write somebody may have raced",
+  );
+  writeFileSync(absent.configPath, "{ not json");
+  assert.equal(
+    loadConfig(absent).token,
+    configToken({}),
+    "a corrupt file is also the empty document as far as a token can see, and that is stated rather than hidden: two " +
+      "different corrupt files share a token, so a write over corruption is not refused as stale. The fix is not a " +
+      "smarter hash, it is that the same answer names the problem (`problems`) and the user writes a good document",
+  );
+
+  writeFileSync(
+    layout.configPath,
+    JSON.stringify({ defaultModel: "groq/llama-3.3-70b-versatile" }),
+  );
+  const loaded = loadConfig(layout);
+  assert.equal(
+    loaded.token,
+    configToken(loaded.file),
+    "the token is computed from the file and never from the merged view: D-074's defaults are code, so a release that " +
+      "moves a default would otherwise invalidate every token a client holds without anybody editing anything",
+  );
+  assert.notEqual(configToken(loaded.file), configToken(loaded.config));
+});
+
+test("config: a write with the token it read lands, and a write over a document that moved is refused (D-107)", () => {
+  const layout = freshLayout();
+  writeFileSync(layout.configPath, "{}");
+  const read = loadConfig(layout);
+  const next = applyConfigKey(read.file, "limits.fsTimeoutMs", 20000);
+  const written = writeConfig(layout, next, undefined, { token: read.token });
+  assert.equal(written.ok, true, written.message);
+  assert.equal(
+    written.token,
+    configToken(next),
+    "the answer carries the token the file now has, so a client that writes twice does not have to read between them",
+  );
+  assert.equal(
+    loadConfig(layout).token,
+    written.token,
+    "and a re-read agrees, which is what makes it a version",
+  );
+
+  // Somebody else writes while this caller is composing its request. The token the caller holds is now a token for a
+  // document that does not exist, and §2's row is about exactly this: two interfaces editing one configuration.
+  const raced = writeConfig(layout, applyConfigKey(next, "limits.sqliteBusyTimeoutMs", 4000));
+  assert.equal(
+    raced.ok,
+    true,
+    "a write with no token is a write by a party that read nothing, and stays allowed: the " +
+      "rule is presented-by-the-caller, not enforced on every writer, because `crabby init` has no document to read yet",
+  );
+  const racedToken = raced.token;
+  assert.ok(
+    racedToken !== undefined,
+    "a write that landed answers with the token the file now carries",
+  );
+  const stale = writeConfig(
+    layout,
+    applyConfigKey(next, "defaultModel", "groq/llama-3.1-8b-instant"),
+    undefined,
+    {
+      token: read.token,
+    },
+  );
+  assert.equal(stale.ok, false);
+  assert.equal(
+    stale.code,
+    "stale",
+    "the refusal is named so a route can answer §6's conflict class instead of " +
+      "guessing from the sentence",
+  );
+  assert.match(stale.message, new RegExp(read.token), "the token the caller presented");
+  assert.match(
+    stale.message,
+    new RegExp(racedToken),
+    "and the one the file now carries, because a refusal " +
+      "that does not name both leaves a client unable to tell whether it read the wrong file or the wrong install",
+  );
+  assert.equal(
+    loadConfig(layout).token,
+    racedToken,
+    "a refused write changed nothing: the document that won the race is still the document on disk",
+  );
+
+  const invalid = writeConfig(
+    layout,
+    applyConfigKey(next, "limits.parallelToolSteps", "two"),
+    undefined,
+    { token: read.token },
+  );
+  assert.equal(invalid.ok, false);
+  assert.equal(
+    invalid.code,
+    "invalid",
+    "the schema is checked before the token, and the order is the point: a client told `stale` would re-read and " +
+      "submit the same invalid document again, so the answer that names a defect the caller can fix comes first",
+  );
+  assert.match(invalid.message, /parallelToolSteps/);
+
+  const unwritable = writeConfig(
+    layout,
+    next,
+    () => {
+      throw new Error("EACCES: permission denied");
+    },
+    { token: racedToken },
+  );
+  assert.equal(unwritable.ok, false);
+  assert.equal(
+    unwritable.code,
+    "unwritable",
+    "this device's own answer, kept distinct from the caller's mistake",
+  );
+  assert.match(
+    unwritable.message,
+    /EACCES/,
+    "and the reason is passed through rather than flattened",
+  );
+
+  // A token comparison reads the file, and the read is injectable for the same reason the write is: describing a file
+  // somebody else changed should not take a second process.
+  const moved = writeConfig(layout, next, undefined, {
+    token: read.token,
+    read: () => JSON.stringify({ limits: { fsTimeoutMs: 1 } }),
+  });
+  assert.equal(moved.ok, false);
+  assert.equal(moved.code, "stale");
+  assert.equal(
+    loadConfig(layout).token,
+    racedToken,
+    "an injected read describes the file; it does not replace it",
+  );
+});
+
+test("config: a read withholds a key that is not a `vault://` name, and names what it withheld (§4.2, SECURITY §7)", () => {
+  const raw = "gsk_aRawProviderKeyThatMustNeverBeAnswered";
+  const bad = { provider: { groq: { baseUrl: "https://api.groq.com/openai/v1", key: raw } } };
+  const withheld = configForReading(bad);
+  assert.deepEqual(
+    withheld.redacted,
+    ["provider.groq.key"],
+    "the dotted path is an answer and the value is not: §4.2's `config.get` row is secret *names* only, never values",
+  );
+  const withheldKey = (withheld.file.provider as Record<string, { key?: string }> | undefined)?.groq
+    ?.key;
+  assert.equal(
+    withheldKey,
+    REDACTED_MARKER,
+    "withheld in place rather than dropped, so a settings screen still shows the field the user has to fix",
+  );
+  assert.doesNotMatch(JSON.stringify(withheld.file), /gsk_/);
+
+  const good = configForReading({ provider: { groq: { key: "vault://groq" } } });
+  assert.deepEqual(good.redacted, []);
+  const namedKey = (good.file.provider as Record<string, { key?: string }> | undefined)?.groq?.key;
+  assert.equal(
+    namedKey,
+    "vault://groq",
+    "§3.7's own spelling of a secret's *name* is printed, because a name is what a user has to recognise",
+  );
+
+  const layout = freshLayout();
+  // A raw key fails the schema, and `onlyKnownKeys` is shallow, so the bad leaf survives inside its good branch in
+  // `file` — the view a settings screen edits. This is the case `configForReading` exists for.
+  writeFileSync(layout.configPath, JSON.stringify({ ...bad, limits: { fsTimeoutMs: 9000 } }));
+  const document = configDocument(layout);
+  assert.doesNotMatch(
+    JSON.stringify(document),
+    /gsk_aRaw/,
+    "SECURITY §7 puts the obligation at the serializer rather than at the screen, and `configDocument` is the one " +
+      "derivation both `GET /api/v1/config` and the `config.get` tool answer from — so neither caller can forget it",
+  );
+  assert.deepEqual(document.redacted, ["provider.groq.key"]);
+  assert.equal(
+    document.problems.length,
+    1,
+    "and the defect is still named: withholding is not the same as hiding",
+  );
+  assert.match(document.problems[0]?.message ?? "", /key/);
+  assert.equal(document.path, layout.configPath);
+  assert.equal(document.exists, true);
+  assert.equal(
+    document.limits.fsTimeoutMs,
+    9000,
+    "the good key beside the bad one still loads (rule 2 above)",
+  );
+  assert.equal(
+    document.token,
+    loadConfig(layout).token,
+    "the token is §2's, computed from the file as written",
+  );
+  assert.deepEqual(document.config.limits, { ...LIMITS_DEFAULTS, fsTimeoutMs: 9000 });
+  assert.equal(
+    (document.config.limits as Record<string, unknown>).providerFirstTokenMs,
+    LIMITS_DEFAULTS.providerFirstTokenMs,
+    "D-074's `providerFirstTokenMs` is a *clock* whose name contains the word `token`, so the shared scrub's key-name " +
+      "rule masks it — and a configuration read answering `[redacted]` for a timeout would hide a number the " +
+      "documentation promises is visible through `crabby config get limits`. A secret in a JSON document is a string, " +
+      "so `configForReading` puts a non-string leaf back as it read it and leaves every string to the scrub",
+  );
+});
+
+test("config: `differingPaths` names the keys that moved and never a value, because a configuration value is not a log field (§7)", () => {
+  assert.deepEqual(
+    [...differingPaths({ limits: { fsTimeoutMs: 1 } }, { limits: { fsTimeoutMs: 2 } }, "")],
+    ["limits.fsTimeoutMs"],
+  );
+  assert.deepEqual(
+    [...differingPaths({ a: 1 }, { a: 1 }, "")],
+    [],
+    "nothing moved, nothing to name",
+  );
+  assert.deepEqual(
+    [...differingPaths({ net: { allowList: ["a"] } }, { net: { allowList: ["a", "b"] } }, "")],
+    ["net.allowList"],
+    "an array is named whole rather than per index: which element moved is a question a value would answer, and a " +
+      "value in a log line is the thing §7 forbids — so `PUT /config` logs the paths that moved and stops there",
+  );
+  assert.deepEqual(
+    [...differingPaths({ a: { b: 1 } }, { a: {}, c: 2 }, "")],
+    ["a.b", "c"],
+    "a key that disappeared and a key that appeared are both differences, which is what makes this usable to describe " +
+      "a write rather than only an edit",
   );
 });
 

@@ -70,8 +70,12 @@ import {
   ApprovalListQuery,
   CancelTaskBody,
   type ClientInterface,
+  CONFIG_REFUSAL_CLASS,
+  type ConfigReadBody,
+  type ConfigWriteBody,
   CreateSessionBody,
   CreateTaskBody,
+  configETag,
   type Event,
   errorEnvelope,
   isJobState,
@@ -89,6 +93,8 @@ import {
   PairRequestBody,
   PatchJobBody,
   PatchSessionBody,
+  PutConfigBody,
+  parseConfigIfMatch,
   parseIfMatch,
   SCHEMA_VERSION,
   SESSION_ORIGINS,
@@ -104,7 +110,15 @@ import {
   type TaskState,
   validate,
 } from "@crabby/api-contracts";
-import type { Logger } from "@crabby/core";
+import {
+  type ConfigFile,
+  configDocument,
+  configSchema,
+  differingPaths,
+  type Logger,
+  loadConfig,
+  writeConfig,
+} from "@crabby/core";
 import type { DataLayout } from "@crabby/platform";
 import { detectProcess } from "@crabby/platform";
 import {
@@ -505,6 +519,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
 
   registerSystemRoutes(app, deps, bus, runner, scheduler, jobStore);
   registerPolicyRoutes(app, deps, platform);
+  registerConfigRoutes(app, deps);
   registerAuthRoutes(app, deps, bus);
   registerTaskRoutes(app, deps, bus, checkpoints, cancellation, runner);
   registerJobRoutes(app, deps, jobStore, scheduler);
@@ -854,6 +869,149 @@ function registerPolicyRoutes(
       },
     });
   });
+}
+
+// ------------------------------------------------------- config (§4.4's `/config` row, §2's concurrency row)
+
+/** §4.4's three config paths: the document, a write of it, and the schema that decides what a key may be.
+ *
+ *  Three rules are worth stating before the code, because each is a choice a reviewer will ask about:
+ *
+ *  1. **Every answer is read from the file, not from what this process loaded at startup.** A settings screen that showed
+ *     the startup copy would be showing a document that a `crabby config set` in another terminal had already changed, and
+ *     the token beside it would be a token for bytes that no longer exist — which is the exact failure §2's concurrency row
+ *     exists to refuse, arriving through a read instead of a write.
+ *  2. **A write carries §2's token, and the running process does not change.** The Gateway composed its providers, its
+ *     executor, its limits and its egress allow-list from the configuration it loaded at startup, and nothing here
+ *     re-composes them. `changed` is therefore also the restart flag: a write that moved the file is a fact about the next
+ *     start, and the note says so instead of letting a switch look like it took effect.
+ *  3. **The route decides on the token, not on `config.write`.** §6.1 names a capability for changing configuration and no
+ *     route tests it, which is F-52's shape again: a route has an identity and no `PolicySubject`, and D-097's migration is
+ *     what stands between that and a grant test. The tool half is not like this — `config.set` inside a run *is* gated on
+ *     `config.write` at **T3** (§4.2), by the arbiter, because a run is the one place this build has a subject.
+ *
+ *  Values never appear in a log line here, only key paths: §7 puts the obligation at the serializer, and a configuration
+ *  value is the one thing in this file that §3.7 forbids in plaintext. */
+function registerConfigRoutes(app: FastifyInstance, deps: GatewayDeps): void {
+  /** One derivation of "what the file says", used by all three paths so a read and a write cannot disagree about the
+   *  document, the token or the redaction. Both views are scrubbed: `file` is what a settings screen edits and `config` is
+   *  what the process runs on, and §4.2's "secret *names* only, never values" applies to whichever one a client reads. */
+  const answer = (): { body: ConfigReadBody; token: string; file: ConfigFile } => {
+    const loaded = loadConfig(deps.layout);
+    const document = configDocument(deps.layout);
+    const note =
+      `${document.exists ? "read" : "no file yet at"} ${document.path} — ` +
+      "`file` is the document a write replaces and `config` has D-074's defaults folded in, so an override and a default " +
+      `are distinguishable. A write carries this token back as \`If-Match: "${document.token}"\` (§2's concurrency ` +
+      "row), and the running Gateway keeps the configuration it loaded at startup, so a change applies at the next start." +
+      (document.redacted.length === 0
+        ? ""
+        : ` ${document.redacted.length} value(s) are withheld and named in \`redacted\`: §4.2's \`config.get\` row is ` +
+          "secret *names* only, never values, and the file itself is the place to look at one.");
+    return {
+      token: document.token,
+      file: loaded.file,
+      body: {
+        ...document,
+        limits: document.limits as unknown as Readonly<Record<string, unknown>>,
+        note,
+      },
+    };
+  };
+
+  app.get("/api/v1/config", async (_request, reply) => {
+    const { body, token } = answer();
+    return reply.header("etag", configETag(token)).send(body);
+  });
+
+  app.get("/api/v1/config/schema", async (_request, reply) => {
+    return reply.send({
+      // D-060's schema, and the same function `crabby config schema --json` calls: one opinion about what a key may be,
+      // printed by a command and served by a route, rather than a route that transcribes what a command says.
+      schema: configSchema(),
+      note:
+        "the JSON Schema `config.json` is validated against, which is what `PUT /config` and `crabby config set` both " +
+        "refuse a document with — D-060 made the schema an output rather than a conversion, so a client can validate " +
+        "before it writes instead of learning from a 400",
+    });
+  });
+
+  app.put<{ Body: PutConfigBody }>(
+    "/api/v1/config",
+    { schema: { body: PutConfigBody } },
+    async (request, reply) => {
+      const header = request.headers["if-match"];
+      const presented = parseConfigIfMatch(typeof header === "string" ? header : undefined);
+      if (presented === undefined)
+        // A distinct code rather than `validation_failed`, for the reason the session route gives: the fix is not in the
+        // body, and a client that reads the code can act — read the document, take its `etag`, send it back.
+        throw new GatewayError({
+          code: "if_match_required",
+          message:
+            'a config mutation carries the document it read, as `If-Match: "9f2c…"` for the token `GET /api/v1/config` ' +
+            "answered — §2's concurrency rule, so two interfaces editing one configuration do not silently overwrite " +
+            "each other. The token is opaque: present it back unchanged rather than editing the document it names",
+          class: "validation",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      if (!presented.ok)
+        throw validationError(
+          [{ path: "if-match", kind: "invalid", message: presented.reason }],
+          request.crabbyRequestId,
+        );
+
+      const before = answer();
+      const written = writeConfig(deps.layout, request.body.config as ConfigFile, undefined, {
+        token: presented.token,
+      });
+      if (!written.ok) {
+        const code = written.code ?? "unwritable";
+        throw new GatewayError({
+          code: `config_${code}`,
+          message: written.message,
+          class: CONFIG_REFUSAL_CLASS[code],
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      const after = answer();
+      const changed = before.token !== after.token;
+      const changedKeys = [...differingPaths(before.file, after.file, "")];
+      const client = request.crabbyClient;
+      deps.log.info("config written", {
+        path: deps.layout.configPath,
+        changed,
+        // Key *paths* and never values, for the reason the section header gives: §7's obligation is at the serializer,
+        // and §3.7 is why a configuration value is not a log field.
+        ...(changedKeys.length === 0 ? {} : { keys: changedKeys.join(", ") }),
+        // Named `etag` and not `token`, and the reason is the shared scrub rather than a preference: `redact` masks any
+        // string under a key that looks like a credential, so a field called `token` reaches the log file as
+        // `[redacted]` — and this line is the only record of which document a write produced, which is what D-107 points
+        // a reader at when they ask which of two writers was newer. A config token is not a secret (it is a hash of a
+        // document the client already holds), so the honest fix is a field name the scrub does not claim, not a weaker
+        // scrub. It is the same string the response's `etag` header carries, which is what the name says.
+        etag: after.token,
+        ...(client === undefined ? {} : { by: client.id, via: client.interface }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      const body: ConfigWriteBody = {
+        ...after.body,
+        changed,
+        note: changed
+          ? `written to ${deps.layout.configPath}: ${
+              changedKeys.length === 0
+                ? "the document changed"
+                : `${changedKeys.join(", ")} changed`
+            }. This Gateway keeps the configuration it loaded at startup — its providers, its workspace roots, its ` +
+            "limits and its egress allow-list were all composed then — so the write applies at the next start, and " +
+            "`changed` is the flag a restart banner reads."
+          : `written to ${deps.layout.configPath} with no change: the document is byte-for-byte what the file already ` +
+            "said, so there is nothing to restart for and the token did not move",
+      };
+      return reply.header("etag", configETag(after.token)).send(body);
+    },
+  );
 }
 
 // ------------------------------------------------------------------ auth (§3.1/§3.2)

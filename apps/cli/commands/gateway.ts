@@ -15,12 +15,16 @@ import {
   type TaskState,
 } from "@crabby/api-contracts";
 import {
+  applyConfigKey,
+  type ConfigFile,
+  configDocument,
   createLogger,
   createShutdown,
   egressHosts,
   LIMITS_DEFAULTS,
   type LogLevel,
   loadConfig,
+  writeConfig,
 } from "@crabby/core";
 import {
   buildApp,
@@ -48,6 +52,7 @@ import {
 } from "@crabby/storage";
 import {
   combineToolSurfaces,
+  createConfigTools,
   createFileTools,
   createNetTools,
   createSchedulerTools,
@@ -279,6 +284,40 @@ async function runStart(
     scratchDirFor: (taskId) => taskScratch(layout, taskId),
     limits: loaded.limits,
   });
+  /** §4.2's two configuration rows. Both sinks read the file at call time rather than the copy this process loaded at
+   *  startup, because a settings answer that described yesterday's document would be a wrong answer with a confident shape
+   *  — and the token beside it would be a token for bytes that no longer exist. The write sink owns §2's
+   *  read-modify-write and the token that goes with it, which is D-099's rule about a declared field: a token the model
+   *  could choose would be a write aimed at a document nobody read. What the write does *not* do is change this running
+   *  process, and the tool says so in its answer rather than letting a switch look like it took effect. */
+  const configTools = createConfigTools({
+    read: () => configDocument(layout),
+    write: ({ key, value }) => {
+      const before = loadConfig(layout);
+      const written = writeConfig(
+        layout,
+        applyConfigKey(before.file, key, value) as ConfigFile,
+        undefined,
+        {
+          token: before.token,
+        },
+      );
+      if (!written.ok)
+        return {
+          ok: false as const,
+          code: written.code ?? ("unwritable" as const),
+          reason: written.message,
+        };
+      const after = loadConfig(layout);
+      return {
+        ok: true as const,
+        token: after.token,
+        changed: before.token !== after.token,
+        path: layout.configPath,
+      };
+    },
+    limits: loaded.limits,
+  });
   /** The one executor the runner is given, which is a *combination* rather than the file tools alone: §4.1 registers a
    *  tool by name across the whole composition and `combineToolSurfaces` makes a duplicate fatal at startup instead of
    *  last-one-wins. Composed only when a runner will exist, for the reason `createSchedulerTools`'s own header gives —
@@ -287,7 +326,14 @@ async function runStart(
   const composed =
     executor === undefined || !selected.ok
       ? undefined
-      : combineToolSurfaces([executor, netTools, schedulerTools, sessionTools, taskTools]);
+      : combineToolSurfaces([
+          executor,
+          netTools,
+          configTools,
+          schedulerTools,
+          sessionTools,
+          taskTools,
+        ]);
   // Both halves of the condition are named again here, for the reason the banner below names them: `composed` is built
   // from `selected`, so "there is an executor" and "a model was selected" are the same fact seen from two places, and
   // TypeScript narrows the second only from a test that mentions it.

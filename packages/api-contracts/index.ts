@@ -8,6 +8,7 @@ export { Value } from "@sinclair/typebox/value";
 export * from "./approvals.ts";
 export * from "./checkpoint.ts";
 export * from "./clients.ts";
+export * from "./config.ts";
 export * from "./error.ts";
 export * from "./events.ts";
 export * from "./exit-codes.ts";

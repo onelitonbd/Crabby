@@ -29,7 +29,14 @@ import {
   type TaskRecord,
   type TaskState,
 } from "@crabby/api-contracts";
-import { createLogger } from "@crabby/core";
+import {
+  applyConfigKey,
+  type ConfigFile,
+  configDocument,
+  createLogger,
+  loadConfig,
+  writeConfig,
+} from "@crabby/core";
 import { type BuiltApp, buildApp, createClient, type GatewayClient } from "@crabby/gateway";
 import { dataLayout, homeDirectory } from "@crabby/platform";
 import { capabilitiesFor } from "@crabby/policy";
@@ -55,6 +62,7 @@ import {
 } from "@crabby/storage";
 import {
   combineToolSurfaces,
+  createConfigTools,
   createFileTools,
   createNetTools,
   createSchedulerTools,
@@ -175,6 +183,36 @@ async function boot(options: BootOptions): Promise<Harness> {
           fetch: async () => {
             throw new Error("this harness makes no real request");
           },
+        }),
+        // The two configuration rows, composed where the CLI composes them: the read sink is the same `configDocument`
+        // `GET /api/v1/config` answers from, and the write sink owns §2's token rather than asking the model for one
+        // (D-099: a declared field is never an authority). They are here so the count below stays a fact about a real
+        // install, and so the composition a T3 park happens in is the one `crabby gateway start` makes.
+        createConfigTools({
+          read: () => configDocument(layout),
+          write: ({ key, value }) => {
+            const before = loadConfig(layout);
+            const written = writeConfig(
+              layout,
+              applyConfigKey(before.file, key, value) as ConfigFile,
+              undefined,
+              { token: before.token },
+            );
+            if (!written.ok)
+              return {
+                ok: false as const,
+                code: written.code ?? ("unwritable" as const),
+                reason: written.message,
+              };
+            const after = loadConfig(layout);
+            return {
+              ok: true as const,
+              token: after.token,
+              changed: before.token !== after.token,
+              path: layout.configPath,
+            };
+          },
+          limits: loadConfig(layout).limits,
         }),
         schedulerTools,
         // The two surfaces the CLI composes beside these, so that the `GET /api/v1/tools` count below is a fact about a
@@ -484,9 +522,11 @@ describe("§4.2's task rows, composed the way a Gateway composes them", () => {
     };
     assert.equal(
       body.runtime.implemented,
-      14,
-      "seven file rows, `cron.schedule`, the two conversation rows, the three task rows and `net.fetch`: F-55's count is " +
-        "a fact about an install, and it rose by one because §4.2's network row has an executor behind it",
+      16,
+      "seven file rows, `cron.schedule`, the two conversation rows, the three task rows, `net.fetch` and the two " +
+        "configuration rows: F-55's count is a fact about an install, and it rose by two because §4.2's `config.get` " +
+        "and `config.set` have an executor behind them — the second of which is priced at T3 and parks rather than runs " +
+        "on a build with no TUI or Web control UI (D-085)",
     );
     const byName = new Map(body.items.map((row) => [row.id, row]));
     for (const tool of [TASK_CREATE_TOOL, TASK_STATUS_TOOL, TASK_CANCEL_TOOL])

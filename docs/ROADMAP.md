@@ -1072,6 +1072,35 @@ provider refusal that used to quote a key; the task-tools harness composes the c
 `runtime.implemented` pin moved from 14 to 16), `test:security` 140/140, `test:parity` (26 routes, 45 tools, 32
 capabilities, 25 features) and `docs:check` (107 accepted decisions) green.
 
+**Thirty-fourth slice — `shell.run` has an executor, and the install decides whether it is composed.** §4's
+remaining-initial-tools sentence named `shell.run` behind §9's opt-in beside `net.fetch`, `session.*`, `task.*` and
+`config.*`; all five now have executors, and the shell's arrived with the enable path the `packages/tools` header said
+it had to arrive with ("an executor for it is a slice that has to arrive with that opt-in path"). Three things landed
+on three branches. `packages/tools/shell.ts` declares both §4.2 shell rows with §4.1's runtime fields — argv-form
+`inputSchema` (`argv` plus an optional `cwd`, never a string assembled from untrusted content), D-074's 120 s
+`shellRunTimeoutMs`, `idempotent: false`, `sideEffects: "external"` — with cwd resolved through the link re-check, a
+fixed child-env allow-list, abort killing the process group, and D-064's wrapped cap with the nonce delimiter. The
+composition (`apps/cli/commands/gateway.ts`) builds it only when `shell.enabled` is true **and** roots exist, joins it
+to the workspace-executor half so `GET /tools` merges both shell records even without a runner, and prints a `shell`
+banner line naming which half is missing; `crabby init --enable-shell` records the opt-in on fresh installs only, and
+existing configs are reported rather than overwritten. The policy surface needed no production change — the classifier,
+the escalation and the baselines already refused, priced and withheld exactly what the documents say — so the third
+branch is tests asserting it: classifier floors and redirect branches in `packages/policy`, grant-before-tier and T3
+refusals over the security surface, and an off-vs-on integration block where a gated unknown command parks at T2, an
+approval resumes it to a completed run, and a denial ends it with one `tool.execution.blocked` event. `GET /tools`
+`runtime.implemented` moves 16 → 18 on a composed install (two rows, one declaration) and both shell rows pend all
+five fields where no executor was composed.
+
+What is deliberately not here, named rather than implied. No D-row: the decision this slice would record is drafted
+but unapproved, so `DECISIONS.md` is untouched and the draft waits with the owner rather than entering the register
+as accepted. No `SECURITY.md` §9 sentence on the family scope of "off by default" (F-34 stays open: the enforced
+behavior is the family reading, the owning sentence states the single). No `process.spawn` / `process.list`
+executors. No T1 reachable from the classifier's read-only set that the documents print as T0/T1 (recorded, not
+renamed). No doctor row for the shell half. Gates per branch: shell executor 25/25, policy 53/53, security 12/12,
+task-tools 11/11, `typecheck` (TS 5.9.2 — repo TS 7 ships no android-arm64 binary) and `parity`/`docs:check` green;
+full `npm test` is load-flaky on this phone in spawned-gateway files and green in isolation, and the release proof
+moves to CI per the owner's call.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

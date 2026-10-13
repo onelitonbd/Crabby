@@ -201,7 +201,11 @@ describe("no client can be walked into an approval it cannot answer", () => {
     // from Telegram rather than queuing an approval no chat surface may sign (D-085). The redirect needs a path
     // context — without roots and a home there is no deny-list to measure against, so judging it would assert the
     // "cannot locate" branch instead of the sensitive one.
-    const paths = { home: "/home/ua", dataDir: "/home/ua/.local/share/crabby", roots: ["/home/ua/work"] };
+    const paths = {
+      home: "/home/ua",
+      dataDir: "/home/ua/.local/share/crabby",
+      roots: ["/home/ua/work"],
+    };
     for (const command of ["rm -rf /tmp/x", "echo x > ~/.ssh/authorized_keys"]) {
       const decision = evaluate(
         { tool: "shell.run", args: { command } },

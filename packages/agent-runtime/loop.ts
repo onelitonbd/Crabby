@@ -66,7 +66,7 @@ import {
   type ToolDeclaration,
   validateToolArguments,
 } from "@crabby/api-contracts";
-import { LIMITS_DEFAULTS } from "@crabby/core";
+import { LIMITS_DEFAULTS, type LimitsConfig } from "@crabby/core";
 import {
   availabilityFor,
   type ClientKind,
@@ -122,8 +122,11 @@ export interface LoopLimits {
    *  sentence is "at least 5 attempts per failing stage (configurable)" and the configurable half may not be used to
    *  configure the ladder out of existence. */
   readonly providerAttempts: number;
-  /** Per-tool deadlines in milliseconds, keyed by tool name — the `limits.*` overrides D-074 promises are editable in
-   *  `config.json`. An override wins over the class default; a tool with neither runs under the caller's signal alone. */
+  /** Per-tool deadlines in milliseconds, keyed by tool name. An override wins over the class default; a tool with
+   *  neither runs under the caller's signal alone. There is no `limits.toolDeadlines` key in `config.json` in this
+   *  build — D-074's table prices classes, not individual tools — so this field arrives from a composition that
+   *  computes it (or a test that needs one clock short), and `loopLimitsOf` below leaves it alone rather than
+   *  inventing a key no schema carries. */
   readonly toolDeadlines?: Readonly<Record<string, number>> | undefined;
 }
 
@@ -142,6 +145,37 @@ export const LOOP_LIMITS: LoopLimits = {
   providerAttempts: LIMITS_DEFAULTS.providerAttempts,
   refusalsBeforePause: 2,
 };
+
+/** One key, translated, or nothing: an absent key means the default stands, and the merge below is a spread, so a
+ *  present `undefined` would erase the number it meant to override. */
+function when<K extends keyof LoopLimits>(
+  key: K,
+  value: LoopLimits[K] | undefined,
+): Partial<LoopLimits> {
+  return value === undefined ? {} : ({ [key]: value } as Partial<LoopLimits>);
+}
+
+/** D-074's override path, wired: `config.json`'s `limits.*` become the loop's numbers, one key per field, with the one
+ *  name the two documents disagree about (`providerAbsoluteMs` vs `providerCallMs`) translated here rather than at each
+ *  caller. Every key that maps is a key the loop enforces; the ones that do not map are enforced elsewhere and are named
+ *  rather than dropped in silence — the three provider timings and the pool size by §3.1's wrapper and the Gateway's
+ *  pool, the SQLite busy timeout by the storage layer, the extension overhead by M4's host, the queued-tasks refusal by
+ *  the task manager. `refusalsBeforePause` has no key at all (D-086's floor is a policy, and §5.2's `limits.*` list is
+ *  about timeouts and budgets), and `toolDeadlines` has none either: a per-tool override no document prices is a knob
+ *  no document describes, so the class table stands alone until one does. */
+export function loopLimitsOf(limits: LimitsConfig | undefined): Partial<LoopLimits> {
+  if (limits === undefined) return {};
+  return {
+    ...when("stepsPerTask", limits.stepsPerTask),
+    ...when("toolCallsPerResponse", limits.parallelToolSteps),
+    ...when("providerCallMs", limits.providerAbsoluteMs),
+    ...when("fsTimeoutMs", limits.fsTimeoutMs),
+    ...when("netFetchTimeoutMs", limits.netFetchTimeoutMs),
+    ...when("shellRunTimeoutMs", limits.shellRunTimeoutMs),
+    ...when("cancellationSettleMs", limits.cancellationSettleMs),
+    ...when("providerAttempts", limits.providerAttempts),
+  };
+}
 
 /** D-074's per-tool deadlines, for the classes the table actually prices: `fs.*` 10 s, the network class (`net.fetch`
  *  and, since its own slice, `http.request`) 20 s total, `shell.run` 120 s wall clock. `undefined` means the table

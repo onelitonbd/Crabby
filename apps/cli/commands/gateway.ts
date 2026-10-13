@@ -5,7 +5,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import type { CancellationFailureCode } from "@crabby/agent-runtime";
+import { type CancellationFailureCode, loopLimitsOf } from "@crabby/agent-runtime";
 import {
   type ClientInterface,
   EXIT,
@@ -145,8 +145,11 @@ async function runStart(
   const dbFile = path.join(layout.stateDir, DB_FILE_NAME);
   // D-074 makes `limits.sqliteBusyTimeoutMs` the override for the busy timeout, and `openDatabase` reads it out of
   // `options.limits` — so until this line the composition root opened the database without the loaded config and that
-  // one key changed nothing except the screen that printed it. The rest of `limits.*` waits for the runtime that
-  // consumes it; this one already had a consumer and was not being handed to it.
+  // one key changed nothing except the screen that printed it. The loop's eight keys now reach it the same way,
+  // translated once by `loopLimitsOf` on the runner below; what still has no consumer is `queuedTasksBeforeRefusal`
+  // and `concurrentProviderRequests` (neither a queue nor a pool to configure exists in this build) and
+  // `extensionAdapterOverheadMs` (M4's host reads it when one exists). The three provider timings go to
+  // `composeProviders` two lines down.
   const handle = openDatabase(dbFile, { limits: loaded.limits });
   const migration = migrate(handle.db);
   // §3.3's other configuration path — "Configured through `crabby provider add` **or configuration**" — composed here
@@ -400,6 +403,11 @@ async function runStart(
              *  host and is priced T2 with that host named in the prompt. */
             egressAllowList: egressHosts(loaded.config),
           },
+          /** §5.2's override path, translated once: `loopLimitsOf` maps the eight `limits.*` keys the loop enforces
+           *  onto its own field names, so a user who raised `limits.providerAbsoluteMs` in `config.json` gets the
+           *  longer clock in the run that follows and not just in the banner that printed it. Absent keys stay absent
+           *  rather than arriving as `undefined`, because the loop merges this over its defaults with a spread. */
+          limits: loopLimitsOf(loaded.config.limits),
         };
   const startedAt = new Date();
   const built = await buildApp({

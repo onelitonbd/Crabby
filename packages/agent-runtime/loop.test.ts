@@ -10,7 +10,9 @@ import { type EvalContext, evaluate } from "@crabby/policy";
 import { MAX_ATTEMPTS } from "@crabby/providers";
 import {
   LOOP_LIMITS,
+  type LoopLimits,
   type LoopOutcome,
+  loopLimitsOf,
   type SuspendedRun,
   toolDeadlineMs,
   withheldReason,
@@ -978,6 +980,59 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
       "the table prices no row for this tool, so no deadline is invented for it — a number nobody decided is a number " +
         "nobody can defend",
     );
+  });
+
+  it("translates the eight `limits.*` keys the loop enforces, and omits the ones it does not (D-074's override path)", () => {
+    const mapped = loopLimitsOf({
+      stepsPerTask: 9,
+      parallelToolSteps: 1,
+      providerAbsoluteMs: 60_000,
+      fsTimeoutMs: 2_000,
+      netFetchTimeoutMs: 4_000,
+      shellRunTimeoutMs: 30_000,
+      cancellationSettleMs: 1_000,
+      providerAttempts: 7,
+      // The four the loop does not enforce, present in the schema and priced for other parties:
+      providerConnectMs: 1,
+      providerFirstTokenMs: 2,
+      sqliteBusyTimeoutMs: 3,
+      concurrentProviderRequests: 4,
+    });
+    assert.deepEqual(
+      mapped,
+      {
+        stepsPerTask: 9,
+        toolCallsPerResponse: 1,
+        providerCallMs: 60_000,
+        fsTimeoutMs: 2_000,
+        netFetchTimeoutMs: 4_000,
+        shellRunTimeoutMs: 30_000,
+        cancellationSettleMs: 1_000,
+        providerAttempts: 7,
+      },
+      "every key the loop enforces maps by its own name, and the translation `providerAbsoluteMs` → " +
+        "`providerCallMs` — the two names one budget has been carried under — happens here rather than at each caller",
+    );
+    assert.equal(
+      "refusalsBeforePause" in mapped,
+      false,
+      "D-086's floor has no `limits.*` key, so no config can price it: §5.2's list is timeouts and budgets, and a " +
+        "policy threshold a file could lower would be a policy the file decides",
+    );
+    assert.equal(
+      "toolDeadlines" in mapped,
+      false,
+      "a per-tool override no document prices is a knob no document describes, so the class table stands alone",
+    );
+    assert.deepEqual(
+      loopLimitsOf(undefined),
+      {},
+      "no `limits` block means no overrides, not an error: `crabby init` writes an empty config on purpose",
+    );
+    const merged: LoopLimits = { ...LOOP_LIMITS, ...mapped };
+    assert.equal(merged.stepsPerTask, 9, "and the merge the loop performs keeps what was set");
+    assert.equal(merged.fsTimeoutMs, 2_000);
+    assert.equal(merged.refusalsBeforePause, 2, "while the fields the config cannot reach keep their defaults");
   });
 
   it("publishes every event it stored, in order, and never from inside a transaction", async () => {

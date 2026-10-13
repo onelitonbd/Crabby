@@ -22,9 +22,10 @@
 // What is still absent here, and deliberately. Nothing at this route tests whether the identity holds `task.create`:
 // every identity paired before capability assignment holds an empty set, so a grant test would lock an owner out of
 // their own Gateway — the outage D-097 named — and the check belongs beside the socket guard it replaces.
-// `config.json`'s `limits.*` are not wired into the loop either, because `limits.providerAbsoluteMs` and
-// `LoopLimits.providerCallMs` are not one budget under two names and half-mapping them would put a number in the run
-// that no document promises; the gap is recorded in the slice that composed the runner rather than papered over. And
+// `config.json`'s `limits.*` reach the loop through `drive.limits`, translated by `loopLimitsOf` at the composition
+// root: the eight keys the loop enforces map one each, and the rest belong to the parties that enforce them (§3.1's
+// wrapper, the storage layer, the task manager), so a key the loop does not read is never handed to it to no effect.
+// And
 // there is no `POST /api/v1/tasks/{id}/resume` (F-47): §7.1's recovery marks an interrupted task and sweeps the prompts
 // whose deadlines passed, and never resurrects a run, because a recovery that could resume work would be a way past an
 // approval.
@@ -56,6 +57,7 @@ import {
   DEFAULT_RUN_HISTORY,
   type JobActionCode,
   type JobStore,
+  type LoopLimits,
   type LoopSubject,
   localStamp,
   type Runner,
@@ -204,6 +206,13 @@ export interface DriveFacts {
    *  permissions (§3.1's third rule), and a loop that picked its own model would be one step from that. */
   readonly modelId: string;
   readonly ctx: Omit<EvalContext, "grants">;
+  /** §5.2's `limits.*` from `config.json`, already translated into the loop's own field names by the composition root
+   *  (`loopLimitsOf`). Absent means the class defaults stand, which is what a Gateway built without a config file gets;
+   *  present means a user who raised `limits.netFetchTimeoutMs` sees the loop raise the clock with it, because the
+   *  numbers are enforced by the core and never by a caller (§5.2, `SECURITY.md` §12) — a Gateway that read the keys
+   *  into its own banner but handed the loop the defaults would be a configuration that answers questions and changes
+   *  nothing. */
+  readonly limits?: Partial<LoopLimits> | undefined;
 }
 
 export interface GatewayDeps {
@@ -353,6 +362,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
           checkpoints,
           modelId: deps.drive.modelId,
           ctx: deps.drive.ctx,
+          limits: deps.drive.limits,
           log,
         });
   if (runner === undefined)

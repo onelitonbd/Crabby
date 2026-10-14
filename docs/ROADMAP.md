@@ -744,9 +744,12 @@ All four are pinned by a new integration block that spawns a Gateway which reall
 document carrying `following: false` and the idempotency key it generated, and `task watch` plus `task show` on that same
 failed task both exit `0` and both say `failed`. The lesson is recorded rather than only fixed: a refusal path had tests
 and an outcome path had none, and the difference is that the outcome path needed a running Gateway to be reachable at
-all. `crabby gateway start --data-dir <a directory that does not exist>` still dies with better-sqlite3's `TypeError`
-instead of a shaped error naming `crabby init`, and that one stays recorded and unfixed, because who creates the state
-dir is a question §5's setup steps have not made explicit. The scheduler D-046 and D-057 remain what §4's list names
+all. `crabby gateway start --data-dir <a directory that does not exist>` died with better-sqlite3's `TypeError`
+instead of a shaped error naming `crabby init`, because who creates the state dir was a question §5's setup steps had
+not made explicit. (It has since been closed on its own: the owner settled that `crabby init` is the one command that
+creates the state dir, so `gateway start` now checks for it before opening the database and answers a shaped error
+naming `crabby init` — exit `1` with the fix line, not a driver's message.) The scheduler D-046 and D-057 remain what
+§4's list names
 next.
 **The scheduler (twenty-eighth slice).** §4's list ended with the scheduler and with two decisions that had already
 priced it: D-046 put `cron.schedule` at **T2** with an empty capability list, and D-057 made scheduled work a first-class

@@ -16,7 +16,6 @@ import {
   type ToolOutcome,
   type ToolRunContext,
 } from "@crabby/agent-runtime";
-import { createIdentity, getIdentity, revoke } from "./clients.ts";
 import {
   createScriptedProvider,
   guardApprovals,
@@ -26,6 +25,7 @@ import { type Event, newId, type TaskRecord } from "@crabby/api-contracts";
 import { dataLayout } from "@crabby/platform";
 import type { ToolCall } from "@crabby/policy";
 import { createSqliteApprovalStore } from "./approvals.ts";
+import { createIdentity, getIdentity, revoke } from "./clients.ts";
 import { openDatabase, type SqliteDb } from "./db.ts";
 import { readEvents } from "./events.ts";
 import { createSqliteJournal } from "./journal.ts";

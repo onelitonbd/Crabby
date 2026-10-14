@@ -10,7 +10,6 @@ import path from "node:path";
 import process from "node:process";
 import {
   type CancelTaskBody,
-  type ResumeTaskBody,
   type CreateSessionBody,
   type CreateTaskBody,
   ErrorEnvelope,
@@ -18,6 +17,7 @@ import {
   type JobBacklogBody,
   type PatchJobBody,
   type PatchSessionBody,
+  type ResumeTaskBody,
   type TaskState,
   validate,
 } from "@crabby/api-contracts";

@@ -16,6 +16,7 @@ import {
   type ToolOutcome,
   type ToolRunContext,
 } from "@crabby/agent-runtime";
+import { createIdentity, getIdentity, revoke } from "./clients.ts";
 import {
   createScriptedProvider,
   guardApprovals,
@@ -153,6 +154,49 @@ describe("the SQLite journal", () => {
     close();
   });
 
+  it("records which identity a task belongs to, once, with no foreign key to lose it (D-111)", () => {
+    const { db, file, close } = tempDb();
+    // The identity exists before the task, which is the real order: pairing mints a row, and the task written afterwards
+    // names it. (Client ids are opaque — O-070 — so the test asks the storage layer for one rather than inventing a shape.)
+    const minted = createIdentity(db, {
+      name: "the phone",
+      interface: "cli",
+      capabilities: ["fs.read"],
+    });
+    const origin = {
+      clientId: minted.identity.id,
+      clientName: minted.identity.name,
+      interface: minted.identity.interface,
+    };
+    const task = createTask(db, { objective: "tidy the notes", origin });
+
+    assert.deepEqual(getTask(db, task.id)?.origin, origin);
+    close();
+    const reopened = reopen(file);
+    assert.deepEqual(
+      getTask(reopened.db, task.id)?.origin,
+      origin,
+      "the identity is the only thing a restart has to go on (F-47), so it has to survive the process like every other " +
+        "task fact",
+    );
+
+    // No origin is an answer too, and the one that matters: a row written before version 9 keeps saying so rather than
+    // being backfilled with whoever happens to be pairing today.
+    const anonymous = createTask(reopened.db, { objective: "written before version 9" });
+    assert.equal(getTask(reopened.db, anonymous.id)?.origin, undefined);
+
+    // Revoking the identity deletes its row, and the task keeps the attribution: the work happened, and the name of who
+    // asked for it is history rather than a live grant (O-071). A resumption reads the row and refuses when it is gone.
+    assert.equal(revoke(reopened.db, origin.clientId), true);
+    assert.equal(getIdentity(reopened.db, origin.clientId), undefined);
+    assert.deepEqual(
+      getTask(reopened.db, task.id)?.origin,
+      origin,
+      "no cascade and no foreign key: the task outlives the identity, which is why a resumption must look the row up " +
+        "rather than trust what is written here",
+    );
+  });
+
   it("carries §3.6 stage 3's switch beside the pin, in one statement, and keeps both when nothing else is written", () => {
     const { db, file, close } = tempDb();
     const task = createTask(db, { objective: "summarise the notes", model: "local/qwen2.5:3b" });
@@ -286,12 +330,12 @@ describe("the SQLite journal", () => {
       "DELETE FROM schema_migration WHERE version >= 3; DROP TABLE checkpoint; " +
         "DROP TABLE job_run; DROP TABLE job; DROP TABLE session; " +
         "ALTER TABLE task DROP COLUMN cancellation_json; ALTER TABLE task DROP COLUMN model; " +
-        "ALTER TABLE task DROP COLUMN model_switch_json",
+        "ALTER TABLE task DROP COLUMN model_switch_json; ALTER TABLE task DROP COLUMN origin_json",
     );
     // Nothing is read before `migrate` on purpose: v3's SELECT names the new column, so a v2 file is unreadable by v3
     // code until the migration runs. That is why every process migrates on startup rather than lazily, and why this test
     // asserts the upgrade instead of the state before it.
-    assert.deepEqual(migrate(db), { applied: [3, 4, 5, 6, 7, 8], version: 8 });
+    assert.deepEqual(migrate(db), { applied: [3, 4, 5, 6, 7, 8, 9], version: 9 });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,
       1,

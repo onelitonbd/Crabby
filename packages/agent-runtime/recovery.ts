@@ -1,10 +1,11 @@
-// M2g: §7's recovery, and the honest limit of what "full auto-resume" can mean in a build where nothing can *ask* for a
-// resume: the runner that would perform one is composed now, and no route or command calls `runner.resume` (F-47).
+// M2g: §7's recovery. Since F-47 a route *can* ask — `POST /api/v1/tasks/{id}/resume` answers a task this file marks
+// `interrupted` — and this file still performs no continuation, which is the shape §7.2 asks for rather than a leftover:
+// recovery orchestrates, a human authorizes.
 // `AGENT_RUNTIME.md` §7.1 says Crabby MUST attempt to resume interrupted tasks automatically, and §7.2 says
 // the attempt may only succeed for work that is *both* safe and covered by a still-valid approval — "automatic
 // orchestration of recovery, not automatic authorization". This module does the orchestration and reports, task by task,
-// why the authorization half is not performed: §7.2's rule for work that has no cover, and F-47's absent route for work
-// that has one.
+// why the authorization half is not performed: §7.2's rule for work that has no cover, and the absence of a clock for work
+// that does. Nothing here is waiting for a gate to open — the gate is open, and it is a question a person asks.
 //
 // Three rules, all of them D-092's:
 //
@@ -24,9 +25,8 @@
 //      selected default model, `POST /api/v1/tasks` hands it a `PolicySubject` whose grants are expanded from the identity
 //      that asked (F-52's third question, answered), and `GET /api/v1/diagnostics` reports `runs.composed` so a client can
 //      tell a Gateway that drives tasks from one that only records them. What is still missing is a way to *ask*: there is
-//      no `POST /api/v1/tasks/{id}/resume` and `crabby task resume` is `planned` (F-47), so a run a dead process left
-//      behind has a resume nothing can request — and §7.2 makes that the right shape rather than an oversight, because
-//      automatic orchestration of recovery is not automatic authorization. What recovery does is leave the task
+//      no `crabby task resume` (F-47's route answers over HTTP; the verb is M3's grammar), and a rebuild under a timer
+//      would be §7.2's forbidden shape — automatic orchestration of recovery is not automatic authorization. What recovery does is leave the task
 //      `interrupted` with a clear, user-visible reason (§7.2's last bullet), name the still-valid approval a runner would
 //      be allowed to use, and report D-065's verdict — `resume`, `pass`, `re-ask` or `none` — so the fact is on the
 //      record instead of in a reviewer's memory.
@@ -248,8 +248,8 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
   }
 
   /** §7.2's answer for one task, as a sentence a user can read. The two halves differ: with a still-valid approval the
-   *  rule *would* permit a resume and what is missing is a way to ask for one (F-47), while without one the rule forbids
-   *  it outright. Since M2i the sentence also says what the run left behind, because "nothing resumed" is a different fact
+   *  rule *would* permit a resume and what is missing is somebody asking for one, while without one the rule forbids it
+   *  outright. Since M2i the sentence also says what the run left behind, because "nothing resumed" is a different fact
    *  when a durable boundary exists than when it does not, and D-065's verdict is what tells a reader which one this was. */
   function resumeRefusal(
     task: TaskRecord,

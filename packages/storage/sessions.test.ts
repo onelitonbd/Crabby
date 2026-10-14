@@ -46,8 +46,8 @@ test("schema version 6 is the session table, and the index is the order the list
   try {
     assert.equal(
       schemaVersion(db),
-      8,
-      "the file advances past 6 (the task model pin and switch) but v6 is still sessions",
+      9,
+      "the file advances past 6 (the task model pin, its switch and the task origin) but v6 is still sessions",
     );
     assert.equal(MIGRATIONS.find((entry) => entry.version === 6)?.name, "sessions");
     const indexes = db
@@ -127,7 +127,7 @@ test("the backfill gives every conversation a task already referenced, named fro
 
   const applied = migrate(handle.db);
   try {
-    assert.deepEqual(applied.applied, [6, 7, 8]);
+    assert.deepEqual(applied.applied, [6, 7, 8, 9]);
     const rows = listSessions(handle.db);
     assert.deepEqual(
       rows.map((row) => row.id).sort(),

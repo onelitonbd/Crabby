@@ -3,6 +3,7 @@
 // lifecycle; transition rules are the runtime's business (M2) and deliberately not encoded here, because a contract
 // that restates the state machine becomes a second state machine.
 import { type Static, Type } from "@sinclair/typebox";
+import { CLIENT_INTERFACES } from "./clients.ts";
 import { SessionId, TaskId } from "./ids.ts";
 
 export const TASK_STATES = [
@@ -108,6 +109,25 @@ export const TaskModelSwitch = Type.Object(
 );
 export type TaskModelSwitch = Static<typeof TaskModelSwitch>;
 
+/** Which identity a task belongs to — §14's attribution and F-47's resumption, from one field.
+ *
+ *  Only the *identity* is stored, never its capabilities: the grants a run holds are evaluated at the moment it starts
+ *  (§13's revocation), so a copy of a capability list here would be a historical fact in a place a reader would take for
+ *  a current one. What a resumer does with this is look the identity **up** — a client that was revoked has no row, and
+ *  the resumption is refused rather than continued under the authority a dead process happened to be holding. */
+export const TaskOrigin = Type.Object(
+  {
+    clientId: Type.String({ minLength: 1 }),
+    clientName: Type.String({ minLength: 1 }),
+    // §3.1's own list, the same constant `session.origin_interface` and every identity row are built from — one list, so a
+    // fifth interface cannot be added to one and forgotten in the others. It is also what makes this field assignable to
+    // `RunOrigin.interface` without a cast, which is the whole reason it is typed rather than read as text.
+    interface: Type.Union(CLIENT_INTERFACES.map((name) => Type.Literal(name))),
+  },
+  { additionalProperties: false },
+);
+export type TaskOrigin = Static<typeof TaskOrigin>;
+
 export const TaskRecord = Type.Object(
   {
     id: TaskId,
@@ -129,6 +149,10 @@ export const TaskRecord = Type.Object(
     /** Present from the moment a cancellation is requested, with §6.2's evidence added when the task settles (D-091,
      *  amended by D-092 so that recovery can read what was asked instead of excavating it from the log). */
     cancellation: Type.Optional(TaskCancellation),
+    /** The identity that created the task (D-111, schema version 9). Absent means the row predates it or was written by a
+     *  composition root that had no identity to record; §14's audit is served by the log either way, so this is a fact
+     *  that makes attribution and cross-process resumption possible rather than a fact a reader loses. */
+    origin: Type.Optional(TaskOrigin),
     /** §3.6's stage 3 requires the record itself to show a switch — original model, chosen model, reason, the ladder
      *  stage that reached it, and whether any step was re-attempted — so this sits beside `model` the way
      *  `cancellation` sits beside the state it was asked for: a log the reader may not have read is not a record. Absent

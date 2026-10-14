@@ -744,6 +744,282 @@ describe("the task handoff over http (M2's Exit criterion)", () => {
   });
 });
 
+describe("a task interrupted by a restart continues from its checkpoint (F-47, D-111)", () => {
+  it("rebuilds the run across two processes, with the step that committed staying committed", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "crabby-resume-"));
+    const workspace = mkdtempSync(path.join(tmpdir(), "crabby-resume-work-"));
+    writeFileSync(path.join(workspace, "notes.md"), "# notes\n\n- one heading\n", "utf8");
+    // The first process: a run that reads a file inside the root (T2, no prompt), commits that step — and therefore a
+    // checkpoint — and is then left mid-conversation. The fixture hangs the second round, so the process is closed with
+    // a run in flight, which is the state a phone being killed leaves behind.
+    const first = await boot({
+      dataDir,
+      workspace,
+      rounds: [
+        [{ kind: "tool-call", name: "file.read", arguments: { path: "notes.md" } }],
+        [{ kind: "hang", afterText: "still reading" }],
+      ],
+    });
+    const id = await (async () => {
+      try {
+        const created = await first.cli.createTask(
+          { objective: "summarise notes.md" },
+          "idem-restart-1",
+        );
+        const record = created.body as TaskRecord;
+        // The boundary exists once the step commits — polled through the checkpoint route, because that is the view a
+        // client would use to decide whether a resume is even possible, and because its `404` before the first step is
+        // itself the documented "no saved state" answer rather than an error to retry blindly.
+        for (let i = 0; i < 400; i++) {
+          try {
+            const view = (await first.cli.taskCheckpoint(record.id)).body as { step?: number };
+            if (view.step !== undefined) {
+              assert.equal(
+                view.step,
+                1,
+                "D-095: one row per task, replaced at each committed step",
+              );
+              return record.id;
+            }
+          } catch (error) {
+            assert.ok(
+              error instanceof GatewayFailure && error.status === 404,
+              `the checkpoint route answered ${String(error)} — only its 404 is expected here`,
+            );
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        assert.fail("the read committed no boundary in ten seconds");
+        return record.id;
+      } finally {
+        await first.close();
+      }
+    })();
+
+    // The second process: recovery marks it interrupted (§7.1) and reports D-065's verdict beside it.
+    const second = await boot({
+      dataDir,
+      workspace,
+      rounds: [[{ kind: "text", text: "notes.md holds one heading; nothing else is in it" }]],
+    });
+    try {
+      const interrupted = (await second.cli.getTask(id)).body as TaskRecord;
+      assert.equal(interrupted.state, "interrupted");
+      assert.equal(
+        interrupted.origin?.interface,
+        "cli",
+        "D-111: the record says whose task this is, which is the only thing a restart has to go on",
+      );
+
+      const resumed = await second.cli.resumeTask(id);
+      assert.equal(
+        resumed.status,
+        200,
+        `the answer is served; body was ${JSON.stringify(resumed.body).slice(0, 300)}`,
+      );
+
+      const final = await untilTerminal(second, id);
+      assert.equal(final.state, "completed");
+      assert.equal(
+        (await second.cli.getTask(id)).body === undefined ? "" : String(final.model ?? ""),
+        "",
+        "no pin and no switch: the answer named no model, so the run continued on the boundary's own",
+      );
+      const events = readEvents(second.db, id);
+      assert.equal(
+        events.filter((event) => event.type === "task.resumed").length,
+        1,
+        `§7.1's continuation has its own event so a client can tell it from a new run; the log is ${typesOf(events).join(", ")}`,
+      );
+      const spoken = events
+        .filter((event) => event.type === "message.added")
+        .map((event) => String((event.payload as { content?: string }).content ?? ""))
+        .join("\n");
+      assert.match(
+        spoken,
+        /notes\.md holds one heading/,
+        "the second process answered: the run continued, and its own provider is the one that said this",
+      );
+      const readTwice = events.filter(
+        (event) =>
+          event.type === "tool.execution.started" &&
+          (event.payload as { tool?: string }).tool === "file.read",
+      );
+      assert.equal(
+        readTwice.length,
+        1,
+        "D-044 and §3.9: the step that committed is not run a second time",
+      );
+    } finally {
+      await second.close();
+    }
+  });
+
+  it("answers the prompt a dead process left behind — by re-asking, not by spending the row", async () => {
+    // The finding F-47 was written about, in its own words: "a user answers a prompt on their phone and the action never
+    // runs". The action cannot be spent from the row (§7 keeps `call.args` out of the checkpoint, D-095), so what a
+    // continuation can honestly do is hand the saved context back to the model and let it ask again — and this fixture
+    // uses a T3 delete inside the root, because an action that is *possible* is what proves the chain reaches an effect
+    // rather than a second prompt.
+    const dataDir = mkdtempSync(path.join(tmpdir(), "crabby-prompt-resume-"));
+    const workspace = mkdtempSync(path.join(tmpdir(), "crabby-prompt-resume-work-"));
+    const notes = path.join(workspace, "notes.md");
+    writeFileSync(notes, "# notes\n", "utf8");
+    const rounds = [
+      [{ kind: "tool-call", name: "file.delete", arguments: { path: notes } }],
+      [{ kind: "text", text: "the notes are gone; nothing else was in the way" }],
+    ] as const;
+    const first = await boot({ dataDir, workspace, rounds });
+    const id = await (async () => {
+      try {
+        const created = await first.cli.createTask(
+          { objective: "delete notes.md" },
+          "idem-restart-3",
+        );
+        await untilState(first, (created.body as TaskRecord).id, "awaiting_approval");
+        assert.equal(
+          existsSync(notes),
+          true,
+          "the delete is waiting for an answer, and a waiting delete deletes nothing",
+        );
+        return (created.body as TaskRecord).id;
+      } finally {
+        await first.close();
+      }
+    })();
+
+    // The restarted process proposes the same action again — which is what "let the model ask again" means, and what makes
+    // the new prompt attributable to the rebuild rather than to a fixture that happened to ask.
+    const second = await boot({ dataDir, workspace, rounds });
+    try {
+      assert.equal(
+        ((await second.cli.getTask(id)).body as TaskRecord).state,
+        "interrupted",
+        "§7.1 marks it before anything asks",
+      );
+
+      const resumed = await second.cli.resumeTask(id);
+      assert.equal(resumed.status, 200);
+      const reopened = await untilState(second, id, "awaiting_approval");
+      assert.equal(
+        reopened.state,
+        "awaiting_approval",
+        "the rebuilt run asked again rather than proceeding",
+      );
+      assert.equal(
+        existsSync(notes),
+        true,
+        "and the delete has still not happened: a fresh prompt is not an approval",
+      );
+
+      const pending = (await second.cli.approvals({ state: "pending" })).body as {
+        items: { id: string; request: { tool: string } }[];
+      };
+      assert.equal(pending.items.length, 1, "one action, one prompt — and this one is new");
+      const row = pending.items[0];
+      assert.ok(row !== undefined);
+      assert.equal(row.request.tool, "file.delete");
+
+      // Answered from the `tui` identity, because a delete inside the workspace is T3 and §6.2 lets only `tui` and `web`
+      // sign one (D-085). The rebuild changed neither the tier nor the rule about who may answer it.
+      const decision = await second.second.decideApproval(
+        row.id,
+        { decision: "approve", scope: "once" },
+        "idem-approve-1",
+      );
+      assert.equal(decision.status, 200, "answering the prompt the rebuild opened runs the action");
+      const final = await untilTerminal(second, id);
+      assert.equal(final.state, "completed");
+      assert.equal(
+        existsSync(notes),
+        false,
+        "the file is gone: the answer reached an action this time",
+      );
+    } finally {
+      await second.close();
+    }
+  });
+
+  it("refuses a continuation whose creator no longer exists, because §7.2 forbids recovery authorizing itself", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "crabby-revoke-"));
+    const workspace = mkdtempSync(path.join(tmpdir(), "crabby-revoke-work-"));
+    writeFileSync(path.join(workspace, "notes.md"), "# notes\n", "utf8");
+    const first = await boot({
+      dataDir,
+      workspace,
+      rounds: [
+        [{ kind: "tool-call", name: "file.read", arguments: { path: "notes.md" } }],
+        [{ kind: "hang", afterText: "still reading" }],
+      ],
+    });
+    const clientId = await (async () => {
+      try {
+        const created = await first.cli.createTask(
+          { objective: "summarise notes.md" },
+          "idem-restart-2",
+        );
+        for (let i = 0; i < 400; i++) {
+          try {
+            const view = (await first.cli.taskCheckpoint((created.body as TaskRecord).id)).body as {
+              step?: number;
+            };
+            if (view.step !== undefined) break;
+          } catch (error) {
+            assert.ok(
+              error instanceof GatewayFailure && error.status === 404,
+              "only 404 is expected before the first step",
+            );
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        const record = created.body as TaskRecord;
+        return String(record.origin?.clientId ?? "");
+      } finally {
+        await first.close();
+      }
+    })();
+
+    const second = await boot({
+      dataDir,
+      workspace,
+      rounds: [[{ kind: "text", text: "never reached" }]],
+    });
+    try {
+      const ids = (await second.cli.authList()).body as { items: { id: string }[] };
+      const creator = ids.items.find((item) => item.id === clientId);
+      assert.ok(creator !== undefined, "the creator is listed while it still exists");
+      const revoked = await second.cli.authRevoke(String(creator.id));
+      assert.equal(revoked.status, 200, "§3.1's revocation deletes the identity's row (O-071)");
+
+      const refused = await second.cli
+        .listTasks({ state: "interrupted" })
+        .then((page) => (page.body as { items: { id: string }[] }).items[0]?.id);
+      assert.ok(
+        refused !== undefined,
+        "the task is still interrupted, waiting for an answer it can no longer get",
+      );
+      await assert.rejects(second.cli.resumeTask(String(refused)), (error: unknown) => {
+        assert.ok(error instanceof GatewayFailure);
+        assert.equal(error.status, 409);
+        assert.match(
+          error.envelope.error.message,
+          /no longer exists|revocation/,
+          "the refusal names the revocation rather than blaming the state machine",
+        );
+        return true;
+      });
+      const still = (await second.cli.getTask(String(refused))).body as TaskRecord;
+      assert.equal(
+        still.state,
+        "interrupted",
+        "and it moved nothing: a refused continuation is not a new run",
+      );
+    } finally {
+      await second.close();
+    }
+  });
+});
+
 describe("a per-task model pin resolves against every composed provider (D-110, D-108, F-57)", () => {
   it("refuses a pin no composed provider answers to, before any task row is written", async () => {
     const h = await boot({ rounds: [] });

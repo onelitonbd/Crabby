@@ -128,6 +128,26 @@ describe("task records", () => {
     assert.equal(validate(CreateTaskBody, { objective: "x", granted: true }).ok, false);
   });
 
+  it("carries the identity a task belongs to, and refuses one that names no interface", () => {
+    const origin = { clientId: "cli_01h", clientName: "phone", interface: "tui" };
+    assert.equal(validate(TaskRecord, task({ origin })).ok, true);
+    assert.equal(
+      validate(TaskRecord, task({ origin: { ...origin, capabilities: ["fs.write"] } })).ok,
+      false,
+      "the capabilities are evaluated when a run starts; storing them here would be a past fact where a reader would " +
+        "take it for a current one",
+    );
+    assert.equal(
+      validate(TaskRecord, task({ origin: { ...origin, interface: "carrier-pigeon" } })).ok,
+      false,
+    );
+    assert.equal(
+      validate(TaskRecord, task()).ok,
+      true,
+      "absent is a real answer: a row written before version 9, or by a root that had no identity to record",
+    );
+  });
+
   it("carries §3.6 stage 3's switch fact on the record, and refuses a switch that names no pair", () => {
     const switchFact = {
       from: "local/qwen2.5:3b",

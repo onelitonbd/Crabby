@@ -827,7 +827,7 @@ is the first time §6.2's second fact has been a measurement. What survives of F
 `PENDING_RECORD_FIELDS` is a reporting question and has its own row, F-55.)*
 
 ### F-47 — After a restart, a prompt is answerable and nothing can act on the answer
-**Severity: medium, open by choice, and the one thing recovery could not make honest.** §7.1's scan marks every
+**Severity: medium, closed by the fortieth slice (F-47, D-111), and the one thing recovery could not make honest.** §7.1's scan marks every
 non-terminal task `interrupted`, including a task that was in `awaiting_approval` when the process died. Its approval row is
 durable — that was M2c's whole point — so the prompt is still in `GET /approvals?state=pending`, still inside D-064's
 window, and still answerable from all four interfaces. And after the answer, nothing happens: the loop's `SuspendedRun`
@@ -860,16 +860,22 @@ an adapter, and neither is a tool question. The half that was this finding's to 
 verdict per task rather than saying it has nothing to pass. F-50 is the residue, and it is a different shape: the
 checkpoint turned out not to be the only thing D-044's promise was waiting on.)*
 
-*(The route this row names now exists, for the half that does not need a rebuild. D-044's ask parks a run in
-`awaiting_approval` with no approval row, and `POST /tasks/{id}/resume` answers it: the run's messages are still in the
-runner's memory, so the continuation continues rather than reconstructs, and the switch lands on the record with the
-attempts that were spent beside it. What has not changed is the reason this row is open — the *cross-process* half. A task
-parked by a process that has ended is `interrupted`, the messages are gone, and the route says so in its refusal instead of
-implying otherwise; rebuilding them from D-095's checkpoint is still the missing party, and it is the same party a
-`SuspendedRun` was: a `RunInput` assembled from a record rather than from memory. Two things the next slice should know
-before it starts, both found while building the route: the loop's `RunInput` needs no new field for this (the task's origin
-is *not* on the record, so the rebuilt run's identity is the one question this row has grown since the text above was
-written), and the checkpoint's `messages` are the committed context — which is what the in-process park was carrying too.)*
+*(Closed by the fortieth slice, in both halves, and the row's own diagnosis turned out to be right about what was missing:
+the party. `POST /tasks/{id}/resume` answers two positions — a ladder ask this process holds, and a task a restart left
+`interrupted` — and the second one rebuilds the run from D-095's boundary instead of continuing one that is still in
+memory. Three things the text above did not know, and a reviewer should read them next to the code rather than next to the
+finding: **the checkpoint's `messages` are the committed context**, which is exactly what an in-process park was carrying, so
+the rebuild is a continuation and not a reconstruction — and the objective is *not* prepended again, because a second copy
+of the user's opening sentence would be a second instruction in the conversation. **The task's origin was not on the
+record**, which is the question this row had grown since it was written, and D-111 answers it in the direction
+`RunInput.origin` already insisted on: a human answering a prompt does not become the author of a task, so the record now
+names the identity (schema version 9) and the route *looks it up* rather than trusting a stored copy of its capabilities —
+a revoked creator refuses the continuation, which is §7.2's rule arriving from a direction nobody had thought to check.
+**D-065's verdict is read in the runner**, so no route can rebuild work the runtime would not have permitted, and a
+`re-ask` is refused with the verdict's own sentence. What remains open is not this row but a smaller one: `re-ask`'s
+*resolution* — no interface has priced a "skip this step or retry it" act, so an interrupted task whose step was in flight
+is refused with a reason rather than continued, and a user is told why instead of being offered a choice that does not
+exist yet.)*
 
 ### F-48 — Nothing swept the queue, so a stale prompt was shown as pending and counted as waiting
 **Severity: medium, fixed by D-093, and found by writing recovery rather than by reading the queue.** The arbiter has had
@@ -1417,6 +1423,8 @@ the only callers of `resume` in the repository are tests.
 The restart case is *not* this finding and is already honest: `resume` answers `not-parked` with F-47's reason, because
 §7 keeps `call.args` out of the checkpoint (SECURITY.md §8.2, D-095) so a restarted Gateway cannot rebuild the proposed
 call, and D-065's verdict for a step killed at a prompt boundary is `re-ask`. That is an absence with a sentence attached.
+(F-47's route has since arrived, and it did not change this: a continuation rebuilds the run from the boundary and lets the
+model ask again — it cannot *spend* an approval row whose action the checkpoint deliberately does not carry.)
 What this finding is about is the same-process case, where the parked run is reachable and nothing asks it — so §6.3's
 "answer from anywhere" is, in this build, "record an answer from anywhere": a user approves a T2 step on Telegram, the
 button says approved, and the agent never continues. The corollary of D-084's rule is the reason it is easy to miss: only
@@ -1450,9 +1458,10 @@ state moves; and it **reports** what it did, as two new fields on the decision r
 `note` — because the three cases where nothing was woken (no runner in this process, no run parked in it, one already
 moving) need different next actions and `resumed: false` alone is a fact with no sentence attached.
 `crabby approval approve` prints both. What is still true and stays recorded: a run parked in a *previous* process is not
-reachable, because `SuspendedRun` carries the proposed call in memory and SECURITY.md §8.2 keeps `call.args` out of the
-checkpoint — that is F-47's absent `POST /tasks/{id}/resume`, and `Runner.resume`'s `not-parked` sentence is carried
-through to the caller verbatim rather than flattened into a `false`. Asserted by two tests in
+*spendable*, because `SuspendedRun` carries the proposed call in memory and SECURITY.md §8.2 keeps `call.args` out of the
+checkpoint. `POST /tasks/{id}/resume` now exists and rebuilds the run from the boundary instead (F-47, D-111), which gets
+the task moving and the model asking again — not the old row spent — and `Runner.resume`'s `not-parked` sentence is still
+carried through to the caller verbatim rather than flattened into a `false`. Asserted by two tests in
 `tests/integration/task-tools.test.ts`, neither of which contains a `resume` call: a T2 `task.cancel {all: true}` prompt
 approved over HTTP ends with every cancellable task asked to stop and the `interrupted` one untouched, and the same prompt
 denied over HTTP ends with the run completing on the refusal, one `tool.execution.blocked` event carrying the reason, and

@@ -5,6 +5,7 @@ import {
   newId,
   type TaskCancellation,
   type TaskModelSwitch,
+  type TaskOrigin,
   type TaskRecord,
   type TaskState,
 } from "@crabby/api-contracts";
@@ -14,6 +15,9 @@ import { touchSession } from "./sessions.ts";
 export interface CreateTaskInput {
   readonly objective: string;
   readonly sessionId?: string;
+  /** The identity this task belongs to (D-111), written once and never rewritten: §14's attribution and F-47's resumption
+   *  both read it, and a second writer would be a second opinion about whose work this is. */
+  readonly origin?: TaskOrigin;
   /** §3.6's per-task pin (D-108), the `<provider>/<modelId>` pair the route validated against the composed provider. */
   readonly model?: string;
   readonly now?: string;
@@ -31,7 +35,7 @@ export interface ListTasksOptions {
  *  which answers `GET /api/v1/sessions/{id}` with the tasks in one conversation — cannot form a second opinion about what a
  *  row means. Two decoders drift the first time §6.2 adds a column, and the drift shows up as a record with a field missing
  *  in one route and present in another. */
-export const TASK_SELECT = `SELECT id, session_id, state, objective, model, created_at, updated_at, last_seq, error_code, error_message, cancellation_json, model_switch_json FROM task`;
+export const TASK_SELECT = `SELECT id, session_id, state, objective, model, origin_json, created_at, updated_at, last_seq, error_code, error_message, cancellation_json, model_switch_json FROM task`;
 
 export type TaskRow = {
   id: string;
@@ -39,6 +43,7 @@ export type TaskRow = {
   state: string;
   objective: string;
   model: string | null;
+  origin_json: string | null;
   created_at: string;
   updated_at: string;
   last_seq: number;
@@ -56,14 +61,19 @@ export function createTask(db: SqliteDb, input: CreateTaskInput): TaskRecord {
     state: "queued",
     objective: input.objective,
     ...(input.model === undefined ? {} : { model: input.model }),
+    ...(input.origin === undefined ? {} : { origin: input.origin }),
     createdAt: now,
     updatedAt: now,
     lastSeq: 0,
   };
   db.prepare(
-    `INSERT INTO task (id, session_id, state, objective, model, created_at, updated_at, last_seq)
-     VALUES (@id, @sessionId, @state, @objective, @model, @createdAt, @updatedAt, @lastSeq)`,
-  ).run({ ...record, model: input.model ?? null });
+    `INSERT INTO task (id, session_id, state, objective, model, origin_json, created_at, updated_at, last_seq)
+     VALUES (@id, @sessionId, @state, @objective, @model, @origin, @createdAt, @updatedAt, @lastSeq)`,
+  ).run({
+    ...record,
+    model: input.model ?? null,
+    origin: input.origin === undefined ? null : JSON.stringify(input.origin),
+  });
   return record;
 }
 
@@ -192,6 +202,7 @@ export function taskRecordFromRow(row: TaskRow): TaskRecord {
     state: row.state as TaskState,
     objective: row.objective,
     ...(row.model === null ? {} : { model: row.model }),
+    ...(row.origin_json === null ? {} : { origin: JSON.parse(row.origin_json) as TaskOrigin }),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastSeq: row.last_seq,

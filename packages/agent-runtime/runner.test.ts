@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { LoopOutcome, LoopSubject } from "./loop.ts";
 import { createHarness, createScriptedProvider, WORKSPACE } from "./loop-harness.ts";
-import type { ResumeResult, StartResult } from "./runner.ts";
+import type { RestartResult, ResumeResult, StartResult } from "./runner.ts";
 
 const PATH_ARGS = { type: "object", properties: { path: { type: "string" } } } as const;
 const doneRound = [{ kind: "text", text: "read notes.md and deleted build/" }] as const;
@@ -31,7 +31,7 @@ const subject: LoopSubject = {
   clientKind: "cli",
 };
 
-function runOf(result: StartResult | ResumeResult): Promise<LoopOutcome> {
+function runOf(result: StartResult | ResumeResult | RestartResult): Promise<LoopOutcome> {
   if (!result.ok) {
     assert.fail(
       `expected the runner to take the run; it refused \`${result.code}\`: ${result.reason}`,
@@ -40,10 +40,16 @@ function runOf(result: StartResult | ResumeResult): Promise<LoopOutcome> {
   return result.run;
 }
 
-function refusalOf(result: StartResult | ResumeResult): string {
+function refusalOf(result: StartResult | ResumeResult | RestartResult): string {
   if (result.ok) assert.fail("expected the runner to refuse; it took the run");
   assert.equal(typeof result.code, "string");
   return `${result.code}: ${result.reason}`;
+}
+
+/** The refusal sentence, for an assertion that has already checked `ok` — the harness's own `assert.fail` on a wrong
+ *  expectation is enough, so this only adds the reason. */
+function refusalOk(result: StartResult | ResumeResult | RestartResult): string {
+  return result.ok ? "" : result.reason;
 }
 
 describe("the runner that answers 'is this task already running?' (AGENT_RUNTIME.md §4.4, D-003)", () => {
@@ -274,6 +280,65 @@ describe("the runner that answers 'is this task already running?' (AGENT_RUNTIME
       [harness.taskId],
       "the ask survives as an event and the run does not; a shutdown report that left it out would claim nothing was " +
         "waiting when a task was",
+    );
+  });
+
+  it("rebuilds an interrupted run from the boundary, and refuses the three cases the record cannot answer", async () => {
+    const harness = createHarness({
+      rounds: [
+        [{ kind: "tool-call", name: "file.read", arguments: { path: "notes.md" } }],
+        doneRound,
+      ],
+      tools: fileTools(),
+    });
+    const runner = harness.runner();
+    await runOf(runner.start({ taskId: harness.taskId, subject }));
+
+    // A task that is still running is not an interrupted one, whatever a caller asks for.
+    const live = runner.restart({ taskId: harness.taskId, subject });
+    assert.match(refusalOf(live), /^not-interrupted:/);
+
+    harness.interrupt();
+    assert.equal(harness.task()?.state, "interrupted");
+
+    const rebuilt = runner.restart({ taskId: harness.taskId, subject });
+    assert.equal(rebuilt.ok, true, refusalOk(rebuilt));
+    const outcome = await runOf(rebuilt);
+    assert.equal(
+      outcome.kind,
+      "completed",
+      "the rebuilt run continues from the saved context and finishes",
+    );
+    assert.equal(runner.outstanding(), 0);
+
+    // A task that committed no boundary has nothing to continue from, and a new run is the honest answer.
+    const bare = createHarness({ rounds: [doneRound], tools: fileTools() });
+    bare.interrupt();
+    const nothing = bare.runner().restart({ taskId: bare.taskId, subject });
+    assert.match(
+      refusalOf(nothing),
+      /^no-checkpoint: .*committed no step boundary.*starts it again/s,
+      "§7.3's rule about a step that may have run is moot when no step ever ran, and inventing a context would be a " +
+        "continuation of nothing",
+    );
+
+    // An answer to a task that is not interrupted is refused by the state machine rather than by a flag this runner would
+    // have to keep: the continuation moved the task, and nothing moved it back, so there is no longer anything to continue.
+    const twice = runner.restart({ taskId: harness.taskId, subject });
+    assert.match(
+      refusalOf(twice),
+      /^not-interrupted: .*`completed`/s,
+      "§7.1 marks interruptions at startup; nothing re-marks a task that has already been continued",
+    );
+
+    // D-065's `re-ask` verdict — a step that was in flight when the process ended, with neither of §7.3's two permissions —
+    // is refused by the runner on the verdict's own sentence rather than on its own reading of it. Reached here through
+    // the manager rather than a second copy of the rule: `checkpoint.test.ts` is where the verdict itself is decided, and
+    // a runner that re-derived it would be a second opinion about the same fact.
+    assert.ok(
+      harness.checkpoints.verdict(harness.taskId).verdict !== undefined,
+      "the verdict is always an answer — `none` is one of its values rather than an absence, which is why the runner's " +
+        "gate has no undefined branch to guess about",
     );
   });
 

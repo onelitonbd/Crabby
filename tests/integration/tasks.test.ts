@@ -19,7 +19,7 @@ import type { LoopLimits } from "@crabby/agent-runtime";
 import { createScriptedProvider } from "@crabby/agent-runtime/loop-harness";
 import { type Event, isTerminal, type TaskRecord } from "@crabby/api-contracts";
 import { createLogger } from "@crabby/core";
-import { buildApp, createClient, type GatewayClient } from "@crabby/gateway";
+import { buildApp, createClient, type GatewayClient, GatewayFailure } from "@crabby/gateway";
 import { dataLayout, homeDirectory } from "@crabby/platform";
 import { capabilitiesFor } from "@crabby/policy";
 import { composeProviders, FAKE_TOOL_MODEL_ID, type FakeStep } from "@crabby/providers";
@@ -707,6 +707,63 @@ describe("the task handoff over http (M2's Exit criterion)", () => {
       );
     } finally {
       await second.close();
+    }
+  });
+});
+
+describe("a per-task model pin is scoped to the composed provider (D-108, F-57)", () => {
+  it("refuses a pin naming another provider before any task row is written, with §4.3's limitation", async () => {
+    const h = await boot({ rounds: [] });
+    try {
+      const ask = () =>
+        h.cli.createTask(
+          { objective: "pin to a provider this run does not hold", model: "groq/llama-3.3-70b" },
+          "idem-pin-cross",
+        );
+      await assert.rejects(ask, (error: unknown) => {
+        assert.ok(error instanceof GatewayFailure, "the route answers with an error envelope");
+        assert.equal(error.status, 400, "a pin this build cannot serve is a validation failure");
+        assert.equal(error.envelope.error.code, "invalid_model_pin");
+        assert.match(error.envelope.error.message, /scoped to the composed provider/);
+        assert.match(
+          error.envelope.error.message,
+          /INTERFACES_AND_API/,
+          "the refusal cites the section that documents the limitation",
+        );
+        return true;
+      });
+      const items = (await h.cli.listTasks()).body as { items: unknown[] };
+      assert.equal(
+        items.items.length,
+        0,
+        "the pin was refused before `recordAndDriveTask`, so no row was created",
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("accepts a pin on the composed provider, stores it on the record, and the run reaches terminal", async () => {
+    const h = await boot({ rounds: [[{ kind: "text", text: "pinned run done" }]] });
+    try {
+      // The harness composes a scripted provider whose id is `fake` (the `FakeProvider` default), so the composed
+      // provider a pin has to name is `fake/<model>`; `fake-tools` is one of the two models it declares.
+      const pin = `fake/${FAKE_TOOL_MODEL_ID}`;
+      const created = await h.cli.createTask(
+        { objective: "run on the pinned model", model: pin },
+        "idem-pin-same",
+      );
+      assert.equal(created.status, 201, "a pin on the composed provider is served");
+      const record = created.body as TaskRecord;
+      assert.equal(record.model, pin, "the pin is stored on the record §4.3 returns");
+      const final = await untilTerminal(h, record.id);
+      assert.equal(
+        final.state,
+        "completed",
+        "the run reached a terminal state under the pinned model",
+      );
+    } finally {
+      await h.close();
     }
   });
 });

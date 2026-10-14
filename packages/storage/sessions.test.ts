@@ -44,7 +44,7 @@ function fileDb(): { db: SqliteDb; close(): void } {
 test("schema version 6 is the session table, and the index is the order the list is read in", () => {
   const { db, close } = fileDb();
   try {
-    assert.equal(schemaVersion(db), 6);
+    assert.equal(schemaVersion(db), 7, "the file advances past 6 (the task model pin) but v6 is still sessions");
     assert.equal(MIGRATIONS.find((entry) => entry.version === 6)?.name, "sessions");
     const indexes = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'session%'")
@@ -97,21 +97,20 @@ test("the backfill gives every conversation a task already referenced, named fro
         .prepare("INSERT INTO schema_migration (version, name, applied_at) VALUES (?, ?, ?)")
         .run(migration.version, migration.name, new Date().toISOString());
     })();
-  createTask(handle.db, {
-    objective: "the first question anybody asked",
-    sessionId: "ses_before1",
-    now: iso(0),
-  });
-  createTask(handle.db, {
-    objective: "a later question in the same conversation",
-    sessionId: "ses_before1",
-    now: iso(60_000),
-  });
-  const other = createTask(handle.db, {
-    objective: "a conversation of its own",
-    sessionId: "ses_before2",
-    now: iso(30_000),
-  });
+  // A task written the way a pre-v7 install's `createTask` wrote one: the `model` column does not exist at version 5, so
+  // the current `createTask` (which names it) cannot be the writer here. The backfill only reads objective, session_id
+  // and the timestamps, which these carry.
+  const writeTask = (id: string, sessionId: string, objective: string, at: string): void => {
+    handle.db
+      .prepare(
+        `INSERT INTO task (id, session_id, state, objective, created_at, updated_at, last_seq)
+         VALUES (?, ?, 'queued', ?, ?, ?, 0)`,
+      )
+      .run(id, sessionId, objective, at, at);
+  };
+  writeTask("tsk_a", "ses_before1", "the first question anybody asked", iso(0));
+  writeTask("tsk_b", "ses_before1", "a later question in the same conversation", iso(60_000));
+  writeTask("tsk_c", "ses_before2", "a conversation of its own", iso(30_000));
   assert.equal(
     (
       handle.db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'session'").get() as {
@@ -124,7 +123,7 @@ test("the backfill gives every conversation a task already referenced, named fro
 
   const applied = migrate(handle.db);
   try {
-    assert.deepEqual(applied.applied, [6]);
+    assert.deepEqual(applied.applied, [6, 7]);
     const rows = listSessions(handle.db);
     assert.deepEqual(
       rows.map((row) => row.id).sort(),
@@ -147,7 +146,11 @@ test("the backfill gives every conversation a task already referenced, named fro
     assert.equal(first?.origin, undefined);
     assert.equal(first?.revision, 1);
     assert.equal(
-      other.sessionId,
+      (
+        handle.db.prepare("SELECT session_id FROM task WHERE id = 'tsk_c'").get() as {
+          session_id: string;
+        }
+      ).session_id,
       "ses_before2",
       "the fixture's third task is the second conversation",
     );

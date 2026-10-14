@@ -137,7 +137,7 @@ import {
   TIERS,
   TOOL_REGISTRY,
 } from "@crabby/policy";
-import type { Provider, ProviderComposition } from "@crabby/providers";
+import { type Provider, type ProviderComposition, selectPinnedModel } from "@crabby/providers";
 import {
   appendEvent,
   authenticate,
@@ -627,6 +627,9 @@ function providersRow(
 export interface DriveTaskInput {
   readonly objective: string;
   readonly sessionId?: string | undefined;
+  /** §3.6's per-task pin (D-108), validated by the route against the composed provider. Stored on the task and used for
+   *  the run instead of the composed default; absent means the default. */
+  readonly model?: string | undefined;
   readonly origin: {
     readonly clientId: string;
     readonly clientName: string;
@@ -659,6 +662,7 @@ function recordAndDriveTask(
   const created = createTask(deps.db, {
     objective: input.objective,
     ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+    ...(input.model === undefined ? {} : { model: input.model }),
   });
   // The conversation record behind the id, written in the same act as the task rather than left to a route: `createTask`
   // has minted `ses_…` values since schema version 1 and nothing owned them, so an install could hold forty conversations
@@ -705,6 +709,11 @@ function recordAndDriveTask(
       reason: withheld.reason,
       source: input.source,
     });
+  // §3.6's per-task pin (D-108): the route validated it names the composed provider before the task was created, so the
+  // run uses the pinned model instead of the composed default. Absent pin means the default, which `RunnerDeps.modelId`
+  // holds; the runner reads `StartInput.modelId` and falls back to it.
+  const pinnedModelId =
+    input.model === undefined ? undefined : input.model.slice(input.model.indexOf("/") + 1);
   const started = runner.start({
     taskId: created.id,
     subject: {
@@ -727,6 +736,7 @@ function recordAndDriveTask(
       sessionId: created.sessionId,
     },
     ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+    ...(pinnedModelId === undefined ? {} : { modelId: pinnedModelId }),
   });
   if (!started.ok)
     // Reachable while the process is draining, and for a fired job also when the runner has one run per task and this
@@ -1139,7 +1149,7 @@ function registerTaskRoutes(
    *  reported at startup and is a true statement about the install rather than a gap in the route. */
   runner: Runner | undefined,
 ): void {
-  app.post<{ Body: { objective: string; sessionId?: string } }>(
+  app.post<{ Body: { objective: string; sessionId?: string; model?: string } }>(
     "/api/v1/tasks",
     { schema: { body: CreateTaskBody } },
     async (request, reply) => {
@@ -1173,9 +1183,26 @@ function registerTaskRoutes(
       // is `POST /auth/pair`, and this is not it.
       const client = request.crabbyClient;
       if (client === undefined) throw authError("missing", request.crabbyRequestId);
+      // §3.6's per-task pin (D-108, F-57). Validated here, before the task is created, so a pin this build cannot serve is
+      // refused with the reason rather than accepted and left to fail at the first provider call. The runner holds the
+      // one provider composition resolved (option A), so a pin naming another provider is refused with §4.3's
+      // limitation. A Gateway that composed no provider has no runner and no provider to scope against — the task is
+      // recorded and never runs either way, so the pin is stored inert rather than refused against nothing.
+      if (body.model !== undefined && deps.drive !== undefined) {
+        const pinned = await selectPinnedModel(deps.drive.provider, body.model);
+        if (!pinned.ok) {
+          throw new GatewayError({
+            code: "invalid_model_pin",
+            message: pinned.reason,
+            class: "validation",
+            retryable: false,
+          });
+        }
+      }
       const driven = recordAndDriveTask(deps, bus, runner, {
         objective: body.objective,
         ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
+        ...(body.model === undefined ? {} : { model: body.model }),
         // The identity the guard resolved, which is the only party that knows who asked. F-52's third question — how
         // `capability_json` becomes a run's grants — is answered inside the shared act rather than here, so that a task a
         // job fires is built the same way as a task a client asks for (§4.5's "every execution is a fresh policy

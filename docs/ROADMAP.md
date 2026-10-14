@@ -1175,6 +1175,26 @@ consumer while the file and the problem keep it), the spawned-gateway `task run`
 walks the ladder and the verb follows it to `failed`), `typecheck`, `parity`, `docs:check`; CI is the release proof
 as before.
 
+**Thirty-seventh slice — §3.6's per-task model pin, scoped to the one provider a runner holds (D-108, F-57).** §4.3's
+`POST /tasks` row has documented a "model pin" since M1c and `CreateTaskBody` has refused it since that same day — F-57's
+finding — but the two never disagreed by accident: the pin hid a fork the documents never settled, because `createLoop`
+holds *one* provider and a pin naming a second would need the loop to hold several. The owner chose the scoped half first,
+with the cross-provider half named as a follow-up rather than smuggled in. So `CreateTaskBody` and `TaskRecord` gain an
+optional `model`, schema version 7 adds `task.model` (nullable like `session.model`, so "no pin" stays a different fact
+from "no model"), and a pin is the `<provider>/<modelId>` pair `defaultModel` and `/model` already speak. The refusal is
+the part that matters: `selectPinnedModel` compares the pin's provider half against the composed provider's `id` and
+answers 400 `invalid_model_pin` — naming the composed provider, listing what it declares, citing §4.3 — **before**
+`recordAndDriveTask` writes a row, because the runner does not write state and a refusal at start would leave a `queued`
+row nothing settles. Resolution stays with the caller (D-101): the route validates, `recordAndDriveTask` stores the pin
+and extracts the model half, and `StartInput.modelId` carries it into `loop.start` over `RunnerDeps.modelId`. What is not
+here: cross-provider pinning (option B, deferred under D-108), per-task capability narrowing (still no carrier in the
+body, F-57), and `schedule` (D-084's approval a route cannot open). §4.3's row now states the pin as accepted and the
+other two as not-built, so the document and the contract describe the same body — which closes F-57. Gates:
+`compose.test.ts` (the crossing refusal, the first-slash split, the malformed and unknown-model refusals),
+`storage.test.ts` (the version-7 ledger and the round trip, plus the two upgrade fixtures that now drop `model` the way
+they already dropped `cancellation_json`), `tasks.test.ts` 8/8 (a crossing pin refused with no row written, a scoped pin
+stored and driven to `completed`), `typecheck`, `docs:check`; CI is the release proof as before.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

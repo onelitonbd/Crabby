@@ -1362,7 +1362,7 @@ whole complaint. What remains of F-57 is named rather than closed by omission: c
 every composed provider so a pin may name any of them) is option B and stays deferred under D-108, and per-task
 capability narrowing still has no carrier in `CreateTaskBody`.
 
-**Amendment (the fortieth slice): option B has landed, and the pin resolves against every composed provider.** The owner
+**Amendment (the thirty-eighth slice): option B has landed, and the pin resolves against every composed provider.** The owner
 chose to start it, and D-110 records the mechanism as D-101 read literally rather than this finding's earlier sketch: the
 composition root holds the pool (`deps.providers`' usable entries, with the runner's own provider unioned in) and the
 caller resolves the pin against it at the same gate that resolved the model, so `DriveTaskInput.pin`,

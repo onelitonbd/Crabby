@@ -1219,6 +1219,39 @@ to `completed`, a pin naming a second composed provider driving the run on *that
 text in the events, the default's empty script saying nothing), `loop.test.ts`, `runner.test.ts`, `gateway.test.ts`
 green, `typecheck`, `parity`, `docs:check`; CI is the release proof as before.
 
+**Thirty-ninth slice — the ladder asks instead of failing (D-044 stage 2, F-49's rung, F-50's ordering).** The owner's
+call was to finish M2's remaining items one at a time, and this was the smallest of the three with every document already
+settled. A retryable class that spends `limits.providerAttempts` now stops the run in `awaiting_approval` with **no
+approval row** — D-086's shape, reused rather than reinvented, because §4.1's nine states are decided and a spent budget
+is not a prompt — and appends `provider.switch.proposed`: the attempts, the budget, the class, the pair the run was on,
+and each candidate labelled with its provider, its cost class and the capabilities choosing it would lose. The same facts
+ride on the transition frame's payload, which is what lets the CLI's blocking verb say *which* pause it stopped at without
+depending on event order; it exits §7.1's `3` and names the route that answers, because `crabby task resume` (C6-10) is
+M3's grammar and a printed command that cannot run is worse than a printed route that can. The labels are computed in
+`composeAskCandidates`, the only place that holds the pool, and handed to the loop as data through a seam
+(`LoopDeps.askCandidates`) so D-101 survives intact: the loop names candidates in a prompt and cannot call one. The answer
+is `POST /api/v1/tasks/{id}/resume` with an optional pin, resolved against **the same pool** the ask was built from
+before anything moves; the runner holds the run in its own `asking` map (a third kind of "waiting", because an approval
+park must not be resumable by naming a model and vice versa), and `answerModel` records §3.6 stage 3's facts on the task —
+`model` and a new `modelSwitch` column, schema version 8 — moves to `running` with the new evidence field
+`modelAnswered`, appends `provider.switch.accepted`, and continues from the boundary the run had reached. The refusal set
+is the part worth keeping: a pin the ask never offered is refused (the prompt is the question), a pin with no resolved
+provider is refused (the loop holds no pool, and a run asked to switch to a model nobody loaded would call the old one
+under the new name), a terminal task is refused (§4.1), and a pending approval is refused by the route before the runner
+is even asked, naming `POST /approvals/{id}/decision` instead — the row is how a client tells a prompt from an ask.
+**What this slice does not do**: resume across a restart (F-47's rebuild, still missing, and now also the question of
+where a rebuilt run's identity comes from, since `TaskRecord` carries no origin); name a candidate's **host**, which
+§3.6's sentence asks for and the `Provider` interface cannot supply; and decide where an *unanswered* ask goes — F-50's
+last clause has no priced destination, so it waits like D-086's pause and the question is registered as O-073 rather than
+settled in a comment. Gates: `loop.test.ts` 41/41 (the budget spent then the ask, `auth` failing without one, the switch
+recorded with the read's result carried forward and no step re-run, the same-model answer recording nothing, three
+refusals), `runner.test.ts` 15/15 (the ask's own map, the answer waking it, `not-asking`, the shutdown report), `compose.
+test.ts` 17/17 (labels computed against the current model, same provider first, a provider that cannot describe itself
+not offered), `contracts.test.ts`, `agent-runtime.test.ts` (the `modelAnswered` edge), `tasks.test.ts` 12/12 (the whole
+act over HTTP, including that a refused pin moves nothing), `gateway.test.ts` (a spawned Gateway that now fails fast on
+an `auth` class instead of walking a ladder, plus a real ladder walk that stops at the ask and is answered over HTTP),
+`typecheck`, `parity`, `docs:check`; CI is the release proof as before.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

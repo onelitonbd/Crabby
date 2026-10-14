@@ -130,6 +130,21 @@ export const CANCEL_REFUSAL_CLASS: Record<
   "already-settled": "conflict",
 };
 
+/** `POST /tasks/{id}/resume` (§4.3), mapped the way the cancel route's is, from the runner's own refusal codes. Two of
+ *  these are `conflict` for the same reason `CANCEL_REFUSAL_CLASS.terminal` is: the request was well-formed and the
+ *  world's state is what refuses it — a task that is moving, one that settled while nobody answered, one whose process no
+ *  longer holds the run. Telling a client "fix what you sent" there would send it looking at a body that was never the
+ *  problem. */
+export const RESUME_REFUSAL_CLASS: Record<
+  import("@crabby/agent-runtime").ResumeFailureCode,
+  ErrorBody["class"]
+> = {
+  "not-found": "not-found",
+  "in-flight": "conflict",
+  "not-parked": "conflict",
+  "not-asking": "conflict",
+};
+
 export function notFound(what: string, requestId?: string): GatewayError {
   return new GatewayError({
     code: "not_found",

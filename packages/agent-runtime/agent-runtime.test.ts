@@ -134,6 +134,35 @@ test("an approval has to be answered before it can be run under — including af
   );
 });
 
+test("the model ask wakes a task the same way, and only through an answer named as one", () => {
+  // D-044's stage 2 lands in `awaiting_approval` with no approval row behind it, so the second kind of answer has to be
+  // its own evidence: `approvalAnswered: "approved"` would claim a prompt that was never appended.
+  const answered = transition("awaiting_approval", "running", { modelAnswered: true });
+  assert.equal(answered.ok, true, "a named answer opens the edge");
+  if (answered.ok) assert.equal(answered.event, "task.state.changed");
+
+  assert.equal(
+    transition("awaiting_approval", "running").ok,
+    false,
+    "an answer that names neither kind is not an answer",
+  );
+  assert.equal(
+    transition("awaiting_approval", "running", { modelAnswered: false }).ok,
+    false,
+    "`false` is an unanswered ask, and this edge reads the field as the flag it is",
+  );
+
+  // A denial stays a denial even when something else could open the edge: the model answer is an exemption from *having*
+  // an approval verdict, never a way past one.
+  for (const answer of ["denied", "expired"] as const) {
+    const result = transition("awaiting_approval", "running", {
+      approvalAnswered: answer,
+      modelAnswered: true,
+    });
+    assert.equal(result.ok, false, `a \`${answer}\` approval must not open the way to \`running\``);
+  }
+});
+
 test("recovery marks a non-terminal task interrupted and never authorizes it", () => {
   for (const state of TASK_STATES) {
     const target = recoveryTarget(state);

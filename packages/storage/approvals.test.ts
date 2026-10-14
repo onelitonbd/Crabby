@@ -284,19 +284,21 @@ describe("upgrading", () => {
     // upgrade to keep.
     const task = createTask(db, { objective: "survives the upgrade" });
     // Undoing *this* milestone's migration means undoing every migration after it too: a real v1 file has no `approval`
-    // table, no `cancellation_json` column, no `model` column, no `checkpoint` table, no job pair and no session record,
+    // table, no `cancellation_json` column, no `model` or `model_switch_json` column, no `checkpoint` table, no job pair
+    // and no session record,
     // and a fixture that left them in place would fail a later migration's CREATE or ALTER for a reason no upgrade would
     // ever meet. `job_run` goes before `job` because it is the one holding the foreign key.
     db.exec(
       "DELETE FROM schema_migration; DROP TABLE approval; DROP TABLE checkpoint; " +
         "DROP TABLE job_run; DROP TABLE job; DROP TABLE session; " +
-        "ALTER TABLE task DROP COLUMN cancellation_json; ALTER TABLE task DROP COLUMN model",
+        "ALTER TABLE task DROP COLUMN cancellation_json; ALTER TABLE task DROP COLUMN model; " +
+        "ALTER TABLE task DROP COLUMN model_switch_json",
     );
     db.prepare("INSERT INTO schema_migration (version, name, applied_at) VALUES (1, ?, ?)").run(
       MIGRATIONS[0]?.name ?? "v1",
       new Date(0).toISOString(),
     );
-    assert.deepEqual(migrate(db), { applied: [2, 3, 4, 5, 6, 7], version: 7 });
+    assert.deepEqual(migrate(db), { applied: [2, 3, 4, 5, 6, 7, 8], version: 8 });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,
       1,

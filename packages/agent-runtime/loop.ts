@@ -31,13 +31,15 @@
 //     M2k it does: eight file tools with §4.1's record filled in, which a runner composes into a loop. The loop still ships
 //     none and still offers the model only what the executor it was given declares it can run — the seam is a dependency
 //     injected at construction, so this file has no import of `packages/tools` and no opinion about which tools exist.
-//   - **No second ladder rung.** D-043's stage 1 is here — the same model and provider, transient classes only, on D-064's
-//     schedule with its jitter, `Retry-After` overriding upward, and a `provider.retry.*` event per rung. D-044's stage 2
-//     (ask the user which model to use instead, then resume from the checkpoint) is not: the checkpoint it would resume
-//     from is durable now (D-095), but a switch surface and a runner are not, and §4.1 has no edge out of `failed` for it
-//     to resume along — which is F-50 rather than an oversight. A budget exhausted therefore fails the task and says how
-//     many attempts it took. Tool steps are never retried at all — see `callProvider` for why that is §7.3's answer and
-//     not an omission.
+//   - **The ladder has two rungs, and the second one asks.** D-043's stage 1 is here — the same model and provider,
+//     transient classes only, on D-064's schedule with its jitter, `Retry-After` overriding upward, and a
+//     `provider.retry.*` event per rung. D-044's stage 2 arrived with the answer surface (INTERFACES §4.3's
+//     `POST /tasks/{id}/resume`): a retryable class that spends the budget stops the run in `awaiting_approval` and
+//     emits `provider.switch.proposed` with the candidates, and `answerModel` records the switch and continues from the
+//     boundary the run had reached. What that answer reaches is *this process's* park, not a cross-process rebuild — the
+//     run's messages live in memory here, and while they do, §7.1 marks an ask `interrupted` on the next start, which is
+//     F-47's remaining half and the reason no route claims to resume across a restart yet. Tool steps are still never
+//     retried at all — see `callProvider` for why that is §7.3's answer and not an omission.
 //   - **No cancellation policy of its own** — that is `cancellation.ts`, added in the next slice (M2e). This loop supplies
 //     what only the party running a step can know: what was in flight, and whether the step reported back or was walked
 //     away from. It stops scheduling steps the moment a request is recorded (§6.1's step 2, and the MUST NOT that follows
@@ -62,6 +64,7 @@ import {
   type Event,
   isTerminal,
   newId,
+  type TaskModelSwitch,
   type TaskRecord,
   type ToolDeclaration,
   validateToolArguments,
@@ -301,6 +304,72 @@ export interface SuspendedRun {
   readonly input: RunInput;
 }
 
+/** §3.6 stage 2's option as a client reads it, and the whole of what the loop knows about models other than the one this
+ *  run is using. The loop receives these as *data* from whoever composed the pool and names them in the ask; it never
+ *  picks one, because D-101's rule is that a provider must not be able to alter what a task does, and a loop that chose
+ *  its own fallback would be one step from choosing it on the model's say-so. The answer arrives as
+ *  `POST /api/v1/tasks/{id}/resume` (INTERFACES §4.3) and comes back as a pair on `ModelAnswer`.
+ *
+ *  `losses` is §3.6's "capability loss it would entail", pre-computed against the model the run is on: what the user is
+ *  choosing *not* to have. Stating it as a list of sentences rather than two descriptors is deliberate — the same
+ *  descriptor for both models would be a fact, and the thing the prompt has to carry is a comparison, and a comparison is
+ *  only true relative to something. */
+export interface SwitchCandidate {
+  /** The `<provider>/<modelId>` pair, spelled the way the answer takes it (D-108, D-110). */
+  readonly model: string;
+  readonly provider: string;
+  readonly cost: string;
+  readonly contextWindow: number;
+  /** Capabilities this candidate lacks that the current model has, each a sentence a prompt can print verbatim. Empty
+   *  means the candidate is not a reduction, which is a fact worth printing too. */
+  readonly losses: readonly string[];
+}
+
+/** The seam, named so the runner's deps can say the same thing without restating it: given the pair this run is on, hand
+ *  back §3.6 stage 2's options. Async because answering it means reading each composed provider's descriptor, and that
+ *  read belongs to whoever holds the pool. */
+export type AskCandidates = (current: {
+  readonly providerId: string;
+  readonly modelId: string;
+}) => Promise<readonly SwitchCandidate[]>;
+
+/** D-044's second rung: the ladder spent its budget on a retryable class, so the run stops in `awaiting_approval` with
+ *  no approval row and asks which model to use instead. `spent` is what the resume reads back to report the rung, and it
+ *  is kept on the park rather than recomputed because a reader comparing the answer with the log should find the same
+ *  number in both. */
+export interface ModelAsk {
+  readonly attempts: number;
+  readonly limit: number;
+  readonly code: string;
+  readonly reason: string;
+  /** The `<provider>/<modelId>` pair the run was on when the budget ran out, which for a task with no pin is what it
+   *  actually called rather than the word "default". */
+  readonly current: string;
+  readonly candidates: readonly SwitchCandidate[];
+}
+
+/** The run held across the ask. Deliberately *not* a `SuspendedRun`: that shape is an approval's (it names a `call`, a
+ *  `toolCallId` and a row), and a model ask parks between two provider rounds with no tool call in flight at all. */
+export interface ModelSuspendedRun {
+  readonly taskId: string;
+  readonly messages: readonly ProviderMessage[];
+  readonly steps: number;
+  readonly input: RunInput;
+  readonly ask: ModelAsk;
+}
+
+/** What the answer carries. An absent `model` is a real answer rather than an empty body — the budget was spent and the
+ *  same model may well answer on a fresh attempt — which is why `pair` rather than a pair is what is optional here. The
+ *  provider itself is not part of it: the loop is handed a `Provider`, not told which one to load, because resolving a
+ *  `<provider>/<modelId>` pair against the composed pool is the caller's job (D-110) and this package does not hold the
+ *  pool (D-101). */
+export interface ModelAnswer {
+  readonly pair?: { readonly provider: string; readonly modelId: string } | undefined;
+  readonly provider?: Provider | undefined;
+  readonly byClientId?: string | undefined;
+  readonly via?: ClientInterface | undefined;
+}
+
 export type LoopOutcome =
   | {
       readonly kind: "completed";
@@ -311,6 +380,17 @@ export type LoopOutcome =
   /** A prompt is open and the task is in `awaiting_approval`. The runner answers through the arbiter — the §4.3 route, a
    *  TUI, Telegram — and then calls `resume`. */
   | { readonly kind: "awaiting-approval"; readonly run: SuspendedRun; readonly task: TaskRecord }
+  /** D-044's second rung: the task is in `awaiting_approval` with no pending request, because what it is waiting for is a
+   *  *model* rather than an approval, and the runner holds the run until `answerModel` is called with what the user chose
+   *  (INTERFACES §4.3's `POST /tasks/{id}/resume`). Kept apart from `paused` — which is a refusal pause with no run to
+   *  wake — because this one has a continuation and that one does not, and a caller that conflated them would either lose
+   *  the run or wake something that was never asked. */
+  | {
+      readonly kind: "awaiting-model";
+      readonly run: ModelSuspendedRun;
+      readonly task: TaskRecord;
+      readonly ask: ModelAsk;
+    }
   /** D-086's pause: the task is in `awaiting_approval` with **no pending request**, and the reason is in the log. */
   | {
       readonly kind: "paused";
@@ -371,11 +451,23 @@ export interface LoopDeps {
   /** The backoff wait, injected so a ladder test does not spend 31 real seconds proving five delays were computed. The
    *  default is abortable, because a wait that ignores a cancellation is a wait the user cannot end. */
   readonly wait?: ((ms: number, signal?: AbortSignal | undefined) => Promise<void>) | undefined;
+  /** §3.6 stage 2's options, computed where the pool exists and handed to the ask as data — the Gateway composes this
+   *  from its own providers (D-110's resolution, done once per ask rather than per run, because the pool a run was handed
+   *  may have changed by the time its budget runs out). The loop names what it returns in the ask and cannot act on it,
+   *  so D-101 stays true: no dispatch table, no fallback picked here, no capability this loop could have widened.
+   *
+   *  Optional, and absent means an ask with no options — which is the honest answer for a single-model install and for a
+   *  harness, not a degraded one: the ask still names the spent budget and still accepts "the same model again". */
+  readonly askCandidates?: AskCandidates | undefined;
 }
 
 export interface Loop {
   start(input: RunInput): Promise<LoopOutcome>;
   resume(run: SuspendedRun): Promise<LoopOutcome>;
+  /** D-044's answer. Only a run parked at an ask may be answered this way, and `transition()` enforces that in the
+   *  record's own terms (§5's rule 5): the move out of `awaiting_approval` carries `modelAnswered` as its evidence, so a
+   *  caller cannot present this for a run that is holding an approval instead. */
+  answerModel(run: ModelSuspendedRun, answer: ModelAnswer): Promise<LoopOutcome>;
 }
 
 /** What one proposed call produced: either the run stops, or it continues with these messages. A union rather than an
@@ -1289,7 +1381,80 @@ export function createLoop(deps: LoopDeps): Loop {
     return { kind: "completed", task: currentTask(taskId), steps: state.steps, text: turn.text };
   }
 
-  function providerFailure(state: RunState, error: unknown, attempts: number): LoopOutcome {
+  /** D-044's second rung, asked in D-086's shape: the task stops in `awaiting_approval` with **no pending request**,
+   *  because what it now waits for is a model rather than an approval, and a `task.progress` frame is replaced by the
+   *  `provider.switch.proposed` the event vocabulary reserved for exactly this moment.
+   *
+   *  Two events in one phase, and the order is the reason: the transition frame comes first so that a client watching
+   *  state sees `awaiting_approval` before anything that claims a question is open, and the ask's facts ride on that
+   *  frame's payload as well as on the dedicated one. §5.2's rule — anything a client must act on is also retrievable by
+   *  polling — is satisfied by the state alone; a client that *filters* `provider.switch.*` would still see why it is
+   *  stuck, which is the half a state alone cannot carry. */
+  async function ask(
+    state: RunState,
+    spent: { readonly attempts: number; readonly code: string; readonly reason: string },
+  ): Promise<LoopOutcome> {
+    const at = now();
+    const taskId = state.input.taskId;
+    const provider = state.input.provider ?? deps.provider;
+    const current = `${provider.id}/${state.input.modelId}`;
+    const candidates =
+      deps.askCandidates === undefined
+        ? []
+        : await deps.askCandidates({ providerId: provider.id, modelId: state.input.modelId });
+    const next =
+      `answer POST /api/v1/tasks/${taskId}/resume with one of the candidates, or with none to retry the same model, ` +
+      "or cancel the task";
+    const question: ModelAsk = {
+      attempts: spent.attempts,
+      limit: limits.providerAttempts,
+      code: spent.code,
+      reason: spent.reason,
+      current,
+      candidates,
+    };
+    phase(taskId, state.input.correlationId, (emit) => {
+      const fresh = currentTask(taskId);
+      if (fresh.state !== "awaiting_approval") {
+        move(fresh, "awaiting_approval", {}, emit, at, {
+          // The ladder's facts ride here as well as on `provider.switch.proposed`, because `task.state.changed` is the
+          // frame every interface already follows and a client must be able to read *why* a task stopped without
+          // subscribing to a family it may filter away.
+          payload: {
+            paused: true,
+            ladder: {
+              attempts: question.attempts,
+              limit: question.limit,
+              code: question.code,
+              reason: question.reason,
+            },
+            current: question.current,
+            candidates: question.candidates,
+            next,
+          },
+        });
+      }
+      emit("provider.switch.proposed", { ...question, next }, at);
+    });
+    return {
+      kind: "awaiting-model",
+      task: currentTask(taskId),
+      run: {
+        taskId,
+        messages: state.messages,
+        steps: state.steps,
+        input: state.input,
+        ask: question,
+      },
+      ask: question,
+    };
+  }
+
+  async function providerFailure(
+    state: RunState,
+    error: unknown,
+    attempts: number,
+  ): Promise<LoopOutcome> {
     const at = now();
     const taskId = state.input.taskId;
     const providerError = error instanceof ProviderError ? error : undefined;
@@ -1327,6 +1492,17 @@ export function createLoop(deps: LoopDeps): Loop {
       providerError === undefined
         ? `the provider call failed with something that is not a ProviderError: ${String(error)}`
         : providerError.message;
+    // D-044's rung 2, reached only on the one condition it prices: a *retryable* class with the budget spent. Anything
+    // else fails here, deliberately — a class that is not retryable has no better model to offer (an invalid request is
+    // invalid for all of them, and §9.2 says never retry one), and a `ProviderError` this build cannot classify is
+    // exactly the case D-043's "fail closed" sentence is for.
+    if (
+      providerError !== undefined &&
+      providerError.retryable &&
+      attempts >= limits.providerAttempts
+    ) {
+      return ask(state, { attempts, code, reason });
+    }
     return fail(
       taskId,
       code,
@@ -1335,14 +1511,12 @@ export function createLoop(deps: LoopDeps): Loop {
       state.input.correlationId,
       {
         // How many attempts the ladder actually made, so a reader does not have to guess whether the budget was spent or
-        // the class was never retryable. D-044's half — ask the user which model to use instead, then resume from the
-        // checkpoint — is the rung after this one, and saying so is the difference between "we gave up" and "we ran out of
-        // ladder and the next rung is not built".
+        // the class was never retryable.
         attempts,
         retried: attempts - 1,
         ladder:
           attempts > 1
-            ? `D-043's ladder spent ${attempts} attempts; D-044's ask-which-model-instead is not in this build, and there is no checkpoint to resume from`
+            ? `D-043's ladder stopped after ${attempts} attempts without reaching the configured budget of ${limits.providerAttempts}, and §3.6's stage 2 asks only at the budget — so this failure is reported rather than offered as a switch`
             : "the class is not retryable, so D-043's ladder did not start (§9.2: invalid requests and denied permissions must not be retried)",
         ...(providerError === undefined ? {} : { retryable: providerError.retryable }),
       },
@@ -1588,6 +1762,132 @@ export function createLoop(deps: LoopDeps): Loop {
     return drive({ ...state, messages: executed.nextMessages });
   }
 
+  /** D-044's answer, and §3.6 stage 3's three sentences in one place: the switch is recorded on the task, the run
+   *  continues from the boundary it had reached, and the resume is not a restart.
+   *
+   *  Two refusals here are load-bearing and neither is politeness. A pair the ask did not offer is refused because the
+   *  prompt is the question — a resume that could name any composed model would let the *answer* widen what the ask
+   *  presented, which is the model steering the user rather than the user steering the model. A pair with no provider is
+   *  refused because this package holds no pool (D-101): it is handed a `Provider`, and a run asked to switch to a model
+   *  whose provider nobody resolved would silently keep calling the old one under the new name.
+   *
+   *  What is deliberately *not* re-decided here: the task's identity. The run belonged to an origin before the ask and
+   *  belongs to it after, because a human answering a question in the middle of a run does not become the author of it
+   *  (`RunInput.origin`). The answer is recorded as §14 audit beside the switch, not as a new authority. */
+  async function answerModel(run: ModelSuspendedRun, answer: ModelAnswer): Promise<LoopOutcome> {
+    const at = now();
+    const existing = journal.task(run.taskId);
+    if (existing === undefined) {
+      return refused(
+        undefined,
+        "task.not_found",
+        `no task ${run.taskId} in the journal, so there is no model ask to answer`,
+      );
+    }
+    if (isTerminal(existing.state)) {
+      return refused(
+        existing,
+        "task.terminal",
+        `task ${existing.id} is \`${existing.state}\`, which is terminal and absorbing (AGENT_RUNTIME.md §4.1), so a model ask left open for it cannot be answered`,
+      );
+    }
+    if (existing.state !== "awaiting_approval") {
+      return refused(
+        existing,
+        "task.not_parked",
+        `task ${run.taskId} is \`${existing.state}\`, not \`awaiting_approval\`, so it is not holding a model ask; a task in flight is answered by nothing until it moves, and a queued task has not run far enough to exhaust a budget`,
+      );
+    }
+    const pair = answer.pair;
+    const chosen = pair === undefined ? undefined : `${pair.provider}/${pair.modelId}`;
+    if (
+      chosen !== undefined &&
+      !run.ask.candidates.some((candidate) => candidate.model === chosen)
+    ) {
+      return refused(
+        existing,
+        "model.not_offered",
+        `the ask offered ${run.ask.candidates.length === 0 ? "no other composed model" : run.ask.candidates.map((candidate) => `\`${candidate.model}\``).join(", ")}, and \`${chosen}\` is not among them; resume with one of the candidates, or with no pin to retry the same model`,
+      );
+    }
+    if (pair !== undefined && answer.provider === undefined) {
+      return refused(
+        existing,
+        "model.no_provider",
+        `\`${chosen}\` was chosen but no provider for it was resolved (D-101: the loop is handed a provider, it does not load one), so the run would call the old model under the new name`,
+      );
+    }
+    const state: RunState = {
+      input: run.input,
+      subject: { ...run.input.subject, taskId: run.taskId },
+      messages: run.messages,
+      steps: run.steps,
+    };
+    // A cancellation outranks an answer, for the same reason and in the same words as `resume`: nothing was in flight when
+    // the budget ran out, so §6.1's step 3 settles at once and the user's stop is the more recent instruction.
+    const stopping = cancelledWith(state, {
+      terminated: true,
+      effectsUncertain: false,
+      inFlight: "none",
+    });
+    if (stopping !== undefined) return stopping;
+
+    // `reAttempted: false` is a guarantee here rather than an observation: the messages carried in the park are the ones
+    // that existed at the last committed boundary, so nothing this run completed is handed to the provider a second time
+    // (§3.9's first rule, D-044). What *is* re-issued is the call that failed, which is not a step and has no side effect
+    // outside the provider.
+    const switched = chosen !== undefined && chosen !== run.ask.current;
+    const modelSwitch: TaskModelSwitch | undefined = switched
+      ? {
+          from: run.ask.current,
+          to: chosen as string,
+          reason: run.ask.reason,
+          stage: 2,
+          reAttempted: false,
+          attempts: run.ask.attempts,
+          at: new Date(at).toISOString(),
+          ...(answer.byClientId === undefined ? {} : { by: answer.byClientId }),
+          ...(answer.via === undefined ? {} : { via: answer.via }),
+        }
+      : undefined;
+    phase(run.taskId, run.input.correlationId, (emit) => {
+      const task = currentTask(run.taskId);
+      // §5's rule 5 in its second form: the edge out of `awaiting_approval` names the answer that opened it, and
+      // `transition()` refuses the move without it — so a task cannot be woken from an ask by anything but an answer.
+      move(task, "running", { modelAnswered: true }, emit, at, {
+        ...(modelSwitch === undefined ? {} : { model: modelSwitch.to, modelSwitch }),
+        payload: {
+          resumed: {
+            asked: run.ask.attempts,
+            limit: run.ask.limit,
+            code: run.ask.code,
+            from: run.ask.current,
+            // Present whether or not a switch happened, because "resumed on the same model" is an answer the user gave
+            // and a reader asking "what happened to this task" needs it to be distinguishable from "it just continued".
+            switched: switched,
+          },
+          ...(modelSwitch === undefined ? {} : { model: modelSwitch }),
+        },
+      });
+      if (modelSwitch !== undefined) {
+        emit("provider.switch.accepted", { model: modelSwitch }, at);
+      }
+    });
+    const input: RunInput =
+      switched && pair !== undefined
+        ? { ...run.input, modelId: pair.modelId, provider: answer.provider }
+        : run.input;
+    // The context is re-budgeted for the new limits from this line on: every count from here asks
+    // `state.input.provider`, which is the model the user chose, so §3.6's "the context is re-budgeted for the new
+    // limits" is a consequence of the swap rather than a pass someone remembered to make.
+    return drive({
+      input,
+      subject: { ...input.subject, taskId: run.taskId },
+      messages: run.messages,
+      steps: run.steps,
+    });
+  }
+
   /** §6.3's "the action needs a fresh request", made by the only party allowed to make one: policy is asked again, so the
    *  deadline is D-064's and the tier is today's; the arbiter records `supersedes` and answers `approval.re-requested`;
    *  and the task stays where a prompt puts it. */
@@ -1629,5 +1929,5 @@ export function createLoop(deps: LoopDeps): Loop {
       : refused(currentTask(run.taskId), "approval.re-request_failed", why);
   }
 
-  return { start, resume };
+  return { start, resume, answerModel };
 }

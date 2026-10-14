@@ -18,6 +18,7 @@ import {
   isTerminal,
   newId,
   payloadTooBig,
+  ResumeTaskBody,
   SCHEMA_VERSION,
   TASK_STATES,
   TaskRecord,
@@ -125,6 +126,61 @@ describe("task records", () => {
       "idempotency is a header (§2), not a body field",
     );
     assert.equal(validate(CreateTaskBody, { objective: "x", granted: true }).ok, false);
+  });
+
+  it("carries §3.6 stage 3's switch fact on the record, and refuses a switch that names no pair", () => {
+    const switchFact = {
+      from: "local/qwen2.5:3b",
+      to: "groq/llama-3.1-8b",
+      reason: "D-043's ladder spent 5 attempts on `overloaded`",
+      stage: 2,
+      reAttempted: false,
+      attempts: 5,
+      at: "2026-03-04T10:00:00.000Z",
+      by: "cli_local",
+      via: "telegram",
+    };
+    assert.equal(
+      validate(TaskRecord, task({ model: switchFact.to, modelSwitch: switchFact })).ok,
+      true,
+      "the record shows the switch: original model, chosen model, reason, stage, re-attempted",
+    );
+    for (const [what, bad] of [
+      ["a missing original model", { ...switchFact, from: undefined }],
+      ["a stage that is not the number §3.6 prices", { ...switchFact, stage: "two" }],
+      ["a `reAttempted` that is not a fact", { ...switchFact, reAttempted: "no" }],
+      ["a timestamp that is not one", { ...switchFact, at: "yesterday" }],
+      ["an invented field", { ...switchFact, note: "looks fine" }],
+    ] as const) {
+      const res = validate(TaskRecord, task({ modelSwitch: bad }));
+      assert.equal(res.ok, false, `${what} must not validate`);
+    }
+  });
+
+  it("answers an ask with a model or with nothing, and names nothing else", () => {
+    assert.equal(
+      validate(ResumeTaskBody, {}).ok,
+      true,
+      "an answer with no body resumes on the model the run already used (§3.6 stage 2)",
+    );
+    assert.equal(validate(ResumeTaskBody, { model: "groq/llama-3.1-8b" }).ok, true);
+    assert.equal(
+      validate(ResumeTaskBody, { model: "q" }).ok,
+      false,
+      "the ceiling on a pin is a length here, exactly as on `CreateTaskBody` — whether the pair is spelled right and " +
+        "whether the model is composed is the route's question (`selectPinnedModel`), not the body's",
+    );
+    assert.equal(
+      validate(ResumeTaskBody, { model: undefined }).ok,
+      true,
+      "an absent pin is not the same spelling as a malformed one",
+    );
+    assert.equal(
+      validate(ResumeTaskBody, { reason: "no model" }).ok,
+      false,
+      "declining is not an answer, and no interface has priced an act for it (DECISIONS.md O-073)",
+    );
+    assert.equal(validate(ResumeTaskBody, { objective: "start over" }).ok, false);
   });
 });
 

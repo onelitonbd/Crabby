@@ -153,6 +153,53 @@ describe("the SQLite journal", () => {
     close();
   });
 
+  it("carries §3.6 stage 3's switch beside the pin, in one statement, and keeps both when nothing else is written", () => {
+    const { db, file, close } = tempDb();
+    const task = createTask(db, { objective: "summarise the notes", model: "local/qwen2.5:3b" });
+    const switched = {
+      from: "local/qwen2.5:3b",
+      to: "second/llama-3.1-8b",
+      reason: "D-043's ladder spent 6 attempts on `overloaded`",
+      stage: 2 as const,
+      reAttempted: false,
+      attempts: 6,
+      at: new Date(T0 + 5_000).toISOString(),
+      by: "cli_phone",
+      via: "tui" as const,
+    };
+
+    // The switch and the pin move together, because a record that names one model and describes a switch to another is
+    // worse than a record with neither: a reader would trust the pin and find the reason in the other field.
+    setState(db, task.id, "running", {
+      now: new Date(T0 + 5_000).toISOString(),
+      model: switched.to,
+      modelSwitch: switched,
+    });
+    const mid = getTask(db, task.id);
+    assert.equal(mid?.model, "second/llama-3.1-8b");
+    assert.deepEqual(mid?.modelSwitch, switched);
+
+    // And a later move that says nothing about either leaves them standing — the same rule the cancellation column
+    // follows, and for the same reason: one writer each, and no other state move has an opinion.
+    setState(db, task.id, "completed", { now: new Date(T0 + 9_000).toISOString() });
+    close();
+
+    const after = getTask(reopen(file).db, task.id);
+    assert.equal(after?.model, "second/llama-3.1-8b");
+    assert.deepEqual(
+      after?.modelSwitch,
+      switched,
+      "the switch survives closing the file, which is the whole point of §3.6 asking the *record* to show it",
+    );
+
+    // A task that never switched reads as absent rather than as an empty switch — the meaning a version-7 row already
+    // had, which is what makes the column's downgrade stance true rather than aspirational.
+    const fresh = reopen(file);
+    const untouched = createTask(fresh.db, { objective: "read the roadmap" });
+    assert.equal(getTask(fresh.db, untouched.id)?.modelSwitch, undefined);
+    assert.equal(getTask(fresh.db, untouched.id)?.model, undefined);
+  });
+
   it("names the task when an event has nothing to belong to", () => {
     const { db, dir, close } = tempDb();
     const journal = createSqliteJournal({ db, layout: dataLayout(dir) });
@@ -228,22 +275,23 @@ describe("the SQLite journal", () => {
     // means losing the task history that outlives one cancellation.
     const { db, dir, close } = tempDb();
     // A row written before the upgrade (the shape `approvals.test.ts` gives): created while the schema is still
-    // current, so `createTask` finds the `model` column version 7 names — the undo below then removes the ones a v2
-    // file never had, leaving the row standing for the upgrade to keep.
+    // current, so `createTask` finds the `model` column version 7 names and the switch column version 8 adds — the undo
+    // below then removes the ones a v2 file never had, leaving the row standing for the upgrade to keep.
     const task = createTask(db, { objective: "survives the upgrade" });
-    // Undoing v3 means undoing v4, v5, v6 and v7 as well, for the reason `approvals.test.ts` gives: a ledger that still
+    // Undoing v3 means undoing v4, v5, v6, v7 and v8 as well, for the reason `approvals.test.ts` gives: a ledger that still
     // records a later migration would leave `migrate` with nothing to apply, and the fixture would be testing an upgrade
     // no file can be in. A v2 file has no job pair and no session record either, and a CREATE against tables the fixture
     // left standing is a failure no upgrade would ever meet.
     db.exec(
       "DELETE FROM schema_migration WHERE version >= 3; DROP TABLE checkpoint; " +
         "DROP TABLE job_run; DROP TABLE job; DROP TABLE session; " +
-        "ALTER TABLE task DROP COLUMN cancellation_json; ALTER TABLE task DROP COLUMN model",
+        "ALTER TABLE task DROP COLUMN cancellation_json; ALTER TABLE task DROP COLUMN model; " +
+        "ALTER TABLE task DROP COLUMN model_switch_json",
     );
     // Nothing is read before `migrate` on purpose: v3's SELECT names the new column, so a v2 file is unreadable by v3
     // code until the migration runs. That is why every process migrates on startup rather than lazily, and why this test
     // asserts the upgrade instead of the state before it.
-    assert.deepEqual(migrate(db), { applied: [3, 4, 5, 6, 7], version: 7 });
+    assert.deepEqual(migrate(db), { applied: [3, 4, 5, 6, 7, 8], version: 8 });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,
       1,

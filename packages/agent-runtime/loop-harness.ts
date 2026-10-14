@@ -69,11 +69,14 @@ import {
 } from "./checkpoint.ts";
 import type { TaskJournal } from "./journal.ts";
 import {
+  type AskCandidates,
   createLoop,
   type Loop,
   type LoopLimits,
   type LoopOutcome,
   type LoopSubject,
+  type ModelAnswer,
+  type ModelSuspendedRun,
   type SuspendedRun,
   type ToolOutcome,
   type ToolRunContext,
@@ -113,6 +116,10 @@ export interface HarnessOptions {
   readonly isTermux?: boolean;
   readonly ctx?: EvalContext;
   readonly limits?: Partial<LoopLimits>;
+  /** §3.6 stage 2's options, injected the way the Gateway composes them: a harness that had a pool would describe its
+   *  own alternatives, and a test that wants the ask to carry candidates says what they are rather than letting the
+   *  loop invent them. Absent means the ask with no options, which is also what a single-model install gets. */
+  readonly askCandidates?: AskCandidates;
   /** D-064's jitter source and the backoff wait, both injected so a ladder test asserts the *schedule* instead of
    *  sleeping through it: five rungs cost 31 real seconds, and a test that slow is a test nobody runs twice. */
   readonly random?: () => number;
@@ -189,6 +196,10 @@ export interface Harness {
     signal?: AbortSignal;
   }): Promise<LoopOutcome>;
   resume(run: SuspendedRun): Promise<LoopOutcome>;
+  /** D-044's answer, straight onto the loop the way the route reaches it through the runner. The harness does not wrap
+   *  it: the point of a unit test here is that the loop's own refusals (a pair the ask never offered, a park that is not
+   *  an ask, a terminal task) are the loop's, and a wrapper would be somewhere for them to hide. */
+  answerModel(run: ModelSuspendedRun, answer?: ModelAnswer): Promise<LoopOutcome>;
   /** §6.1's step 1 from the outside: record a request, and let the manager decide whether anything is in flight. */
   cancel(input?: {
     mode?: CancellationMode;
@@ -329,10 +340,11 @@ function createMemoryJournal(input: {
     setState: (taskId, state, patch) => {
       if (taskId !== record.id)
         throw new Error(`the harness journal holds one task, not ${taskId}`);
-      // Rebuilt field by field rather than spread, and with the two different omission rules `packages/storage`'s
+      // Rebuilt field by field rather than spread, and with the three different omission rules `packages/storage`'s
       // `setState` has: a move that carries no error *clears* the one a previous state left, because a record keeping a
       // reason for a state it is no longer in is a reason nobody can act on; a move that carries no cancellation *keeps*
-      // the one that is there, because only the settle writes it and it is written once (F-46).
+      // the one that is there, because only the settle writes it and it is written once (F-46); and the same is true of
+      // the switch, because the answer that caused it is the only writer (D-044).
       record = {
         id: record.id,
         sessionId: record.sessionId,
@@ -341,12 +353,25 @@ function createMemoryJournal(input: {
         state,
         updatedAt: new Date(input.clock.now()).toISOString(),
         lastSeq: record.lastSeq,
+        ...(record.model === undefined ? {} : { model: record.model }),
         ...(patch?.error === undefined ? {} : { error: patch.error }),
         ...(patch?.cancellation === undefined
           ? record.cancellation === undefined
             ? {}
             : { cancellation: record.cancellation }
           : { cancellation: patch.cancellation }),
+        // The same two different omission rules for the pair, because SQLite's `COALESCE` is the rule being mirrored: a
+        // move that names no switch keeps whatever is there, and one that names a model keeps the switch beside it.
+        ...(patch?.model === undefined
+          ? record.model === undefined
+            ? {}
+            : { model: record.model }
+          : { model: patch.model }),
+        ...(patch?.modelSwitch === undefined
+          ? record.modelSwitch === undefined
+            ? {}
+            : { modelSwitch: record.modelSwitch }
+          : { modelSwitch: patch.modelSwitch }),
       };
       states.push(state);
     },
@@ -598,6 +623,7 @@ export function createHarness(options: HarnessOptions): Harness {
     publish: publishEvent,
     ...(options.limits === undefined ? {} : { limits: options.limits }),
     ...(options.random === undefined ? {} : { random: options.random }),
+    ...(options.askCandidates === undefined ? {} : { askCandidates: options.askCandidates }),
     wait: recordWait,
     now: clock.now,
   });
@@ -681,6 +707,7 @@ export function createHarness(options: HarnessOptions): Harness {
         signal: input.signal ?? cancellation.signalFor(taskId),
       }),
     resume: (run) => loop.resume(run),
+    answerModel: (run, answer = {}) => loop.answerModel(run, answer),
     cancel: (input = {}) =>
       cancellation.request({
         taskId,

@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { LoopOutcome, LoopSubject } from "./loop.ts";
-import { createHarness, WORKSPACE } from "./loop-harness.ts";
+import { createHarness, createScriptedProvider, WORKSPACE } from "./loop-harness.ts";
 import type { ResumeResult, StartResult } from "./runner.ts";
 
 const PATH_ARGS = { type: "object", properties: { path: { type: "string" } } } as const;
@@ -164,6 +164,117 @@ describe("the runner that answers 'is this task already running?' (AGENT_RUNTIME
     );
     assert.equal(runner.parkedFor(harness.taskId), undefined, "a woken run is no longer parked");
     assert.equal(runner.outstanding(), 0);
+  });
+
+  it("parks a run at D-044's ask in its own map, and the answer wakes that run with the model the user chose", async () => {
+    const harness = createHarness({
+      rounds: [[{ kind: "fail", class: "overloaded" }]],
+      tools: fileTools(),
+      limits: { providerAttempts: 2 },
+      random: () => 0.5,
+    });
+    const runner = harness.runner({
+      // The pool a composition root would hand over. Without it the ask carries no options, and this runner has no pool of
+      // its own to describe — so an answer naming a model would be refused for not having been offered, which is the
+      // correct answer for an install that composed one model and is not what this test is about.
+      askCandidates: async () => [
+        {
+          model: "second/fake-tools",
+          provider: "second",
+          cost: "free-tier",
+          contextWindow: 8_192,
+          losses: ["no tool calling"],
+        },
+      ],
+    });
+
+    const asked = await runOf(runner.start({ taskId: harness.taskId, subject }));
+    assert.equal(asked.kind, "awaiting-model");
+    assert.equal(
+      runner.outstanding(),
+      0,
+      "waiting on a model is not in flight, exactly as waiting on a human is not",
+    );
+    assert.equal(harness.task()?.state, "awaiting_approval");
+    assert.equal(
+      runner.parkedFor(harness.taskId),
+      undefined,
+      "not an approval park: it has no approvalId, no tool call, and a different answer, so folding the two would let a " +
+        "model answer a prompt",
+    );
+    assert.equal(runner.askingFor(harness.taskId)?.ask.attempts, 2);
+
+    const second = runner.start({ taskId: harness.taskId, subject });
+    assert.match(
+      refusalOf(second),
+      /^parked: .*D-044's model ask.*POST \/api\/v1\/tasks\/\{id\}\/resume/s,
+      "a task waiting for a model is answered, not started again",
+    );
+
+    const alt = createScriptedProvider([[{ kind: "text", text: "finished on the second model" }]], {
+      id: "second",
+    });
+    const resumed = runner.resume(harness.taskId, {
+      pair: { provider: "second", modelId: "fake-tools" },
+      provider: alt,
+      byClientId: "cli_local",
+      via: "cli",
+    });
+    assert.equal(resumed.ok, true);
+    assert.equal(await runOf(resumed).then((outcome) => outcome.kind), "completed");
+    assert.equal(runner.askingFor(harness.taskId), undefined, "an answered ask is not still asked");
+    assert.equal(runner.outstanding(), 0);
+    assert.equal(
+      harness.task()?.model,
+      "second/fake-tools",
+      "the record shows the switch (§3.6 stage 3)",
+    );
+  });
+
+  it("refuses to name a model for a run that is parked at an approval", async () => {
+    const harness = createHarness({ rounds: [deleteRound, doneRound], tools: fileTools() });
+    const runner = harness.runner();
+    await runOf(runner.start({ taskId: harness.taskId, subject }));
+    assert.ok(runner.parkedFor(harness.taskId) !== undefined, "the run is parked at a prompt");
+
+    const refused = runner.resume(harness.taskId, {
+      pair: { provider: "second", modelId: "fake-tools" },
+      provider: createScriptedProvider([[{ kind: "text", text: "never reached" }]], {
+        id: "second",
+      }),
+    });
+
+    assert.match(
+      refusalOf(refused),
+      /^not-asking: .*not at D-044's model ask.*POST \/api\/v1\/approvals\/\{id\}\/decision/s,
+      "§3.6 stage 2's switch answers a budget that ran out; a prompt has no budget, so the route a caller needs is the " +
+        "approval's own",
+    );
+    assert.ok(
+      runner.parkedFor(harness.taskId) !== undefined,
+      "and the refusal parks nothing: the prompt is still open and still answerable",
+    );
+    assert.equal(harness.pending().length, 1);
+  });
+
+  it("reports an asked task at shutdown beside the parked ones, because both die with the process", async () => {
+    const harness = createHarness({
+      rounds: [[{ kind: "fail", class: "overloaded" }]],
+      tools: fileTools(),
+      limits: { providerAttempts: 2 },
+      random: () => 0.5,
+    });
+    const runner = harness.runner();
+    await runOf(runner.start({ taskId: harness.taskId, subject }));
+
+    const report = await runner.shutdown(20);
+
+    assert.deepEqual(
+      report.parked,
+      [harness.taskId],
+      "the ask survives as an event and the run does not; a shutdown report that left it out would claim nothing was " +
+        "waiting when a task was",
+    );
   });
 
   it("answers a resume that finds nothing parked with the reason, which is F-47's remaining half", async () => {

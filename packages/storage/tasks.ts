@@ -4,6 +4,7 @@
 import {
   newId,
   type TaskCancellation,
+  type TaskModelSwitch,
   type TaskRecord,
   type TaskState,
 } from "@crabby/api-contracts";
@@ -30,7 +31,7 @@ export interface ListTasksOptions {
  *  which answers `GET /api/v1/sessions/{id}` with the tasks in one conversation — cannot form a second opinion about what a
  *  row means. Two decoders drift the first time §6.2 adds a column, and the drift shows up as a record with a field missing
  *  in one route and present in another. */
-export const TASK_SELECT = `SELECT id, session_id, state, objective, model, created_at, updated_at, last_seq, error_code, error_message, cancellation_json FROM task`;
+export const TASK_SELECT = `SELECT id, session_id, state, objective, model, created_at, updated_at, last_seq, error_code, error_message, cancellation_json, model_switch_json FROM task`;
 
 export type TaskRow = {
   id: string;
@@ -44,6 +45,7 @@ export type TaskRow = {
   error_code: string | null;
   error_message: string | null;
   cancellation_json: string | null;
+  model_switch_json: string | null;
 };
 
 export function createTask(db: SqliteDb, input: CreateTaskInput): TaskRecord {
@@ -108,6 +110,12 @@ export interface SetStateOptions {
   /** §6.2's evidence, written once by the settle (F-46, D-089). Omitting it leaves what is there alone, because the only
    *  writer is the cancellation manager and no other state move has an opinion about it. */
   readonly cancellation?: TaskCancellation;
+  /** §3.6 stage 3's switch, written by the answer that caused it (D-044). Omitting it leaves what is there alone rather
+   *  than clearing it, because the same rule holds: exactly one writer — the resume that switched — has an opinion about
+   *  it, and every other state move in the runtime passes no value here rather than an empty one. `model` is written the
+   *  same statement and with the same rule, so a record can never name one model and describe a switch to another. */
+  readonly model?: string;
+  readonly modelSwitch?: TaskModelSwitch;
 }
 
 /** Every task in one of these states, unpaginated, for the startup scan §7.1 requires. `listTasks` stays cursor-paged
@@ -132,7 +140,9 @@ export function setState(
   const result = db
     .prepare(
       `UPDATE task SET state = ?, updated_at = ?, error_code = ?, error_message = ?,
-                       cancellation_json = COALESCE(?, cancellation_json)
+                       cancellation_json = COALESCE(?, cancellation_json),
+                       model = COALESCE(?, model),
+                       model_switch_json = COALESCE(?, model_switch_json)
        WHERE id = ? AND state <> ?`,
     )
     .run(
@@ -141,6 +151,8 @@ export function setState(
       options.error?.code ?? null,
       options.error?.message ?? null,
       options.cancellation === undefined ? null : JSON.stringify(options.cancellation),
+      options.model ?? null,
+      options.modelSwitch === undefined ? null : JSON.stringify(options.modelSwitch),
       id,
       state,
     );
@@ -189,5 +201,8 @@ export function taskRecordFromRow(row: TaskRow): TaskRecord {
     ...(row.cancellation_json === null
       ? {}
       : { cancellation: JSON.parse(row.cancellation_json) as TaskCancellation }),
+    ...(row.model_switch_json === null
+      ? {}
+      : { modelSwitch: JSON.parse(row.model_switch_json) as TaskModelSwitch }),
   };
 }

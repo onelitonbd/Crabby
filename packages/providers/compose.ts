@@ -30,6 +30,7 @@
 import { isVaultReference, type LimitsConfig, type ProviderEntryConfig } from "@crabby/core";
 import { validateProviderConfig } from "./config.ts";
 import type { Provider } from "./contract.ts";
+import type { ModelDescriptor, SupportedFeature } from "./descriptor.ts";
 import { createOpenAiCompatibleProvider, OPENAI_DEADLINE_DEFAULTS } from "./openai.ts";
 
 /** One config entry's fate. `warnings` are §3.3's — "a clear warning if the host is not loopback while the key would be
@@ -272,4 +273,114 @@ export async function selectPinnedModel(
     };
   }
   return { ok: true, providerId, modelId, provider };
+}
+
+/** §3.6 stage 2's options, labelled. `losses` is the half that needs the pool: §3.6 asks each option to carry "its
+ *  provider, capability deltas, and cost class", and a *delta* is only true relative to something — here, to the model
+ *  the run is currently on. Computing it here rather than in the ask is what keeps the ask honest: the loop receives
+ *  comparisons and cannot form a new one from data it does not have, which is the same D-101 rule that keeps it out of
+ *  the pool in the first place.
+ *
+ *  The order is §3.6's own: the same provider's other models first, then the rest of the pool. A user whose local model
+ *  is overloaded should see the local alternatives before a hosted one that costs money and sends the conversation
+ *  somewhere new — and the ask shows what each would cost, so the order is a preference, not a decision.
+ *
+ *  A provider whose `describe()` rejects is **skipped, not offered**: §3.2's rule is that an unparsable descriptor
+ *  disables the provider rather than defaulting everything on, and a candidate we cannot describe is a candidate we cannot
+ *  state the losses of. An install with one provider therefore gets an empty list, which the ask reports as an ask with no
+ *  options — the honest answer, and one the resume route accepts as "try the same model again". */
+export interface AskCandidate {
+  readonly model: string;
+  readonly provider: string;
+  readonly cost: string;
+  readonly contextWindow: number;
+  readonly losses: readonly string[];
+}
+
+const FEATURE_LOSSES: ReadonlyArray<{
+  readonly feature: SupportedFeature;
+  readonly label: string;
+}> = [
+  { feature: "toolCalling", label: "no tool calling" },
+  { feature: "parallelToolCalls", label: "no parallel tool calls" },
+  { feature: "streaming", label: "no streaming" },
+  { feature: "imageInput", label: "no image input" },
+  { feature: "structuredOutput", label: "no structured output" },
+  { feature: "reasoning", label: "no reasoning output" },
+  { feature: "promptCaching", label: "no prompt caching" },
+];
+
+function costClass(cost: ModelDescriptor["cost"]): string {
+  if (cost === "local") return "local (no per-token cost)";
+  if (cost === "free-tier") return "free tier";
+  if (cost === null) return "not declared";
+  return "paid per token";
+}
+
+export async function composeAskCandidates(
+  pool: readonly Provider[],
+  current: { readonly providerId: string; readonly modelId: string },
+): Promise<readonly AskCandidate[]> {
+  const described = await Promise.all(
+    pool.map(async (provider) => {
+      try {
+        return {
+          provider,
+          models: await provider.describe(),
+        };
+      } catch {
+        // §3.2: a descriptor that does not parse disables the provider. A candidate that cannot describe itself is not
+        // offered, and the ask that lists fewer options is still an ask a user can answer.
+        return undefined;
+      }
+    }),
+  );
+  const currentDescriptor = described.find((entry) => entry?.provider.id === current.providerId)
+    ?.models[current.modelId];
+
+  const rows: Array<{ readonly candidate: AskCandidate; readonly sameProvider: boolean }> = [];
+  for (const entry of described) {
+    if (entry === undefined) continue;
+    for (const [modelId, descriptor] of Object.entries(entry.models)) {
+      if (entry.provider.id === current.providerId && modelId === current.modelId) continue;
+      const losses: string[] = [];
+      for (const { feature, label } of FEATURE_LOSSES) {
+        if (
+          currentDescriptor?.supports[feature] === true &&
+          descriptor.supports[feature] !== true
+        ) {
+          losses.push(label);
+        }
+      }
+      if (
+        currentDescriptor !== undefined &&
+        descriptor.contextWindow < currentDescriptor.contextWindow
+      ) {
+        losses.push(
+          `a smaller context window (${descriptor.contextWindow.toLocaleString("en-US")} of ` +
+            `${currentDescriptor.contextWindow.toLocaleString("en-US")})`,
+        );
+      }
+      rows.push({
+        sameProvider: entry.provider.id === current.providerId,
+        candidate: {
+          model: `${entry.provider.id}/${modelId}`,
+          provider: entry.provider.id,
+          cost: costClass(descriptor.cost),
+          contextWindow: descriptor.contextWindow,
+          losses,
+        },
+      });
+    }
+  }
+  // A stable sort rather than the pool's own order: two providers' models must not appear in an order that depends on
+  // which of them answered a `describe()` first, because a prompt whose options move around between two identical asks is
+  // a prompt two users read differently.
+  return rows
+    .sort(
+      (a, b) =>
+        Number(b.sameProvider) - Number(a.sameProvider) ||
+        a.candidate.model.localeCompare(b.candidate.model),
+    )
+    .map((row) => row.candidate);
 }

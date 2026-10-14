@@ -37,6 +37,8 @@ export function createSqliteJournal(deps: {
       setState(db, taskId, state, {
         ...(record?.error === undefined ? {} : { error: record.error }),
         ...(record?.cancellation === undefined ? {} : { cancellation: record.cancellation }),
+        ...(record?.model === undefined ? {} : { model: record.model }),
+        ...(record?.modelSwitch === undefined ? {} : { modelSwitch: record.modelSwitch }),
       });
     },
     append: ({ taskId, type, payload, at, correlationId }) => {

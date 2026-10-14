@@ -22,6 +22,7 @@ import {
   type ErrorClass,
   ErrorEnvelope,
   type Event,
+  EXIT,
   newId,
   TaskRecord,
   type ToolDeclaration,
@@ -1522,6 +1523,27 @@ describe("a spawned gateway prints which half of the shell composition is missin
       child.kill("SIGTERM");
       await waitGone(child, 10_000);
     }
+  });
+});
+
+describe("gateway start refuses a data dir that does not exist and names `crabby init` (ROADMAP §4)", () => {
+  it("exits 1 with a shaped error naming `crabby init`, not better-sqlite3's message", () => {
+    // A data dir nothing created, so `crabby init` has not run — the one case the recorded wart covered.
+    const dir = path.join(tmpdir(), `crabby-missing-state-${Date.now()}`, "never-created");
+    const run = spawnSync(
+      process.execPath,
+      [path.join(REPO, "apps/cli/crabby.ts"), "--data-dir", dir, "gateway", "start"],
+      { cwd: REPO, encoding: "utf8", timeout: 30_000 },
+    );
+    const text = `${run.stdout ?? ""}${run.stderr ?? ""}`;
+    assert.equal(run.status, EXIT.failure, `a missing state dir is a failure:\n${text}`);
+    assert.match(text, /no state dir/, "the line names the missing precondition");
+    assert.match(text, /crabby init/, "the fix names the command that creates the dir");
+    assert.doesNotMatch(
+      text,
+      /TypeError|SqliteError|unable to open/i,
+      "the driver's own error must not leak to the user",
+    );
   });
 });
 

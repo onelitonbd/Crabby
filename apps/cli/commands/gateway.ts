@@ -139,6 +139,15 @@ async function runStart(
     );
     return EXIT.usage;
   }
+  // §5's setup steps left "who creates the state dir" open, and this was the visible cost: opening the database on a
+  // directory that does not exist died with better-sqlite3's own error rather than with an answer a person can act
+  // on. `crabby init` is the one command allowed to create files (init.ts's header), so a state dir that is not
+  // there means init has not run — and this says so and names the command, rather than leaking a driver's message.
+  if (!existsSync(layout.stateDir)) {
+    renderer.line("no state dir", `${layout.stateDir} does not exist, so there is nothing to open`);
+    renderer.fix("`crabby init` creates it (and the vault) before the Gateway is started");
+    return EXIT.failure;
+  }
 
   const log = createLogger({ ...(logLevel === undefined ? {} : { level: logLevel }) }, "gateway");
   const loaded = loadConfig(layout);

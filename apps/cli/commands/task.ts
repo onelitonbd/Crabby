@@ -322,9 +322,11 @@ export async function runTask(
     }
     // Printed first and whole. §7.1's row exists for the case it names — a dropped SSH session — and the id on the
     // screen is what makes the loss nothing: the events are on the record and any client can follow them from anywhere.
-    // The reattach line names `task watch` rather than the `task resume` the row was written around, because
-    // `POST /tasks/{id}/resume` is in no build and a printed command that cannot run is worse than a printed one that
-    // can (docs/CONSISTENCY_REVIEW.md F-47).
+    // The reattach line names `task watch` rather than the `task resume` the row was written around, because the verb is
+    // M3's grammar and a printed command that cannot run is worse than a printed one that can. `POST /tasks/{id}/resume`
+    // does answer a ladder ask now (D-044) — but it answers *this* process's park, and a reattach is by definition the
+    // case where the client reconnected to a Gateway that may no longer hold the run (docs/CONSISTENCY_REVIEW.md F-47),
+    // which is the opposite of the condition that route requires.
     renderer.line("task", `${record.id} · ${record.state}`);
     renderer.fix(
       `crabby task watch ${record.id} — reattach from any client; the events are on the record`,
@@ -503,6 +505,10 @@ export async function followTask(input: FollowInput): Promise<ExitCode> {
   let lastEventId: string | undefined;
   let seen = 0;
   let promptId: string | undefined;
+  /** D-044's ask facts, read off the transition frame rather than off `provider.switch.proposed`: the state move is the
+   *  frame every interface already follows, so a client that filters event families still learns the task is waiting on a
+   *  model and not on a prompt. */
+  let askSpent: Record<string, unknown> | undefined;
   let finalState: TaskRecord["state"] = task.state;
   let ended: string | undefined;
   // Frames are separated by a blank line, and a chunk boundary can fall inside one, so the buffer is only ever consumed
@@ -590,6 +596,13 @@ export async function followTask(input: FollowInput): Promise<ExitCode> {
           ? reported
           : undefined;
       if (typeof event.payload?.approvalId === "string") promptId = event.payload.approvalId;
+      // D-044's ask parks in `awaiting_approval` with *no* approval behind it, and the two pauses want different
+      // sentences: one is answered by naming a model, the other by doing something else. The transition frame carries the
+      // ladder's facts (`ladder` plus the pair the run was on), so one field is enough to tell them apart without depending
+      // on the order two events arrived in.
+      if (typeof event.payload?.ladder === "object" && event.payload.ladder !== null) {
+        askSpent = event.payload;
+      }
       // §7.1's exit-3 row: "Approval needed, no answer reachable — exit `3` immediately", with `--wait-approval <n>`
       // as the only opt-in to keep waiting. That flag is in no registry, so there is nothing to opt into and blocking on
       // anyway would be exactly the silent hang inside a cron job the row exists to prevent. The id is tracked across
@@ -600,16 +613,25 @@ export async function followTask(input: FollowInput): Promise<ExitCode> {
         (state === "awaiting_approval" || event.type === "approval.requested")
       ) {
         await reader.cancel();
+        // Three sentences for three pauses, because the fixes are three different things. The ladder's ask names the route
+        // that answers it, because that is what exists in this build — the `task resume` verb C6-10 prints is M3's grammar,
+        // and a fix line naming a command that cannot run is worse than one naming the route that can.
         const answer =
-          promptId === undefined
-            ? "`crabby task show " +
-              taskId +
-              "` prints why — a task paused under D-086 has no prompt to answer, and nothing resumes it but a new run"
-            : "`crabby approval approve " +
+          promptId !== undefined
+            ? "`crabby approval approve " +
               promptId +
               "` continues it and `crabby approval deny " +
               promptId +
-              "` ends the step; `--wait-approval`, §7.1's opt-in to keep blocking here, is in no registry yet";
+              "` ends the step; `--wait-approval`, §7.1's opt-in to keep blocking here, is in no registry yet"
+            : askSpent !== undefined
+              ? "answer POST /api/v1/tasks/" +
+                taskId +
+                "/resume with one of the models the ask offers, or with `{}` to retry the same one (`crabby task resume " +
+                taskId +
+                "`, C6-10, is M3's grammar and is in no registry yet)"
+              : "`crabby task show " +
+                taskId +
+                "` prints why — a task paused under D-086 has no prompt to answer, and nothing resumes it but a new run";
         if (renderer.json) {
           renderer.raw(
             JSON.stringify({
@@ -624,9 +646,13 @@ export async function followTask(input: FollowInput): Promise<ExitCode> {
         }
         renderer.line(
           "needs approval",
-          promptId === undefined
-            ? `${taskId} is awaiting_approval with no prompt behind it (D-086's pause after repeated denials)`
-            : `${taskId} is waiting on approval ${promptId}`,
+          promptId !== undefined
+            ? `${taskId} is waiting on approval ${promptId}`
+            : askSpent !== undefined
+              ? `${taskId} is awaiting_approval after ${String(
+                  (askSpent.ladder as { attempts?: unknown } | undefined)?.attempts ?? "?",
+                )} provider attempts (D-044's ask for another model)`
+              : `${taskId} is awaiting_approval with no prompt behind it (D-086's pause after repeated denials)`,
         );
         renderer.fix(answer);
         return EXIT.needsApproval;

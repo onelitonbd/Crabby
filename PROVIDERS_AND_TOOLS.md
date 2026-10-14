@@ -246,14 +246,35 @@ Stage 3 rules:
   Crabby reconciles or asks, it does not blindly repeat.
 - The task record must show the switch: original model, chosen model, reason, stage reached, and whether any step
   was re-attempted.
-- **As far as M2 goes, the saved state this stage needs is real (D-095).** The loop commits a boundary at each committed
-  step, `GET /tasks/{id}/checkpoint` reports it beside the model that produced it — the "original model" of the sentence
-  above, written down before any switch exists to compare it with — and D-065's verdict answers whether a resume may pass
-  the step that failed. What is still unbuilt is the ask and the switch, and one ordering the documents disagree about:
-  stage 2 has to happen *before* the task is failed, because `AGENT_RUNTIME.md` §4.1 makes `failed` terminal and absorbing
-  and no resume travels backwards out of it (`docs/CONSISTENCY_REVIEW.md` F-50).
+- **The ask and the switch are built (D-044, the thirty-ninth slice).** A retryable class that spends the budget stops the
+  run in `awaiting_approval` with **no approval row** — the state, with nothing in the queue to approve, is what says a
+  human must act — and appends `provider.switch.proposed`, carrying the attempts spent, the budget, the class, the pair the
+  run was on, and each candidate labelled with its provider, its cost class and the capabilities choosing it would lose.
+  The same facts ride on the transition frame's payload, so a client that filters event families still learns why the task
+  stopped (§5.2's retrievable-by-polling rule). `billing` and every other non-retryable class still stops and reports, and
+  the prompt is offered only on the two the ladder exists for: switching cannot fix a rejected key.
+- **The ordering disagreement is resolved in the only direction §4.1 allows.** Stage 2 happens *before* the task is failed,
+  because `AGENT_RUNTIME.md` §4.1 makes `failed` terminal and absorbing and no resume travels backwards out of it
+  (`docs/CONSISTENCY_REVIEW.md` F-50): the run that spent its ladder stops in a state it can be woken from, and `failed`
+  now means the class was not worth asking about.
+- The answer is `POST /api/v1/tasks/{id}/resume` (`docs/INTERFACES_AND_API.md` §4.3), with an empty body meaning "the same
+  model again". The run continues from the boundary it had reached — the committed messages travel with it, so no step runs
+  twice — and the record carries what stage 3's second rule asks for: `model` is the chosen pair, `modelSwitch` carries the
+  original pair, the reason, `stage: 2`, `reAttempted: false` and the attempts spent, with §14's `by`/`via` beside it, and
+  `provider.switch.accepted` goes into the log because the selection counts as the user's approval for that switch.
+- **What the answer reaches is one process's run.** The messages a resume continues from live in the runner's memory, so a
+  task whose ask was parked by a process that has since ended is `interrupted` (§7.1) rather than resumable, and
+  `docs/CONSISTENCY_REVIEW.md` F-47's cross-process rebuild — which would rebuild them from D-095's checkpoint — is what
+  closes that half. The candidate label does not carry a **host**: §3.2's descriptor describes a model, and the `Provider`
+  interface exposes no endpoint, so naming a destination host is part of what a rebuilt descriptor would have to add. What
+  it does carry is the provider id and every loss, which is the pair of facts the sentence above asks for minus the host.
+- **What moves an unanswered ask is not priced by anything yet.** No document gives the ask a deadline (D-064's window is
+  an approval row's, and the ask has no row) and no interface inventory gives it a decline verb, so today the ask waits —
+  like D-086's refusal pause — until it is answered, cancelled, or marked `interrupted` by a restart. That gap is recorded
+  as `DECISIONS.md` O-073 rather than settled here.
 - Where a conversation was generated partly on one model and continues on another, the context is re-budgeted for
-  the new limits, and the user can see that happened.
+  the new limits: every count after the switch asks the provider the user chose. The user sees it happen in the switch
+  recorded on the task and in the log, and the capability losses were named at the prompt before they were chosen.
 
 Timeouts are per call, not per task: a slow model that keeps responding within its per-call deadline is not
 retried merely because the overall task is long. The per-call numbers are the defaults in §5.2 (D-074); a slow model

@@ -38,7 +38,7 @@ import {
 } from "@crabby/gateway";
 import { dataLayout } from "@crabby/platform";
 import { CAPABILITY_NAMES, PENDING_RECORD_FIELDS, TIERS, TOOL_REGISTRY } from "@crabby/policy";
-import { composeProviders, type ProviderComposition } from "@crabby/providers";
+import { composeProviders, MAX_ATTEMPTS, type ProviderComposition } from "@crabby/providers";
 import {
   appendEvent,
   DB_FILE_NAME,
@@ -193,11 +193,11 @@ describe("gateway over http", () => {
     // on?" answerable by someone holding a phone and a backup.
     assert.equal(
       body.storage.schemaVersion,
-      7,
+      8,
       "M2's `approval` table advanced the ledger from 1 to 2, §6.2's cancellation column (D-091) from 2 to 3, D-065's " +
         "checkpoint table (D-095) from 3 to 4, §4.5's `job` and `job_run` tables (D-046, D-057) from 4 to 5, the " +
-        "`session` record §2.1's conversations need (D-104) from 5 to 6, and D-108's per-task model pin from 6 to 7 " +
-        "— and this literal is why a migration cannot land quietly",
+        "`session` record §2.1's conversations need (D-104) from 5 to 6, D-108's per-task model pin from 6 to 7, and " +
+        "§3.6 stage 3's switch the record has to show from 7 to 8 — and this literal is why a migration cannot land quietly",
     );
   });
 
@@ -2053,6 +2053,35 @@ function tokenFromCli(dir: string): string {
   return JSON.parse(readFileSync(path.join(dir, "client.json"), "utf8")).token as string;
 }
 
+/** Polling a task to a terminal state over HTTP, with the deadline in the failure message. Used where the run has no CLI
+ *  verb to follow it (the resume answer has none until M3's grammar) and where a socket the test does not need would be a
+ *  socket the test has to clean up. */
+async function untilFailed(
+  id: string,
+  port: number,
+  token: string,
+  deadlineMs = 30_000,
+): Promise<TaskRecord> {
+  const started = Date.now();
+  for (;;) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${id}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.ok(response.ok, `GET /tasks/${id} answered ${response.status}`);
+    const record = (await response.json()) as TaskRecord;
+    if (record.state === "failed" || record.state === "completed" || record.state === "cancelled") {
+      return record;
+    }
+    if (Date.now() - started > deadlineMs) {
+      assert.fail(
+        `task ${id} was still \`${record.state}\` after ${deadlineMs}ms — the switch the answer should have recorded is ` +
+          `${record.model ?? "none"}`,
+      );
+    }
+    await wait(100);
+  }
+}
+
 /** Read one SSE frame, ignoring heartbeat comments, and never wait longer than `ms`. The race with a timer is what
  *  makes an *idle* stream testable: `reader.read()` on a stream that has nothing to say stays pending until the next
  *  byte, so a plain deadline check between reads would sit there until the 15 s heartbeat answered for it. */
@@ -2085,23 +2114,100 @@ describe("a spawned gateway that drives tasks, and §7.1's exit codes for the ve
   let child: ChildProcess | undefined;
   let output = "";
 
+  /** The stand-in for a hosted endpoint that answers `401`. It exists so the exit-code rows can be tested without
+   *  waiting for a retry ladder: `auth` is not a retryable class (§9.2), so the run fails on its first call and the whole
+   *  verb takes a second instead of half a minute.
+   *
+   *  A *process*, not a server in this one, and that is the whole lesson of writing it the other way first: `runCli` is
+   *  `spawnSync`, which blocks this process's event loop for as long as the command runs, so an endpoint served here
+   *  accepts no connections during the very call that needed it. The Gateway then saw no answer at all, called the failure
+   *  a timeout and climbed D-064's ladder — a test failure that reads exactly like a product bug. The gateway under test is
+   *  a child process for the same reason.
+   *
+   *  The response is delayed by a beat for the other half of the first test's purpose: `task run` creates the task and
+   *  *then* opens its stream, so a failure arriving instantly would be recorded before the command had a socket to follow,
+   *  and the verb would meet an already-terminal task and prove nothing about following one. */
+  let stub: ChildProcess | undefined;
+
   before(async () => {
     dir = mkdtempSync(path.join(tmpdir(), "crabby-run-"));
     const work = mkdtempSync(path.join(tmpdir(), "crabby-run-work-"));
     writeFileSync(path.join(work, "notes.md"), "# notes\n", "utf8");
+    const stubFile = path.join(dir, "unauthorized-endpoint.mjs");
+    writeFileSync(
+      stubFile,
+      [
+        'import { createServer } from "node:http";',
+        "const server = createServer((_request, response) => {",
+        "  setTimeout(() => {",
+        '    response.writeHead(401, { "content-type": "application/json" });',
+        '    response.end(JSON.stringify({ error: { message: "no key" } }));',
+        "  }, 1_200);",
+        "});",
+        'server.listen(0, "127.0.0.1", () => {',
+        "  process.stdout.write(`PORT ${server.address().port}\\n`);",
+        "});",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    stub = spawn(process.execPath, [stubFile], { stdio: ["ignore", "pipe", "inherit"] });
+    const portLine = await new Promise<string>((resolve, reject) => {
+      let buffered = "";
+      stub?.stdout?.on("data", (chunk: Buffer) => {
+        buffered += chunk.toString();
+        const match = buffered.match(/^PORT (\d+)$/m);
+        if (match?.[1] !== undefined) resolve(match[1]);
+      });
+      setTimeout(
+        () => reject(new Error("the stub endpoint never printed its port")),
+        10_000,
+      ).unref?.();
+    });
+    const authPort = Number(portLine);
     // A configuration that composes a runner, which is the only way to test this verb's exit codes at all: one
-    // workspace root, one keyless provider entry, and a selected default model. The endpoint is a port nothing
-    // listens on, so every generate call fails and the run walks D-064's retry ladder to its end before the task
-    // turns `failed` — which is slow, and necessarily so: D-043 floors `limits.providerAttempts` at 5, so the
-    // ladder cannot be configured shorter than the schema allows, and the run has to outlast the command's stream
-    // connect for `task run` to follow it to its terminal event rather than meet a task that is already terminal.
-    // The assertions below are about an exit code and about what the command does and does not follow.
+    // workspace root, two keyless provider entries, and a selected default model.
+    //
+    // Two entries because D-044 now has two shapes to reach, and the exit-code rows cover both:
+    //
+    //  - `authfail` is the default, and answers `401` after a beat. §9.2 makes that class non-retryable, so the run
+    //    fails on its first call and `task run` exits `1` — the headline row — in a second rather than after a ladder.
+    //  - `local` points at a port nothing listens on, so every generate call is refused. A refused connection is the
+    //    retryable-and-escalating kind (§3.5), so the ladder climbs D-064's schedule to its end and D-044's second rung
+    //    asks instead of failing: exit `3`, a task in `awaiting_approval`, and a `provider.switch.proposed` in the log.
+    //    That walk is slow and necessarily so — D-043 floors `limits.providerAttempts` at 5 — and it is the cost this
+    //    suite already paid for one test before the ask existed; the first test here got *faster* because of the change.
     writeFileSync(
       path.join(dir, "config.json"),
       `${JSON.stringify(
         {
           workspace: { roots: [work] },
           provider: {
+            authfail: {
+              baseUrl: `http://127.0.0.1:${authPort}/v1`,
+              models: {
+                "qwen2.5:3b": {
+                  contextWindow: 4096,
+                  maxOutputTokens: 512,
+                  supports: {
+                    streaming: true,
+                    toolCalling: true,
+                    parallelToolCalls: false,
+                    systemRole: true,
+                    structuredOutput: false,
+                    imageInput: false,
+                    audioInput: false,
+                    reasoning: false,
+                    promptCaching: false,
+                    jsonSchemaValidation: false,
+                  },
+                  cancellation: "best-effort",
+                  rateLimits: null,
+                  cost: "local",
+                  batching: null,
+                },
+              },
+            },
             local: {
               baseUrl: "http://127.0.0.1:9/v1",
               models: {
@@ -2128,7 +2234,7 @@ describe("a spawned gateway that drives tasks, and §7.1's exit codes for the ve
               },
             },
           },
-          defaultModel: "local/qwen2.5:3b",
+          defaultModel: "authfail/qwen2.5:3b",
         },
         null,
         2,
@@ -2169,7 +2275,29 @@ describe("a spawned gateway that drives tasks, and §7.1's exit codes for the ve
 
   after(() => {
     child?.kill("SIGTERM");
+    stub?.kill("SIGTERM");
   });
+
+  /** Stop the Gateway the way an operator would — SIGTERM and its drain — and start it again. Needed because the
+   *  `defaultModel` a runner runs on is resolved when the process composes its runner, not per task, so a test that
+   *  points the default somewhere else has to restart to see it. `gateway.json` goes with it: the helper polls for that
+   *  file, and the previous process's file would answer instantly and hand back a port nobody is listening on. */
+  async function restart(): Promise<void> {
+    const running = child;
+    assert.ok(running !== undefined, "a Gateway is running to restart");
+    running.kill("SIGTERM");
+    await waitGone(running, 25_000);
+    rmSync(gatewayInfoPath(dataLayout(dir)), { force: true });
+    output = "";
+    child = spawn(
+      process.execPath,
+      [path.join(REPO, "apps/cli/crabby.ts"), "--data-dir", dir, "gateway", "start"],
+      { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    child.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString()));
+    child.stderr?.on("data", (chunk: Buffer) => (output += chunk.toString()));
+    await waitForGatewayInfo(dir, 25_000);
+  }
 
   it("exits with the run's outcome, so a failed task cannot be read as a success", () => {
     const ran = runCli(dir, ["task", "run", "summarise notes.md"]);
@@ -2193,6 +2321,93 @@ describe("a spawned gateway that drives tasks, and §7.1's exit codes for the ve
       /failed/,
       "the state the exit code reported is the state on the record: the code is a reading of the run, not an opinion",
     );
+  });
+
+  it("exits 3 at D-044's ask and names the route that answers it, rather than failing a task that ran out of ladder", async () => {
+    // The default model moves to the dead port for this test and back after it, which needs the Gateway to re-read
+    // `config.json` — so it restarts. The pairing survives in the data dir (a token is a row, not a process), and §7.1's
+    // recovery marks the earlier failed task terminal rather than resuming it, which is why test 3 above still finds a
+    // failed task afterwards.
+    const pointed = runCli(dir, ["config", "set", "defaultModel", "local/qwen2.5:3b"]);
+    assert.equal(pointed.code, 0, pointed.stdout);
+    await restart();
+
+    const ran = runCli(dir, ["task", "run", "keep going when the model is overloaded"]);
+    assert.equal(
+      ran.code,
+      3,
+      `§7.1's exit-3 row: a pause waiting on a human is not failure, and D-044's ask is a pause — output was:\n${ran.stdout}`,
+    );
+    assert.match(ran.stdout, /needs approval/, "and the line says what kind of pause this is");
+    assert.match(
+      ran.stdout,
+      /provider attempts/,
+      "naming the ladder that ran out: the same state, a different reason, and a user who cannot tell them apart can only " +
+        "guess",
+    );
+    assert.match(
+      ran.stdout,
+      /\/resume/,
+      "the fix names the route that answers the ask, because `crabby task resume` (C6-10) is M3's grammar and a printed " +
+        "command that cannot run is worse than a printed route that can",
+    );
+    assert.match(
+      runCli(dir, ["task", "ls"]).stdout,
+      /awaiting_approval/,
+      "the task is waiting, not ended: §4.1 makes `failed` absorbing, so a run that spent its budget and then died would " +
+        "have been unanswerable",
+    );
+
+    // The answer, over HTTP with the Gateway's own token — the same act an interface would perform, and the one thing this
+    // suite cannot reach from the CLI yet.
+    const listed = JSON.parse(runCli(dir, ["task", "ls", "--json"]).stdout) as {
+      items: { id: string; state: string }[];
+    };
+    const asked = listed.items.find((item) => item.state === "awaiting_approval");
+    assert.ok(asked !== undefined, "the paused task is on the list the answer needs to name");
+    const info = await waitForGatewayInfo(dir, 10_000);
+    const token = tokenFromCli(dir);
+    const answered = await fetch(`http://127.0.0.1:${info.port}/api/v1/tasks/${asked.id}/resume`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      // `authfail` is composed, answers `401`, and is *not* retryable — so the resumed round fails at once and this
+      // suite gets a terminal state to assert on without walking a second ladder.
+      body: JSON.stringify({ model: "authfail/qwen2.5:3b" }),
+    });
+    assert.equal(
+      answered.status,
+      200,
+      `the answer is served; body was ${await answered.clone().text()}`,
+    );
+
+    const record = await untilFailed(asked.id, info.port, token);
+    assert.equal(
+      record.model,
+      "authfail/qwen2.5:3b",
+      "the record shows what the task is using now",
+    );
+    assert.equal(
+      record.modelSwitch?.from,
+      "local/qwen2.5:3b",
+      "and the model it was on when the ladder ran out",
+    );
+    assert.equal(record.modelSwitch?.to, "authfail/qwen2.5:3b");
+    assert.equal(record.modelSwitch?.stage, 2, "§3.6 stage 2 is the rung that reached the switch");
+    assert.equal(
+      record.modelSwitch?.reAttempted,
+      false,
+      "a resume continues from the boundary; it does not re-run steps",
+    );
+    assert.equal(
+      record.modelSwitch?.attempts,
+      MAX_ATTEMPTS,
+      "the whole default budget — one attempt plus the five delays D-064 prices — was spent on one model before the " +
+        "switch, and the record says so rather than leaving a reader to count the `provider.retry.*` frames",
+    );
+    assert.equal(record.modelSwitch?.via, "cli", "§14's audit: which interface answered");
   });
 
   it("returns at once on `--detach`, and answers a script with one document", () => {

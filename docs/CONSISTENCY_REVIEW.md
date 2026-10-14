@@ -860,6 +860,17 @@ an adapter, and neither is a tool question. The half that was this finding's to 
 verdict per task rather than saying it has nothing to pass. F-50 is the residue, and it is a different shape: the
 checkpoint turned out not to be the only thing D-044's promise was waiting on.)*
 
+*(The route this row names now exists, for the half that does not need a rebuild. D-044's ask parks a run in
+`awaiting_approval` with no approval row, and `POST /tasks/{id}/resume` answers it: the run's messages are still in the
+runner's memory, so the continuation continues rather than reconstructs, and the switch lands on the record with the
+attempts that were spent beside it. What has not changed is the reason this row is open — the *cross-process* half. A task
+parked by a process that has ended is `interrupted`, the messages are gone, and the route says so in its refusal instead of
+implying otherwise; rebuilding them from D-095's checkpoint is still the missing party, and it is the same party a
+`SuspendedRun` was: a `RunInput` assembled from a record rather than from memory. Two things the next slice should know
+before it starts, both found while building the route: the loop's `RunInput` needs no new field for this (the task's origin
+is *not* on the record, so the rebuilt run's identity is the one question this row has grown since the text above was
+written), and the checkpoint's `messages` are the committed context — which is what the in-process park was carrying too.)*
+
 ### F-48 — Nothing swept the queue, so a stale prompt was shown as pending and counted as waiting
 **Severity: medium, fixed by D-093, and found by writing recovery rather than by reading the queue.** The arbiter has had
 `sweep` since M2b, and its header states why: "an approval that expires only when someone looks at it is an approval that
@@ -894,10 +905,13 @@ uses is stronger than a documented one, and because the floor is the part of D-0
 editing their own config: the configurable half may lengthen the ladder or shorten it to five, and may not configure it
 out of existence. `loop.test.ts` asserts `LOOP_LIMITS.providerAttempts === MAX_ATTEMPTS` and that `providerAttempts: 4`
 fails validation, so neither package has to remember the other's number — F-40's rule, two packages apart. What is *not*
-fixed is D-044's second rung, and F-47 is the reason it cannot be: ask-the-user-which-model-instead needs a checkpoint to
-resume from and a switch surface to ask on, and neither exists. An exhausted budget therefore fails the task, and the
-`task.failed` payload carries `attempts`, `retried` and a `ladder` sentence naming the rung that is not built, which is
-the honest version of the promise D-044 makes.
+fixed was D-044's second rung, and both halves of the reason it could not be have since landed: the checkpoint it resumes
+from is durable (D-095, M2i) and the switch surface to ask on is `POST /tasks/{id}/resume` (the thirty-ninth slice). An
+exhausted budget on a retryable class therefore no longer fails the task — it parks it in `awaiting_approval` with
+`provider.switch.proposed` and no approval row, and the answer continues the run from the boundary it had reached. The
+`task.failed` payload still carries `attempts`, `retried` and a `ladder` sentence, and the sentence now describes the case
+it actually describes: a class that is not retryable (so there was no budget to spend and no other model that would answer
+differently), or a ladder that stopped short of the configured budget.
 
 ### F-50 — D-044 resumes from the checkpoint after a failure, and the state machine has no edge out of `failed`
 **Severity: medium, open, and found by writing a verdict rather than by reading D-044.** D-044's sentence is "on failure
@@ -927,6 +941,22 @@ What this slice did settle is the dependency D-044 named. `verdictFor` answers `
 carries both halves — the boundary is durable at step N, and `failed` is why nothing walks back to it — so a reader of
 `GET /tasks/{id}/checkpoint` learns the shape of the missing rung from the record itself rather than from a document. The
 row stays open until a slice either builds that pause or amends D-044 to say the ask happens before the task ends.
+
+*(Closed by the thirty-ninth slice, on the second of the two ways this row allowed. The pause is built rather than D-044
+amended: a retryable class that spends `limits.providerAttempts` stops the run in `awaiting_approval` **before** any
+`failed` move exists, so the ordering is not a preference this slice had to choose — §4.1's absorbing terminal state is
+unreachable from the rung that asks. `awaiting_approval` → `running` gained an evidence field (`modelAnswered`) rather
+than a new edge, because the edge was always right and the record was what could not say *which* answer woke the run.
+`failed` is still absorbing and still reaches only classes no switch can help. `loop.test.ts` asserts the class that
+never asks — `auth` — and the loop tests that followed the answer assert the continuation rather than a restart, so the
+row's own sentence ("the task does NOT restart") is now a test rather than a hope.)*
+
+**What this did not settle, and is a new row rather than a leftover:** F-50's last clause — "an ask that goes unanswered or
+is refused moves to `failed`" — describes a destination nothing in the documents prices. There is no decline verb in any
+interface inventory, and no document gives the ask a deadline (D-064's window belongs to an approval row, and the ask has
+no row to expire). The build therefore lets the ask wait, like D-086's refusal pause, until it is answered, cancelled, or
+marked `interrupted` by a restart — which is honest but is not the sentence above, and the difference is recorded as
+`DECISIONS.md` O-073 with its alternatives rather than settled in a comment.
 
 ### F-51 — §3.1's second half was a promise no code could keep, and a test name read as covering it
 **Severity: medium, fixed by D-096, and found by going to implement the sentence rather than by reading it.**

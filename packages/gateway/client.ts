@@ -10,6 +10,7 @@ import path from "node:path";
 import process from "node:process";
 import {
   type CancelTaskBody,
+  type ResumeTaskBody,
   type CreateSessionBody,
   type CreateTaskBody,
   ErrorEnvelope,
@@ -164,6 +165,12 @@ export interface GatewayClient {
    *  request that escalates to `immediate` is §6.2's override rather than a replay. A key cache would have to choose
    *  between those two readings and would get one of them wrong. */
   cancelTask(id: string, body?: CancelTaskBody): Promise<Response<unknown>>;
+  /** D-044's answer, over the route §4.3 documents. An empty body is a real answer — "the same model again, with a fresh
+   *  budget" — and a `model` switches to a pair the Gateway resolves against the pool the ask was built from, so a client
+   *  never has to know which providers composed. No idempotency key, for the same reason `cancelTask` has none: the run
+   *  is either parked (and this wakes it) or not (and this refuses), and a replay of a wake is a wake the task's own state
+   *  machine then refuses. */
+  resumeTask(id: string, body?: ResumeTaskBody): Promise<Response<unknown>>;
   /** §4.3's queue. `state` defaults to the only value a client can act on, and is passed through as text so a typo is
    *  refused by the Gateway rather than answered with an empty list. */
   approvals(options?: { state?: string }): Promise<Response<unknown>>;
@@ -303,6 +310,14 @@ export function createClient(input: {
         // An explicit `{}` rather than no body at all, so the wire shape is the same whether or not the caller has a mode
         // to ask for: `CancelTaskBody`'s fields are optional but the schema is an object, and a client that sent nothing
         // would be relying on the Gateway to guess what "nothing" means.
+        body: body ?? {},
+      }),
+    resumeTask: (id, body) =>
+      request(`/api/v1/tasks/${encodeURIComponent(id)}/resume`, {
+        method: "POST",
+        // Same reasoning as the cancel route above: an answer with no model is the "same model again" answer, and sending
+        // `{}` makes that explicit on the wire rather than leaving the Gateway to read an absent body as a question it
+        // should refuse.
         body: body ?? {},
       }),
     approvals: (options = {}) =>

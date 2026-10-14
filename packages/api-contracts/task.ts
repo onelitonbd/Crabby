@@ -75,6 +75,39 @@ export const TaskCancellation = Type.Object(
 );
 export type TaskCancellation = Static<typeof TaskCancellation>;
 
+/** §3.6's stage 3, as data. Every field is required but two, and each of the two is the record's honest silence: a run
+ *  resumed on the model it already used switched nothing, so this is absent rather than `to === from`, and an answer from
+ *  a client the Gateway could not name carries no `by` rather than a placeholder that would read as an identity.
+ *
+ *  `reAttempted` is the field a reviewer should read twice. It is `false` for every switch this build can produce, and
+ *  that is the guarantee D-044 makes rather than an observation: a resume continues from the boundary the run committed,
+ *  so a completed step is never run twice (§3.9's first rule). It is on the record because a task that switched models
+ *  mid-flight is exactly the one whose history a reader will want to check against the log, and a boolean that can only
+ *  be `false` today is how the next resume finds out if it ever is not. */
+export const TaskModelSwitch = Type.Object(
+  {
+    /** The `<provider>/<modelId>` pair the run was using, which for a task with no pin is the composed default it
+     *  actually called rather than the word "default" — the record should name what happened, not what was configured. */
+    from: Type.String({ minLength: 3 }),
+    /** The pair the answer chose, which is also what `model` now holds. */
+    to: Type.String({ minLength: 3 }),
+    /** Why the ladder stopped retrying, in the sentence §3.6 stage 2 promises the user at the prompt. */
+    reason: Type.String({ minLength: 1 }),
+    /** Which rung of the ladder reached this switch. Only `2` is reachable: stage 1 retries the same model, and a
+     *  billing class stops the run rather than switching (D-044, `PROVIDERS_AND_TOOLS.md` §3.6). */
+    stage: Type.Integer({ minimum: 2, maximum: 2 }),
+    reAttempted: Type.Boolean(),
+    /** The attempts the ladder spent before it asked. A reader comparing this with the log can see that the budget went
+     *  to one model and the task moved to another, rather than having to trust that it did. */
+    attempts: Type.Integer({ minimum: 1 }),
+    at: Type.String({ format: "date-time" }),
+    by: Type.Optional(Type.String()),
+    via: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+export type TaskModelSwitch = Static<typeof TaskModelSwitch>;
+
 export const TaskRecord = Type.Object(
   {
     id: TaskId,
@@ -96,6 +129,11 @@ export const TaskRecord = Type.Object(
     /** Present from the moment a cancellation is requested, with §6.2's evidence added when the task settles (D-091,
      *  amended by D-092 so that recovery can read what was asked instead of excavating it from the log). */
     cancellation: Type.Optional(TaskCancellation),
+    /** §3.6's stage 3 requires the record itself to show a switch — original model, chosen model, reason, the ladder
+     *  stage that reached it, and whether any step was re-attempted — so this sits beside `model` the way
+     *  `cancellation` sits beside the state it was asked for: a log the reader may not have read is not a record. Absent
+     *  means no switch has happened, which is a different fact from "the switch was to the same model". */
+    modelSwitch: Type.Optional(TaskModelSwitch),
   },
   { additionalProperties: false },
 );
@@ -111,9 +149,9 @@ export const CreateTaskBody = Type.Object(
   {
     objective: Type.String({ minLength: 1 }),
     sessionId: Type.Optional(SessionId),
-    /** §3.6's per-task pin, in the `<provider>/<modelId>` form `defaultModel` takes. Scoped to the composed provider in
-     *  this build (D-108, F-57): a pin naming another provider is refused at the route with §4.3's limitation, because
-     *  the runner holds one provider and cross-provider resolution is F-57's deferred option B. */
+    /** §3.6's per-task pin, in the `<provider>/<modelId>` form `defaultModel` takes. Resolved at the route against every
+     *  composed provider (D-110), not against the run's own provider alone: a pin is the user's way of naming a model,
+     *  and refusing a model that is configured is not a smaller feature but a different product (F-57's option B). */
     model: Type.Optional(Type.String({ minLength: 3 })),
   },
   { additionalProperties: false },
@@ -141,6 +179,23 @@ export const CancelTaskBody = Type.Object(
   { additionalProperties: false },
 );
 export type CancelTaskBody = Static<typeof CancelTaskBody>;
+
+/** The answer to §3.6 stage 2's prompt, as a body. One optional field, and the emptiness is the point: an answer with no
+ *  pin continues on the model the run already used, which is a real answer — the budget was spent, the same model may
+ *  well succeed on a fresh attempt — and is the only answer a single-model install has to give. A pin names the model to
+ *  switch to and is validated against every composed provider before anything moves (D-110).
+ *
+ *  There is no `decline`, and the reason is a decision rather than an omission: what moves an *unanswered* ask to
+ *  `failed` is not priced by any document, so a body field here would be an interface inventing a semantic the runtime
+ *  has no answer for (DECISIONS.md O-073, `docs/CONSISTENCY_REVIEW.md` F-50's residual). A user who wants the task to
+ *  stop cancels it, which is an act that already exists and already means what it says. */
+export const ResumeTaskBody = Type.Object(
+  {
+    model: Type.Optional(Type.String({ minLength: 3 })),
+  },
+  { additionalProperties: false },
+);
+export type ResumeTaskBody = Static<typeof ResumeTaskBody>;
 
 /** §2's cursor pagination (`?cursor=&limit=`), ordered by stable id so a list does not shift while a task appends
  *  records. The 200 ceiling is a proposal recorded here, not a documented number — D-074's `limits.*` table is where

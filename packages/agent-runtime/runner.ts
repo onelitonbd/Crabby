@@ -25,10 +25,13 @@ import type { Cancellation, CancellationResult, RequestInput } from "./cancellat
 import type { CheckpointGate } from "./checkpoint.ts";
 import type { TaskJournal } from "./journal.ts";
 import {
+  type AskCandidates,
   createLoop,
   type LoopLimits,
   type LoopOutcome,
   type LoopSubject,
+  type ModelAnswer,
+  type ModelSuspendedRun,
   type RunOrigin,
   type SuspendedRun,
   type ToolSurface,
@@ -57,6 +60,10 @@ export interface RunnerDeps {
   readonly ctx: Omit<EvalContext, "grants">;
   readonly log?: Logger | undefined;
   readonly now?: (() => number) | undefined;
+  /** §3.6 stage 2's options, handed through to the loop unchanged. The runner adds nothing to them and resolves none of
+   *  them: the composition root builds this from the pool it already composed (D-110), and the loop only names what it
+   *  is given (D-101). */
+  readonly askCandidates?: AskCandidates | undefined;
 }
 
 export interface StartInput {
@@ -83,11 +90,17 @@ export type StartResult =
 
 /** What `resume` answers, and the reason it is not the same type as `start`: a resume that finds nothing parked is not
  *  a failure of the caller's, it is a fact about this process, and the sentence has to say which. */
+/** `not-asking` is its own code rather than a flavour of `not-parked`, because the caller's answer is different: a task
+ *  parked at an approval can still be woken — by its own route — and saying "nothing is parked" there would point an
+ *  interface at a dead end that is actually still open. Named as a type so the Gateway can map every code to an error
+ *  class without restating the union, which is how a fifth code would arrive unclassified. */
+export type ResumeFailureCode = "in-flight" | "not-parked" | "not-found" | "not-asking";
+
 export type ResumeResult =
   | { readonly ok: true; readonly taskId: string; readonly run: Promise<LoopOutcome> }
   | {
       readonly ok: false;
-      readonly code: "in-flight" | "not-parked" | "not-found";
+      readonly code: ResumeFailureCode;
       readonly reason: string;
     };
 
@@ -97,14 +110,16 @@ export type ResumeResult =
 export interface ShutdownReport {
   readonly drained: number;
   readonly abandoned: readonly string[];
-  /** Runs parked at an approval when the process ended. A pending request survives in the database and expires under
-   *  D-064's window; the *run* does not survive, which is the fact `resume` reports after a restart. */
+  /** Runs parked at an approval or at D-044's model ask when the process ended. A pending request survives in the
+   *  database and expires under D-064's window; an ask survives as a `provider.switch.proposed` in the log; the *runs*
+   *  do not survive either way, which is the fact `resume` reports after a restart and the half of F-47 that a shutdown
+   *  report has to be honest about. */
   readonly parked: readonly string[];
 }
 
 export interface Runner {
   start(input: StartInput): StartResult;
-  resume(taskId: string): ResumeResult;
+  resume(taskId: string, answer?: ModelAnswer): ResumeResult;
   /** §6.1, delegated whole: the manager owns the request row, the event, the abort and the settle. A runner that
    *  re-implemented any of it would be a second writer of the same fact. */
   cancel(input: RequestInput): CancellationResult;
@@ -113,6 +128,11 @@ export interface Runner {
   outstanding(): number;
   inFlight(taskId: string): boolean;
   parkedFor(taskId: string): SuspendedRun | undefined;
+  /** The run held across D-044's ask, when this process holds one. Kept beside `parkedFor` rather than folded into it
+   *  because the two parks are different obligations with different answers: an approval is spent by the arbiter, a model
+   *  ask by `resume` — and a caller that treated one as the other would either spend nothing or wake a run that was
+   *  never asked. */
+  askingFor(taskId: string): ModelSuspendedRun | undefined;
   shutdown(budgetMs: number): Promise<ShutdownReport>;
 }
 
@@ -128,14 +148,19 @@ export function createRunner(deps: RunnerDeps): Runner {
     cancellation: deps.cancellation,
     ...(deps.checkpoints === undefined ? {} : { checkpoints: deps.checkpoints }),
     ...(deps.limits === undefined ? {} : { limits: deps.limits }),
+    ...(deps.askCandidates === undefined ? {} : { askCandidates: deps.askCandidates }),
     now,
   });
 
-  /** One run per task, as two maps rather than one, because "moving" and "waiting for a human" are different facts with
+  /** One run per task, as three maps rather than one, because "moving" and "waiting for a human" are different facts with
    *  different answers: a task in `running` refuses a second start and can be cancelled; a task in `parked` refuses a
-   *  start, is resumed by an approval decision, and has nothing in flight for §6.1's step 2 to stop. */
+   *  start, is resumed by an approval decision, and has nothing in flight for §6.1's step 2 to stop. `asking` is D-044's
+   *  third case and it is *not* folded into `parked` even though both are "waiting": the answer to each is a different
+   *  call, and a run parked at an approval must not be resumable by naming a model (§3.6 stage 2 is about a budget that
+   *  ran out, and an approval prompt has no budget behind it). */
   const running = new Map<string, Promise<LoopOutcome>>();
   const parked = new Map<string, SuspendedRun>();
+  const asking = new Map<string, ModelSuspendedRun>();
   let draining = false;
 
   /** Registered *before* the first `await` inside it, which is the bug M2l's adapter taught: a run that becomes visible
@@ -186,7 +211,21 @@ export function createRunner(deps: RunnerDeps): Runner {
       deps.log?.debug("run parked at an approval", { taskId, approvalId: outcome.run.approvalId });
       return outcome;
     }
+    if (outcome.kind === "awaiting-model") {
+      // D-044's park. It ends the round loop rather than suspending it, so the task is not in `running` and §6.1's step 2
+      // has nothing to stop — the same position an approval park is in, reached for a different reason and answered by a
+      // different call. The messages travel with it in memory, which is exactly why the route that answers it says what it
+      // can and cannot reach (F-47).
+      asking.set(taskId, outcome.run);
+      deps.log?.debug("run parked at a model ask", {
+        taskId,
+        attempts: outcome.ask.attempts,
+        candidates: outcome.ask.candidates.length,
+      });
+      return outcome;
+    }
     parked.delete(taskId);
+    asking.delete(taskId);
     deps.log?.debug("run ended", { taskId, kind: outcome.kind });
     return outcome;
   }
@@ -216,6 +255,17 @@ export function createRunner(deps: RunnerDeps): Runner {
         reason:
           `task ${input.taskId} is waiting on approval ${suspended.approvalId}, and answering it continues the run that ` +
           "is already parked — a second run of one task would spend the same step twice (§4.4, D-052's `scope: once`)",
+      };
+    }
+    const asked = asking.get(input.taskId);
+    if (asked !== undefined) {
+      return {
+        ok: false,
+        code: "parked",
+        reason:
+          `task ${input.taskId} is waiting on D-044's model ask after ${asked.ask.attempts} attempts, and answering it ` +
+          "(`POST /api/v1/tasks/{id}/resume`, docs/INTERFACES_AND_API.md §4.3) continues the run that is already parked — " +
+          "a second run of one task would re-issue the same failing round against the same model",
       };
     }
     if (deps.journal.task(input.taskId) === undefined) {
@@ -249,13 +299,19 @@ export function createRunner(deps: RunnerDeps): Runner {
     return { ok: true, taskId: input.taskId, run };
   }
 
-  function resume(taskId: string): ResumeResult {
+  function resume(taskId: string, answer?: ModelAnswer): ResumeResult {
     if (running.has(taskId)) {
       return {
         ok: false,
         code: "in-flight",
         reason: `task ${taskId} is already running in this process, so there is nothing parked to wake`,
       };
+    }
+    const asked = asking.get(taskId);
+    if (asked !== undefined) {
+      asking.delete(taskId);
+      const run = launch(taskId, () => loop.answerModel(asked, answer ?? {}));
+      return { ok: true, taskId, run };
     }
     const suspended = parked.get(taskId);
     if (suspended === undefined) {
@@ -272,10 +328,25 @@ export function createRunner(deps: RunnerDeps): Runner {
         ok: false,
         code: "not-parked",
         reason:
-          `no run of task ${taskId} is parked in this process. The run that opened its approval lived in the memory of ` +
-          "the process that started it, and §7 keeps `call.args` out of the checkpoint, so a restarted Gateway cannot " +
-          "rebuild it — D-065's verdict for that boundary is `re-ask`, and `POST /tasks/{id}/resume` " +
-          "(docs/INTERFACES_AND_API.md §4.3) is not in this build (docs/CONSISTENCY_REVIEW.md F-47)",
+          `no run of task ${taskId} is parked in this process. A run parked at an approval or at D-044's model ask lived ` +
+          "in the memory of the process that started it, and §7 keeps `call.args` out of the checkpoint, so a restarted " +
+          "Gateway cannot rebuild it — D-065's verdict for that boundary is `re-ask`. `POST /tasks/{id}/resume` " +
+          "(docs/INTERFACES_AND_API.md §4.3) answers a park this process still holds; across a restart the task is " +
+          "`interrupted` and the cross-process rebuild is docs/CONSISTENCY_REVIEW.md F-47",
+      };
+    }
+    if (answer !== undefined && (answer.pair !== undefined || answer.byClientId !== undefined)) {
+      // Fail closed on the one combination that would mean two things at once. §3.6's switch answers a ladder budget that
+      // ran out, and nothing else: a run holding an approval has not spent a budget, so a model named here would be a
+      // switch no ask proposed — which is the capability the documents never priced and this build refuses to invent
+      // (G6-04's row is about the ask, not about renaming a model under an open prompt).
+      return {
+        ok: false,
+        code: "not-asking",
+        reason:
+          `task ${taskId} is parked at approval ${suspended.approvalId}, not at D-044's model ask, and a model switch is ` +
+          "the answer to the ask rather than to a prompt (PROVIDERS_AND_TOOLS.md §3.6 stage 2); answer the approval at " +
+          "`POST /api/v1/approvals/{id}/decision` instead",
       };
     }
     parked.delete(taskId);
@@ -290,6 +361,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     outstanding: () => running.size,
     inFlight: (taskId) => running.has(taskId),
     parkedFor: (taskId) => parked.get(taskId),
+    askingFor: (taskId) => asking.get(taskId),
     async shutdown(budgetMs) {
       draining = true;
       const started = [...running.keys()];
@@ -310,7 +382,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       return {
         drained: started.length - abandoned.length,
         abandoned,
-        parked: [...parked.keys()],
+        parked: [...new Set([...parked.keys(), ...asking.keys()])],
       };
     },
   };

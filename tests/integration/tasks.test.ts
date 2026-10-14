@@ -837,4 +837,277 @@ describe("a per-task model pin resolves against every composed provider (D-110, 
       await h.close();
     }
   });
+
+  it("asks which model to use when the ladder spends its budget, and resumes on the one the user named (D-044)", async () => {
+    // A budget of two rather than the schema's floor of five, because the floor lives in `config.json`'s schema (D-043)
+    // and this harness hands the loop its limits directly the way `loopLimitsOf` does — one 1 s backoff here instead of the
+    // 31 s a five-rung walk costs, with the same behaviour under test either way.
+    const h = await boot({
+      rounds: [[{ kind: "fail", class: "overloaded" }]],
+      limits: { providerAttempts: 2 },
+      secondRounds: [[{ kind: "text", text: "the second provider answered after the ask" }]],
+    });
+    try {
+      const created = await h.cli.createTask(
+        { objective: "keep going even though the model is overloaded" },
+        "idem-ask-1",
+      );
+      const record = created.body as TaskRecord;
+
+      const asked = await untilState(h, record.id, "awaiting_approval");
+      assert.equal(
+        asked.model,
+        undefined,
+        "nothing was pinned, so there is no pin on the record yet — the ask has not been answered",
+      );
+      const pending = (await h.cli.approvals({ state: "pending" })).body as { items: unknown[] };
+      assert.equal(
+        pending.items.length,
+        0,
+        "D-086's shape: the state says a human must act and the approval queue holds nothing, because what is being asked " +
+          "is a model and there is nothing to approve",
+      );
+
+      const ask = readEvents(h.db, record.id).find(
+        (event) => event.type === "provider.switch.proposed",
+      )?.payload as
+        | {
+            attempts: number;
+            limit: number;
+            code: string;
+            current: string;
+            next: string;
+            candidates: readonly {
+              model: string;
+              provider: string;
+              cost: string;
+              losses: readonly string[];
+            }[];
+          }
+        | undefined;
+      assert.ok(ask !== undefined, "the ask is an event, not a state a client has to infer");
+      assert.equal(ask.attempts, 2, "the budget is spent and the count says so");
+      assert.equal(ask.limit, 2);
+      assert.equal(
+        ask.code,
+        "provider.overloaded",
+        "the class is named, so the user knows what to switch away from",
+      );
+      assert.equal(ask.current, `fake/${FAKE_TOOL_MODEL_ID}`, "the pair that ran is named");
+      assert.deepEqual(
+        ask.candidates.map((candidate) => candidate.model),
+        [
+          // §3.6 stage 2's order: the current provider's other models first, then the rest of the pool. The user whose
+          // local model is overloaded should see the local alternative before a provider it has never called.
+          `fake/${FAKE_MODEL_ID}`,
+          "local/qwen2.5:3b",
+          `second/${FAKE_MODEL_ID}`,
+          `second/${FAKE_TOOL_MODEL_ID}`,
+        ],
+        "every other composed model is offered, and the one the run is on is not offered as an alternative to itself — " +
+          "answering with no pin is what that means",
+      );
+      const second = ask.candidates.find(
+        (candidate) => candidate.model === `second/${FAKE_TOOL_MODEL_ID}`,
+      );
+      assert.ok(second !== undefined, "the provider that can actually answer is among them");
+      assert.equal(second.provider, "second");
+      assert.match(second.cost, /local|free/, "§3.6 stage 2 asks each option for its cost class");
+      assert.match(
+        String(ask.next),
+        new RegExp(`/tasks/${record.id}/resume`),
+        "the prompt names the act that answers it",
+      );
+      const transition = readEvents(h.db, record.id).find(
+        (event) =>
+          event.type === "task.state.changed" &&
+          (event.payload as { to?: string }).to === "awaiting_approval",
+      )?.payload as { ladder?: { attempts?: number } } | undefined;
+      assert.equal(
+        transition?.ladder?.attempts,
+        2,
+        "the transition frame carries the ladder too, so a client filtering `provider.switch.*` still learns why it stopped",
+      );
+
+      await assert.rejects(
+        h.cli.resumeTask(record.id, { model: "groq/llama-3.3-70b" }),
+        (error: unknown) => {
+          assert.ok(error instanceof GatewayFailure, "the route answers with an error envelope");
+          assert.equal(error.status, 400, "a model nothing composed is a validation failure");
+          assert.equal(error.envelope.error.code, "invalid_model_pin");
+          return true;
+        },
+      );
+      assert.equal(
+        (await h.cli.getTask(record.id)).body === undefined
+          ? ""
+          : ((await h.cli.getTask(record.id)).body as TaskRecord).state,
+        "awaiting_approval",
+        "a refused answer moves nothing: the ask is still open and the run is still parked",
+      );
+
+      const resumed = await h.cli.resumeTask(record.id, { model: `second/${FAKE_TOOL_MODEL_ID}` });
+      assert.equal(
+        resumed.status,
+        200,
+        "§3.6 stage 3: the answer resumes from where the run had reached",
+      );
+      const final = await untilTerminal(h, record.id);
+      assert.equal(final.state, "completed");
+      assert.equal(
+        final.model,
+        `second/${FAKE_TOOL_MODEL_ID}`,
+        "the record shows what the task is using now",
+      );
+      assert.deepEqual(
+        {
+          from: final.modelSwitch?.from,
+          to: final.modelSwitch?.to,
+          stage: final.modelSwitch?.stage,
+          reAttempted: final.modelSwitch?.reAttempted,
+          attempts: final.modelSwitch?.attempts,
+          by: final.modelSwitch?.by,
+          via: final.modelSwitch?.via,
+        },
+        {
+          from: `fake/${FAKE_TOOL_MODEL_ID}`,
+          to: `second/${FAKE_TOOL_MODEL_ID}`,
+          stage: 2,
+          reAttempted: false,
+          attempts: 2,
+          by: created.status === 201 ? final.modelSwitch?.by : undefined,
+          via: "cli",
+        },
+        "§3.6 stage 3: the record shows the switch — original model, chosen model, the stage that reached it, and that " +
+          "no step was re-attempted",
+      );
+      assert.equal(
+        final.modelSwitch?.by === undefined,
+        false,
+        "§14's audit: who answered is on the record, and the answering identity is not the creating one only by accident",
+      );
+      const spoken = readEvents(h.db, record.id)
+        .filter((event) => event.type === "message.added")
+        .map((event) => String((event.payload as { content?: string }).content ?? ""))
+        .join("\n");
+      assert.match(
+        spoken,
+        /the second provider answered after the ask/,
+        "the run continued on the model the answer named, which is the whole of D-044",
+      );
+      assert.equal(
+        readEvents(h.db, record.id).some((event) => event.type === "provider.switch.accepted"),
+        true,
+        "selecting an alternative counts as the user's approval for that switch, so the log carries it too",
+      );
+
+      await assert.rejects(h.cli.resumeTask(record.id), (error: unknown) => {
+        assert.ok(error instanceof GatewayFailure);
+        assert.equal(error.status, 409, "a settled task is terminal and absorbing (§4.1)");
+        assert.equal(error.envelope.error.code, "not_resumable");
+        assert.match(error.envelope.error.message, /terminal and absorbing/);
+        return true;
+      });
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("answers an ask with no pin by retrying the same model, and records no switch", async () => {
+    const h = await boot({
+      // Two failing rounds for the budget and a third that answers: the fake advances one round per call, so the ladder
+      // climbs both failures before the resumed call reaches the completion.
+      rounds: [
+        [{ kind: "fail", class: "overloaded" }],
+        [{ kind: "fail", class: "overloaded" }],
+        [{ kind: "text", text: "the same model answered the second time" }],
+      ],
+      limits: { providerAttempts: 2 },
+    });
+    try {
+      const created = await h.cli.createTask(
+        { objective: "try again on the same model" },
+        "idem-ask-2",
+      );
+      const record = created.body as TaskRecord;
+      await untilState(h, record.id, "awaiting_approval");
+
+      const resumed = await h.cli.resumeTask(record.id);
+      assert.equal(resumed.status, 200, "an empty body is an answer, not a missing one");
+      const final = await untilTerminal(h, record.id);
+      assert.equal(final.state, "completed");
+      assert.equal(final.model, undefined, "no pin, so no pin is written");
+      assert.equal(
+        final.modelSwitch,
+        undefined,
+        "and an empty switch is not a switch to the same model",
+      );
+      assert.equal(
+        readEvents(h.db, record.id).some((event) => event.type === "provider.switch.accepted"),
+        false,
+        "nothing was switched, so no switch was accepted",
+      );
+      const spoken = readEvents(h.db, record.id)
+        .filter((event) => event.type === "message.added")
+        .map((event) => String((event.payload as { content?: string }).content ?? ""))
+        .join("\n");
+      assert.match(spoken, /the same model answered the second time/);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("refuses to resume a task that is waiting on an approval, and names the route that answers it", async () => {
+    // `file.delete` inside the workspace is T3, so the run stops with a pending row — the same state D-044's ask parks in,
+    // which is exactly the ambiguity this route has to refuse rather than guess at.
+    const workspace = mkdtempSync(path.join(tmpdir(), "crabby-work-"));
+    const h = await boot({
+      workspace,
+      rounds: [
+        [
+          {
+            kind: "tool-call",
+            name: "file.delete",
+            arguments: { path: path.join(workspace, "build") },
+          },
+        ],
+      ],
+    });
+    try {
+      const created = await h.cli.createTask({ objective: "delete build/" }, "idem-ask-3");
+      const record = created.body as TaskRecord;
+      const parked = await untilState(h, record.id, "awaiting_approval");
+      const pending = (await h.cli.approvals({ state: "pending" })).body as {
+        items: { id: string }[];
+      };
+      assert.equal(pending.items.length, 1, "one action, one prompt");
+
+      await assert.rejects(
+        h.cli.resumeTask(record.id, { model: `fake/${FAKE_TOOL_MODEL_ID}` }),
+        (error: unknown) => {
+          assert.ok(error instanceof GatewayFailure);
+          assert.equal(error.status, 409);
+          assert.equal(
+            error.envelope.error.code,
+            "approval_pending",
+            "the row is how a client tells a prompt from an ask, and the refusal says which route answers this one",
+          );
+          assert.match(
+            error.envelope.error.message,
+            new RegExp(`/approvals/${pending.items[0]?.id}/decision`),
+          );
+          return true;
+        },
+      );
+      assert.equal(
+        (await h.cli.getTask(record.id)).body === undefined
+          ? ""
+          : ((await h.cli.getTask(record.id)).body as TaskRecord).state,
+        parked.state,
+        "and the prompt is still open — a refused answer is not a denial",
+      );
+    } finally {
+      await h.close();
+    }
+  });
 });

@@ -19,6 +19,7 @@ import {
 } from "./loop.ts";
 import {
   createHarness,
+  createScriptedProvider,
   guardApprovals,
   type Harness,
   type HarnessTool,
@@ -28,6 +29,16 @@ import {
 const PATH_ARGS = { type: "object", properties: { path: { type: "string" } } } as const;
 const BUILD = `${WORKSPACE}/build`;
 const T2_TTL = 10 * 60_000; // D-064's T2 window, restated as the number a test moves the clock by.
+
+/** §3.6 stage 2's labelled option, as the composition root would hand it over: the pair spelled the way an answer takes
+ *  it, the cost class, the window, and the capabilities this candidate would *lose* against the model the run is on. */
+const SECOND_CANDIDATE = {
+  model: "second/fake-tools",
+  provider: "second",
+  cost: "free-tier",
+  contextWindow: 8_192,
+  losses: ["no tool calling", "a smaller context window (8,192 of 128,000)"],
+} as const;
 const T3_TTL = 5 * 60_000; // D-064's T3 window.
 
 function fileTools(): HarnessTool[] {
@@ -782,7 +793,7 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
     assert.equal(shorter.eventsOfType("provider.retry.scheduled")[0]?.payload.source, "schedule");
   });
 
-  it("spends exactly the configured budget, and D-043's floor is a schema minimum rather than a comment", async () => {
+  it("spends exactly the configured budget, then asks instead of failing — and D-043's floor is a schema minimum", async () => {
     const harness = createHarness({
       rounds: [[{ kind: "fail", class: "overloaded" }]],
       tools: fileTools(),
@@ -791,20 +802,57 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
     });
     const outcome = await harness.start();
 
-    assert.equal(outcome.kind, "failed");
-    const payload = harness.payloadOf("task.failed");
-    assert.equal(payload?.attempts, 5, "five attempts and no sixth: the budget is the caller's");
+    // D-044's second rung, and the whole of it: a spent budget on a retryable class asks. §4.1 makes `failed` absorbing,
+    // so failing first would be a task nothing could ever answer (F-50).
+    assert.equal(outcome.kind, "awaiting-model");
+    assert.equal(harness.task()?.state, "awaiting_approval");
+    assert.equal(
+      harness.pending().length,
+      0,
+      "D-086's shape: the state says a human must act and the queue holds nothing to approve — there is no prompt to " +
+        "deny, because what is being asked is a model",
+    );
+    assert.equal(
+      harness.payloadOf("task.failed"),
+      undefined,
+      "no terminal event, so nothing anywhere claims the task ended",
+    );
     assert.deepEqual(
       harness.waits,
       [1_000, 2_000, 4_000, 8_000],
-      "four waits between five attempts",
+      "four waits between five attempts, and the fifth failure asks rather than waits again",
+    );
+    const ask = harness.payloadOf("provider.switch.proposed");
+    assert.equal(ask?.attempts, 5, "five attempts and no sixth: the budget is the caller's");
+    assert.equal(ask?.limit, 5);
+    assert.equal(ask?.code, "provider.overloaded");
+    assert.match(
+      String(ask?.reason),
+      /overloaded|overload/i,
+      "the provider's own words are carried, because the prompt has to tell the user what the model did",
+    );
+    assert.equal(
+      ask?.current,
+      `${harness.provider.id}/fake-tools`,
+      'the ask names the pair that ran, not the word "default"',
+    );
+    assert.deepEqual(
+      ask?.candidates,
+      [],
+      "this harness composed no pool, so the honest answer is an ask with no options — the single-model install's case",
     );
     assert.match(
-      String(payload?.ladder),
-      /D-044/,
-      "the event names the rung that is not built — ask the user which model to use instead — so a reader knows the ladder " +
-        "ended rather than broke",
+      String(ask?.next),
+      /POST \/api\/v1\/tasks\/tsk_harness\/resume/,
+      "§3.6 stage 2's prompt names the act that answers it, because a client that does not know the route cannot help",
     );
+    // The transition frame carries the same facts, so a client that filters `provider.switch.*` away still learns why the
+    // task stopped — §5.2's retrievable-by-polling rule, for the half polling cannot carry.
+    const move = harness.eventsOfType("task.state.changed").at(-1)?.payload;
+    assert.equal(move?.to, "awaiting_approval");
+    assert.equal((move?.ladder as { attempts?: number } | undefined)?.attempts, 5);
+    assert.equal(move?.current, ask?.current);
+
     assert.equal(LOOP_LIMITS.providerAttempts, LIMITS_DEFAULTS.providerAttempts);
     assert.equal(
       LOOP_LIMITS.providerAttempts,
@@ -818,6 +866,210 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
         "no further — a knob that could turn the ladder off would be a knob against the decision",
     );
     assert.equal(validate(LimitsConfig, { providerAttempts: 5 }).ok, true);
+  });
+
+  it("fails without asking when the class is not retryable, because another model has no better answer", async () => {
+    const harness = createHarness({
+      rounds: [[{ kind: "fail", class: "auth" }]],
+      tools: fileTools(),
+      limits: { providerAttempts: 5 },
+    });
+    const outcome = await harness.start();
+
+    assert.equal(outcome.kind, "failed");
+    assert.equal(
+      harness.payloadOf("task.failed")?.attempts,
+      1,
+      "§9.2: an invalid request is not retried at all",
+    );
+    assert.equal(
+      harness.payloadOf("provider.switch.proposed"),
+      undefined,
+      "no ask: a rejected key is rejected for every model, and offering a switch would be a question with no yes in it",
+    );
+    assert.match(String(harness.payloadOf("task.failed")?.ladder), /not retryable/);
+  });
+
+  it("records the switch and continues from the boundary, without re-running a committed step", async () => {
+    const harness = createHarness({
+      // A step that commits, then a ladder that runs out: the resume has to carry the read's result forward, which is
+      // what "continues from the boundary" means and what a restart would have to rebuild from the checkpoint. The fake
+      // replays its last round for every further call, so the second round fails as many times as the ladder needs.
+      rounds: [
+        [{ kind: "tool-call", name: "file.read", arguments: { path: "notes.md" } }],
+        [{ kind: "fail", class: "rate-limit" }],
+      ],
+      tools: fileTools(),
+      limits: { providerAttempts: 2 },
+      random: () => 0.5,
+      askCandidates: async () => [SECOND_CANDIDATE],
+    });
+    const outcome = await harness.start();
+    assert.equal(outcome.kind, "awaiting-model");
+    if (outcome.kind !== "awaiting-model") return;
+    assert.deepEqual(harness.payloadOf("provider.switch.proposed")?.candidates, [SECOND_CANDIDATE]);
+    assert.equal(
+      harness.checkpointWrites.length,
+      1,
+      "the committed step wrote its boundary before the ladder ran out, and the ask wrote none — an ask is not a step",
+    );
+    const stepsBefore = harness.executions.length;
+    assert.equal(stepsBefore, 1);
+
+    const second = createScriptedProvider(
+      [[{ kind: "text", text: "the notes are tidy; nothing else was in the way" }]],
+      { id: "second" },
+    );
+    const answered = await harness.answerModel(outcome.run, {
+      pair: { provider: "second", modelId: "fake-tools" },
+      provider: second,
+      byClientId: "cli_local",
+      via: "telegram",
+    });
+
+    assert.equal(answered.kind, "completed");
+    assert.equal(harness.task()?.state, "completed");
+    assert.equal(
+      harness.executions.length,
+      stepsBefore,
+      "the read did not run again: D-044 resumes at the boundary between completed and pending work (§3.9's first rule)",
+    );
+    assert.equal(
+      JSON.stringify(second.calls[0]?.messages ?? []).includes("notes.md, as read"),
+      true,
+      "the second model was handed the context the first one had reached, which is the continuation",
+    );
+    assert.equal(
+      second.calls[0]?.modelId,
+      "fake-tools",
+      "and it ran on the model the answer named",
+    );
+    assert.equal(
+      harness.task()?.model,
+      "second/fake-tools",
+      "the record names what the task is using now",
+    );
+    assert.deepEqual(harness.task()?.modelSwitch, {
+      from: `${harness.provider.id}/fake-tools`,
+      to: "second/fake-tools",
+      reason: String(harness.payloadOf("provider.switch.proposed")?.reason),
+      stage: 2,
+      reAttempted: false,
+      attempts: 2,
+      at: new Date(harness.clock.now()).toISOString(),
+      by: "cli_local",
+      via: "telegram",
+    });
+    const accepted = harness.payloadOf("provider.switch.accepted");
+    assert.equal(
+      (accepted?.model as { to?: string } | undefined)?.to,
+      "second/fake-tools",
+      "§3.6 stage 2: selecting an alternative counts as the user's approval for that switch, so the log carries it too",
+    );
+  });
+
+  it("resumes on the same model without inventing a switch", async () => {
+    const harness = createHarness({
+      // Two failing rounds for the budget, then the completion — so the resumed call is the first one that succeeds, and
+      // "the same model again" is a claim the fake's own call log can be asked about.
+      rounds: [
+        [{ kind: "fail", class: "overloaded" }],
+        [{ kind: "fail", class: "overloaded" }],
+        doneRound,
+      ],
+      tools: fileTools(),
+      limits: { providerAttempts: 2 },
+      random: () => 0.5,
+      askCandidates: async () => [SECOND_CANDIDATE],
+    });
+    const outcome = await harness.start();
+    assert.equal(outcome.kind, "awaiting-model");
+    if (outcome.kind !== "awaiting-model") return;
+
+    const answered = await harness.answerModel(outcome.run, {
+      byClientId: "cli_local",
+      via: "cli",
+    });
+
+    assert.equal(answered.kind, "completed");
+    assert.equal(harness.task()?.model, undefined, "no switch means no pin on the record either");
+    assert.equal(
+      harness.task()?.modelSwitch,
+      undefined,
+      "an empty switch is not a switch to the same model",
+    );
+    assert.equal(harness.payloadOf("provider.switch.accepted"), undefined);
+    const resumed = harness.eventsOfType("task.state.changed").at(-1)?.payload.resumed as
+      | { switched?: boolean; from?: string }
+      | undefined;
+    assert.deepEqual(
+      { switched: resumed?.switched, from: resumed?.from },
+      { switched: false, from: `${harness.provider.id}/fake-tools` },
+      "the answer is still an answer, and a reader asking what happened needs it to be distinguishable from continuing",
+    );
+    assert.deepEqual(
+      harness.waits,
+      [1_000],
+      "a fresh stage gets a fresh budget: the ladder climbed twice and the resumed round climbs again",
+    );
+  });
+
+  it("refuses an answer the ask did not ask for", async () => {
+    const harness = createHarness({
+      rounds: [[{ kind: "fail", class: "overloaded" }]],
+      tools: fileTools(),
+      limits: { providerAttempts: 2 },
+      random: () => 0.5,
+      askCandidates: async () => [SECOND_CANDIDATE],
+    });
+    const outcome = await harness.start();
+    assert.equal(outcome.kind, "awaiting-model");
+    if (outcome.kind !== "awaiting-model") return;
+    const untouched = harness.task();
+
+    const third = createScriptedProvider([[{ kind: "text", text: "never reached" }]], {
+      id: "third",
+    });
+    const unoffered = await harness.answerModel(outcome.run, {
+      pair: { provider: "third", modelId: "fake-tools" },
+      provider: third,
+    });
+    assert.equal(unoffered.kind, "refused");
+    if (unoffered.kind === "refused") assert.equal(unoffered.code, "model.not_offered");
+
+    const unpaired = await harness.answerModel(outcome.run, {
+      pair: { provider: SECOND_CANDIDATE.provider, modelId: "fake-tools" },
+    });
+    assert.equal(unpaired.kind, "refused");
+    if (unpaired.kind === "refused") {
+      assert.equal(
+        unpaired.code,
+        "model.no_provider",
+        "a pair with no provider would call the old model under a new name",
+      );
+    }
+
+    assert.equal(harness.task()?.state, "awaiting_approval", "refusals move nothing");
+    assert.deepEqual(harness.task(), untouched);
+    assert.equal(third.calls.length, 0, "and the model nobody was offered was never called");
+
+    // The refusal that matters most: the task is terminal, so the ask is moot even though the park is still in memory.
+    await harness.cancel({ mode: "immediate", byClientId: "cli_local", via: "cli" });
+    assert.equal(harness.task()?.state, "cancelled");
+    const afterCancel = await harness.answerModel(outcome.run, {
+      pair: { provider: "second", modelId: "fake-tools" },
+      provider: createScriptedProvider([[{ kind: "text", text: "never reached" }]], {
+        id: "second",
+      }),
+    });
+    assert.equal(afterCancel.kind, "refused");
+    if (afterCancel.kind === "refused") {
+      assert.equal(
+        afterCancel.code,
+        "task.terminal",
+        "§4.1: a settled task absorbs, and an answer is not an exception",
+      );
+    }
   });
 
   it("stops climbing when a cancellation arrives during the backoff, and ends cancelled rather than failed", async () => {

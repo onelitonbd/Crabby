@@ -296,6 +296,24 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // §3.6's stage 3 says the task record must *show* the switch, so the switch is a column beside `model` rather than
+    // something a reader has to dig out of the event log. One nullable JSON column, because the fact is a single object
+    // that is written once (by the answer that caused it) and read whole, and because a pair of scalar columns would be
+    // five nullable columns for one indivisible claim: either the switch happened with its reason, or it did not happen.
+    //
+    // Nullable with no default, which is the downgrade stance: a v7 database opens with `model_switch` absent on every
+    // row, and `absent` is the meaning `GET /tasks/{id}` already had for a task that never switched. An older build
+    // reading a v8 database ignores an extra column, so downgrading needs no table rebuild — it only loses the record of
+    // switches made after the downgrade, which is the same thing the event log still carries.
+    version: 8,
+    name: "task-model-switch",
+    up(db) {
+      db.exec(`
+        ALTER TABLE task ADD COLUMN model_switch_json TEXT;
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

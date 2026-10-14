@@ -63,9 +63,10 @@ function run(overrides: Partial<JobRunRecord> = {}): JobRunRecord {
 test("schema version 5 is the job tables, and the migration is the one that created them", () => {
   const { db, close } = fileDb();
   try {
-    // Six and not five, because §2.1's conversation record (D-104) landed after this table did. The assertion that
-    // matters here is unchanged: the job tables are version 5's work and no later migration touched them.
-    assert.equal(schemaVersion(db), 7);
+    // Eight and not five, because §2.1's conversation record (D-104) and the task's model pin and switch landed after
+    // this table did. The assertion that matters here is unchanged: the job tables are version 5's work and no later
+    // migration touched them.
+    assert.equal(schemaVersion(db), 8);
     assert.equal(
       MIGRATIONS.find((entry) => entry.version === 5)?.name,
       "jobs",

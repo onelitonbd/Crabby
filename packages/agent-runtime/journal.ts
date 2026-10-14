@@ -21,6 +21,7 @@ import type {
   Event,
   EventType,
   TaskCancellation,
+  TaskModelSwitch,
   TaskRecord,
   TaskState,
 } from "@crabby/api-contracts";
@@ -36,16 +37,19 @@ export interface JournalEventInput {
 
 export interface TaskJournal {
   readonly task: (taskId: string) => TaskRecord | undefined;
-  /** Writes the state the caller has already checked against `transition()`, plus the two things a record carries that an
-   *  event cannot: the failure a client reads on `GET /tasks/{id}`, and §6.2's cancellation evidence (F-46). Omitting
-   *  `error` clears whatever a previous state left, because that is what the columns do; omitting `cancellation` leaves
-   *  what is there alone, because only the settle has an opinion about it. */
+  /** Writes the state the caller has already checked against `transition()`, plus the things a record carries that an
+   *  event cannot: the failure a client reads on `GET /tasks/{id}`, §6.2's cancellation evidence (F-46), and §3.6's
+   *  switch. Omitting `error` clears whatever a previous state left, because that is what the columns do; omitting
+   *  `cancellation`, `model` and `modelSwitch` leaves what is there alone, because each of those has exactly one writer
+   *  — the settle, and the answer that switched — and no other state move has an opinion about them. */
   readonly setState: (
     taskId: string,
     state: TaskState,
     record?: {
       error?: { code: string; message: string };
       cancellation?: TaskCancellation;
+      model?: string;
+      modelSwitch?: TaskModelSwitch;
     },
   ) => void;
   /** Every task in one of these states, or every task when no states are given. Recovery's scan is the only caller, and
@@ -88,12 +92,16 @@ export class RuntimeError extends Error {
   }
 }
 
-/** What a move may write beside the state: the two record fields a client reads on `GET /tasks/{id}`, and the payload the
+/** What a move may write beside the state: the record fields a client reads on `GET /tasks/{id}`, and the payload the
  *  event carries. Kept as a named type because three modules pass it and a fourth shape would be a fourth opinion. */
 export interface MoveRecord {
   readonly error?: { code: string; message: string };
   /** §6.2's evidence, on the record as well as in the event (F-46). */
   readonly cancellation?: TaskCancellation;
+  /** §3.6's pin after a switch, with the switch beside it in the same statement, so a record can never name one model
+   *  and describe a switch to another. */
+  readonly model?: string;
+  readonly modelSwitch?: TaskModelSwitch;
   readonly payload?: Record<string, unknown>;
 }
 
@@ -182,11 +190,17 @@ export function createPhaseWriter(deps: {
     journal.setState(
       task.id,
       to,
-      record === undefined || (record.error === undefined && record.cancellation === undefined)
+      record === undefined ||
+        (record.error === undefined &&
+          record.cancellation === undefined &&
+          record.model === undefined &&
+          record.modelSwitch === undefined)
         ? undefined
         : {
             ...(record.error === undefined ? {} : { error: record.error }),
             ...(record.cancellation === undefined ? {} : { cancellation: record.cancellation }),
+            ...(record.model === undefined ? {} : { model: record.model }),
+            ...(record.modelSwitch === undefined ? {} : { modelSwitch: record.modelSwitch }),
           },
     );
     emit(result.event, { from: result.from, to: result.to, ...(record?.payload ?? {}) }, at);

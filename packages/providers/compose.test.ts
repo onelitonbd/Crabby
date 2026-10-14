@@ -12,11 +12,13 @@ import { validate } from "@crabby/api-contracts";
 import type { ConfigFile, ProviderEntryConfig } from "@crabby/core";
 import { ConfigFile as ConfigFileSchema } from "@crabby/core";
 import {
+  composeAskCandidates,
   composeProviders,
   deadlinesFrom,
   selectDefaultModel,
   selectPinnedModel,
 } from "./compose.ts";
+import type { ModelDescriptor } from "./descriptor.ts";
 import { FakeProvider } from "./fake.ts";
 
 const LOCAL = "http://127.0.0.1:8080/v1";
@@ -43,6 +45,21 @@ function descriptor(over: Record<string, unknown> = {}): Record<string, unknown>
     contextWindow: 4096,
     maxOutputTokens: 512,
     supports: supports(),
+    cancellation: "best-effort",
+    rateLimits: null,
+    cost: "local",
+    batching: null,
+    ...over,
+  };
+}
+
+/** The same shape, typed for `FakeProvider`'s `descriptors` option — a §3.2 `ModelDescriptor` rather than the JSON an
+ *  `entry` carries, because the fixture parses config itself and this one is handed what it should already believe. */
+function model(over: Partial<ModelDescriptor> = {}): ModelDescriptor {
+  return {
+    contextWindow: 4096,
+    maxOutputTokens: 512,
+    supports: supports() as ModelDescriptor["supports"],
     cancellation: "best-effort",
     rateLimits: null,
     cost: "local",
@@ -355,4 +372,109 @@ test("a per-task pin resolves against every composed provider, and refuses one t
   const unknown = await selectPinnedModel(pool, "local/gpt-4o");
   assert.equal(unknown.ok, false);
   if (!unknown.ok) assert.match(unknown.reason, /team\/model-x/, "names the declared models");
+});
+
+// D-044's second rung, as the pool labels it (§3.6 stage 2): each option carries its provider, what it would cost, and
+// what choosing it loses. The third clause is the one this file exists to check, because a delta needs two models and the
+// pair the run is on is the other half.
+test("an ask's options are labelled against the model the run is on, same provider first", async () => {
+  const rich = model({
+    contextWindow: 128_000,
+    supports: supports({
+      streaming: true,
+      toolCalling: true,
+      imageInput: true,
+    }) as ModelDescriptor["supports"],
+    cost: { promptPerMTok: 0.5, completionPerMTok: 1.5 },
+  });
+  const thin = model({
+    contextWindow: 8_192,
+    supports: supports({ streaming: false }) as ModelDescriptor["supports"],
+  });
+  const local = new FakeProvider({
+    id: "local",
+    models: ["qwen2.5:3b", "qwen2.5:0.5b"],
+    descriptors: { "qwen2.5:3b": rich, "qwen2.5:0.5b": thin },
+  });
+  const hosted = new FakeProvider({
+    id: "hosted",
+    models: ["llama-3.1-8b"],
+    descriptors: {
+      "llama-3.1-8b": model({
+        contextWindow: 8_192,
+        supports: supports({ streaming: false }) as ModelDescriptor["supports"],
+        cost: { promptPerMTok: 0.5, completionPerMTok: 1.5 },
+      }),
+    },
+  });
+
+  const candidates = await composeAskCandidates([hosted, local], {
+    providerId: "local",
+    modelId: "qwen2.5:3b",
+  });
+
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.model),
+    ["local/qwen2.5:0.5b", "hosted/llama-3.1-8b"],
+    "the same provider's other models come first (§3.6 stage 2), and the model the run is on is not offered as an " +
+      "alternative to itself — answering with no pin is what that means",
+  );
+  const localOption = candidates[0];
+  assert.equal(localOption?.provider, "local");
+  assert.equal(
+    localOption?.cost,
+    "local (no per-token cost)",
+    "the cost class is what §3.6 asks the prompt to print",
+  );
+  assert.deepEqual(
+    localOption?.losses,
+    ["no streaming", "no image input", "a smaller context window (8,192 of 128,000)"],
+    "the losses are computed against the current model — every capability it has and this one lacks, then the window",
+  );
+  const hostedOption = candidates[1];
+  assert.equal(
+    hostedOption?.cost,
+    "paid per token",
+    "a hosted model says so before it is chosen, not after",
+  );
+  assert.equal(
+    hostedOption?.losses.includes("no image input"),
+    true,
+    "a capability the current model has and this one does not is a loss, whether or not the task needs it",
+  );
+
+  // The current model's own provider being in the pool is not what orders this: a run on the *second* provider still sees
+  // its own alternatives first, which is what a user means by "somewhere else to try".
+  const flipped = await composeAskCandidates([local, hosted], {
+    providerId: "hosted",
+    modelId: "llama-3.1-8b",
+  });
+  assert.deepEqual(
+    flipped.map((candidate) => candidate.model),
+    ["local/qwen2.5:0.5b", "local/qwen2.5:3b"],
+  );
+  assert.deepEqual(
+    flipped[0]?.losses,
+    [],
+    "against a current model with the same capabilities and the same window there is no loss to state, and printing an " +
+      "invented one would make every option look like a downgrade",
+  );
+});
+
+test("an ask with nothing to offer says so, rather than describing a provider that cannot describe itself", async () => {
+  const broken = new FakeProvider({ id: "broken", models: ["whatever"] });
+  broken.describe = () => {
+    throw new Error("descriptor did not parse");
+  };
+
+  assert.deepEqual(
+    await composeAskCandidates([broken], { providerId: "local", modelId: "qwen2.5:3b" }),
+    [],
+    "§3.2: a descriptor that does not parse disables the provider, so its models are not offered as alternatives",
+  );
+  assert.deepEqual(
+    await composeAskCandidates([], { providerId: "local", modelId: "qwen2.5:3b" }),
+    [],
+    "and a single-model install gets an empty list, which the ask reports as an ask with no options",
+  );
 });

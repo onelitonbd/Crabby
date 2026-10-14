@@ -52,6 +52,12 @@ export interface TransitionEvidence {
   /** §5's rule 5 and §7.2's second bullet: entering `running` out of `awaiting_approval` is the one edge that implies
    *  an answer, so the answer has to be in the record. */
   readonly approvalAnswered?: "approved" | "denied" | "expired";
+  /** D-044's second rung lands in the same state with no approval row behind it, so this edge has a second kind of
+   *  answer and the record has to be able to say which one woke the run. The name is the truth §3.6 stage 2 states
+   *  plainly — selecting an alternative *counts as the user's approval for that switch* — and it is a separate field
+   *  rather than a fourth value of `approvalAnswered`, because no `approval.requested` was ever appended for the model
+   *  ask: a field claiming an approval that does not exist would be a record that lies about its own log. */
+  readonly modelAnswered?: boolean;
   /** §7.2's first bullet: "only work that is both safe and already covered by an existing, still-valid approval may
    *  resume automatically". A recovery that cannot say that must route through `awaiting_approval` instead, which is
    *  why this field is an opt-in rather than a lookup the machine performs for you. */
@@ -153,17 +159,21 @@ export function transition(
     };
   }
   if (to === "running" && from === "awaiting_approval") {
-    if (evidence.approvalAnswered === undefined) {
+    // Two answers can wake a task from here and neither can wake it without being named: the approval's verdict, and
+    // D-044's answer to the ladder's model question. Both are checked below — an `approvalAnswered` that is *not*
+    // "approved" still refuses — so the exemption below cannot become a way past a denial.
+    if (evidence.approvalAnswered === undefined && evidence.modelAnswered !== true) {
       return {
         ok: false,
         from,
         to,
         reason:
-          "`awaiting_approval` → `running` needs the approval's answer in the record: a pending approval is not an " +
-          "approved one (AGENT_RUNTIME.md §7.2, §5's rule 5)",
+          "`awaiting_approval` → `running` needs an answer in the record: a pending approval is not an approved one " +
+          "(AGENT_RUNTIME.md §7.2, §5's rule 5), and a model ask that nobody answered is not an answer either " +
+          "(PROVIDERS_AND_TOOLS.md §3.6 stage 2)",
       };
     }
-    if (evidence.approvalAnswered !== "approved") {
+    if (evidence.approvalAnswered !== undefined && evidence.approvalAnswered !== "approved") {
       return {
         ok: false,
         from,

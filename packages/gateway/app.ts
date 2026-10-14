@@ -78,6 +78,7 @@ import {
   CreateSessionBody,
   CreateTaskBody,
   configETag,
+  ResumeTaskBody,
   type Event,
   errorEnvelope,
   isJobState,
@@ -137,7 +138,12 @@ import {
   TIERS,
   TOOL_REGISTRY,
 } from "@crabby/policy";
-import { type Provider, type ProviderComposition, selectPinnedModel } from "@crabby/providers";
+import {
+  composeAskCandidates,
+  type Provider,
+  type ProviderComposition,
+  selectPinnedModel,
+} from "@crabby/providers";
 import {
   appendEvent,
   authenticate,
@@ -184,6 +190,7 @@ import {
   GatewayError,
   JOB_REFUSAL_CLASS,
   notFound,
+  RESUME_REFUSAL_CLASS,
   SESSION_REFUSAL_CLASS,
   validationError,
 } from "./errors.ts";
@@ -362,6 +369,12 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
           checkpoints,
           modelId: deps.drive.modelId,
           ctx: deps.drive.ctx,
+          // D-044's stage 2, as a seam rather than a pool: the Gateway is the only party that knows which providers
+          // composed, and the loop is handed the labels rather than the providers, so D-101 keeps holding — it can name a
+          // candidate in a prompt and cannot call one. Resolved per ask rather than per run, because the pool a task was
+          // started with may have changed by the time its budget runs out, and a prompt listing models that are no longer
+          // configured is a prompt offering an answer that would be refused.
+          askCandidates: (current) => composeAskCandidates(composedPool(deps), current),
           limits: deps.drive.limits,
           log,
         });
@@ -531,7 +544,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   registerPolicyRoutes(app, deps, platform);
   registerConfigRoutes(app, deps);
   registerAuthRoutes(app, deps, bus);
-  registerTaskRoutes(app, deps, bus, checkpoints, cancellation, runner);
+  registerTaskRoutes(app, deps, bus, checkpoints, cancellation, approvals, runner);
   registerJobRoutes(app, deps, jobStore, scheduler);
   registerSessionRoutes(app, deps);
   registerApprovalRoutes(app, deps, bus, approvals, runner);
@@ -598,8 +611,9 @@ function providersRow(
     // being told why its task is sitting in `queued` and where to look (D-098's roots, D-101's default).
     note: runnerComposed
       ? "the adapter is composed into the runner this Gateway drives tasks with, so `POST /api/v1/tasks` is handed a " +
-        "run; what is still absent is a per-task model pin, per-task narrowing and a schedule — F-57's fields, which " +
-        "need schema version 5 — and a way to ask for a resume of an interrupted run (F-47)"
+        "run, and a task's model may be pinned per task (D-108, D-110) — what is still absent is per-task narrowing and " +
+        "a schedule (F-57's remaining fields), and a resume across a restart: `POST /tasks/{id}/resume` answers a " +
+        "ladder ask this process is holding, while an `interrupted` task waits for F-47's cross-process rebuild"
       : "the adapter is ready and a runner exists (M2n), but this Gateway composed none, because that takes an " +
         "executor over a configured workspace root and a selected default model together: a task created over HTTP is " +
         "recorded and stays `queued`, and `GET /api/v1/diagnostics` reports `runs.composed` " +
@@ -608,6 +622,21 @@ function providersRow(
 }
 
 // ------------------------------------------------------------------ the handoff, as one act rather than two copies
+
+/** Every provider this Gateway can resolve a `<provider>/<modelId>` pair against: the entries that composed, with the
+ *  runner's own provider unioned in so a composition root that hands the two on separately cannot refuse its own default.
+ *
+ *  One function because there are now two callers with a security argument to share — a per-task pin on `POST /tasks`
+ *  (D-110) and the options D-044's ask offers — and they must agree exactly. A resume route that resolved its pin
+ *  against a *different* pool than the ask was built from would refuse an answer the prompt had just offered, which is
+ *  the kind of failure that looks like a bug and is actually two pools. */
+function composedPool(deps: GatewayDeps): readonly Provider[] {
+  const composed = (deps.providers ?? []).flatMap((entry) => (entry.ok ? [entry.provider] : []));
+  const drive = deps.drive;
+  if (drive === undefined || composed.some((candidate) => candidate.id === drive.provider.id))
+    return composed;
+  return [...composed, drive.provider];
+}
 
 /** Recording a task and handing it to the runner, in one function because two callers need it to be the *same* act:
  *  `POST /api/v1/tasks` for a task a client asked for, and the scheduler's `fire` for a task a job asked for. §4.5's
@@ -1154,6 +1183,11 @@ function registerTaskRoutes(
   bus: ReturnType<typeof createEventBus>,
   checkpoints: Checkpoints,
   cancellation: Cancellation,
+  /** The process's one arbiter, passed in rather than built here because §6.3's queue and §5's pairing rule are both about
+   *  there being exactly one: the resume route reads it to tell a pending approval from D-044's ask, which parks in the
+   *  same state with no row behind it. A second arbiter over the same rows would answer `pending` for an approval this
+   *  process never opened (D-084). */
+  approvals: Approvals,
   /** The process's one runner, or nothing: absent means a task this route creates is recorded and not driven, which is
    *  reported at startup and is a true statement about the install rather than a gap in the route. */
   runner: Runner | undefined,
@@ -1203,13 +1237,7 @@ function registerTaskRoutes(
       const drive = deps.drive;
       let pin: { readonly provider: Provider; readonly modelId: string } | undefined;
       if (body.model !== undefined && drive !== undefined) {
-        const composed = (deps.providers ?? []).flatMap((entry) =>
-          entry.ok ? [entry.provider] : [],
-        );
-        const pool = composed.some((candidate) => candidate.id === drive.provider.id)
-          ? composed
-          : [...composed, drive.provider];
-        const pinned = await selectPinnedModel(pool, body.model);
+        const pinned = await selectPinnedModel(composedPool(deps), body.model);
         if (!pinned.ok) {
           throw new GatewayError({
             code: "invalid_model_pin",
@@ -1301,6 +1329,132 @@ function registerTaskRoutes(
       // finishes, the terminal state once it has — and the record is where §6.2's evidence lands (D-091). A fresh read is
       // also what the invariant demands: never carry a `TaskRecord` across an `await`.
       return reply.send(getTask(deps.db, request.params.id) ?? result.task);
+    },
+  );
+
+  /** D-044's answer, and the surface §8's matrix row has named since the parity table was written
+   *  (`| Resume task | POST /tasks/{id}/resume | task resume | r in detail | Resume | /resume <id> |`).
+   *
+   *  What it can reach, stated before what it cannot: a ladder ask **this process is holding**. The run's messages live in
+   *  the runner's memory — that is what makes the continuation a continuation rather than a rebuild — and a task whose ask
+   *  was parked by a process that has since ended is `interrupted` (§7.1), which this route refuses with the sentence
+   *  below rather than pretending. The cross-process half is F-47, and it needs a rebuild from D-095's checkpoint that no
+   *  route offers yet.
+   *
+   *  The ordering of the checks is the design, not an accident. The pin is resolved *before* anything moves, because a
+   *  route that accepted an answer and then discovered the model does not exist would have woken a run for nothing. The
+   *  pending-approval check comes before the runner call because a task in `awaiting_approval` with a row is waiting for
+   *  an approval, and this route is not where that is answered — a client that guessed wrong is told which route to use
+   *  rather than being handed a refusal about a park it does not hold.
+   *
+   *  §6.1 names no capability for this act, and none is invented here. The answer is bound the way an approval decision is
+   *  bound — by the token the guard demanded and by the record the runtime holds — which is the same control the decision
+   *  route has (F-52's third question, about capabilities becoming a run's grants, is recorded rather than papered over). */
+  app.post<{ Params: { id: string }; Body: ResumeTaskBody | undefined }>(
+    "/api/v1/tasks/:id/resume",
+    { schema: { body: ResumeTaskBody } },
+    async (request, reply) => {
+      const client = request.crabbyClient;
+      if (client === undefined) throw authError("missing", request.crabbyRequestId);
+      if (!isTaskId(request.params.id) || getTask(deps.db, request.params.id) === undefined) {
+        throw notFound(`task ${request.params.id}`, request.crabbyRequestId);
+      }
+      const task = getTask(deps.db, request.params.id);
+      if (task === undefined) throw notFound(`task ${request.params.id}`, request.crabbyRequestId);
+      if (task.state !== "awaiting_approval") {
+        // One sentence per position, because the fixes are four different commands and a generic "cannot resume" sends a
+        // user looking in the wrong place. `interrupted` gets its own: it is the restart case, and the thing to do about
+        // it is not a resume at all.
+        const where =
+          task.state === "interrupted"
+            ? "§7.1's recovery marked it interrupted, and a task parked by a process that has ended keeps its messages in that process's memory — the cross-process rebuild is docs/CONSISTENCY_REVIEW.md F-47, and nothing here can answer an ask that process was holding"
+            : task.state === "queued"
+              ? "a queued task has not run far enough to spend a ladder budget, and it starts on its own when a runner picks it up"
+              : `it is \`${task.state}\`, which is not a pause waiting on a model: a moving task is not interrupted, and a settled one is terminal and absorbing (AGENT_RUNTIME.md §4.1)`;
+        throw new GatewayError({
+          code: "not_resumable",
+          message: `task ${task.id} cannot be resumed by this route: ${where}`,
+          class: "conflict",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      const pending = approvals.list({ taskId: task.id }).find((row) => row.state === "pending");
+      if (pending !== undefined) {
+        throw new GatewayError({
+          code: "approval_pending",
+          message:
+            `task ${task.id} is waiting on approval ${pending.id}, and an approval is answered at ` +
+            `POST /api/v1/approvals/${pending.id}/decision — D-044's ask parks in the same state with no row behind it, so ` +
+            "the row is how a client tells the two apart",
+          class: "conflict",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      const model = request.body?.model;
+      let pair: { readonly provider: string; readonly modelId: string } | undefined;
+      let provider: Provider | undefined;
+      if (model !== undefined) {
+        const pinned = await selectPinnedModel(composedPool(deps), model);
+        if (!pinned.ok) {
+          throw new GatewayError({
+            code: "invalid_model_pin",
+            message: pinned.reason,
+            class: "validation",
+            retryable: false,
+            ...(request.crabbyRequestId === undefined
+              ? {}
+              : { requestId: request.crabbyRequestId }),
+          });
+        }
+        pair = { provider: pinned.providerId, modelId: pinned.modelId };
+        provider = pinned.provider;
+      }
+      if (runner === undefined) {
+        // The same condition `POST /tasks` answers by recording a task and leaving it `queued` (D-098's roots): there is no
+        // run to wake, so nothing here would move, and refusing says why.
+        throw new GatewayError({
+          code: "no_runner",
+          message:
+            `task ${task.id} is paused, but this Gateway composed no runner, so no run of it exists here to continue; ` +
+            "GET /api/v1/diagnostics reports runs.composed and says what is missing",
+          class: "conflict",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      const result = runner.resume(task.id, {
+        ...(pair === undefined ? {} : { pair }),
+        ...(provider === undefined ? {} : { provider }),
+        byClientId: client.id,
+        via: client.interface,
+      });
+      if (!result.ok) {
+        throw new GatewayError({
+          code: `resume_${result.code}`,
+          message:
+            result.code === "not-parked"
+              ? `task ${task.id} is in \`awaiting_approval\` with no pending approval and no run of it in this process: ` +
+                "it is D-086's refusal pause, which a materially different action or a cancellation resolves, or a run this " +
+                "process does not hold"
+              : result.reason,
+          class: RESUME_REFUSAL_CLASS[result.code],
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      deps.log.info("task resumed", {
+        task: task.id,
+        ...(model === undefined ? {} : { model }),
+        by: client.id,
+        via: client.interface,
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      // Fresh read rather than the outcome's own record: the run has already been launched, so the state this answers with
+      // is the one the answer produced — `running` with the switch recorded — and carrying the runner's stale copy across
+      // this `await` would be the invariant's violation with a `TaskRecord` instead of a `PolicySubject`.
+      return reply.send(getTask(deps.db, task.id) ?? task);
     },
   );
 

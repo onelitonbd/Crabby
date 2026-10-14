@@ -63,9 +63,12 @@ export interface StartInput {
   readonly taskId: string;
   readonly subject: LoopSubject;
   readonly correlationId?: string | undefined;
-  /** §3.6's per-task pin (D-108), already resolved by the caller against the composed provider. Absent means the
-   *  composed default (`RunnerDeps.modelId`), which is what a run with no pin has always used. */
+  /** §3.6's per-task pin (D-108's A, D-110's B), already resolved by the caller to the pair it names. Absent means
+   *  the composed default (`RunnerDeps.modelId` on `RunnerDeps.provider`), which is what a run with no pin has always
+   *  used. D-101's rule is the reason the resolution is the caller's and not this runner's: the provider a run
+   *  calls is chosen where every other task fact is chosen, and the loop is handed the answer. */
   readonly modelId?: string | undefined;
+  readonly provider?: Provider | undefined;
   /** The identity the run belongs to, handed to every tool this run executes (`RunOrigin`). Optional for the reason the
    *  loop's own field is: a harness has no identity to record, and a run started by the scheduler carries the job's
    *  creator rather than the process's. */
@@ -226,6 +229,10 @@ export function createRunner(deps: RunnerDeps): Runner {
       loop.start({
         taskId: input.taskId,
         modelId: input.modelId ?? deps.modelId,
+        // Absent means `RunnerDeps.provider`, the composed default — and present means the provider §3.6's pin named,
+        // resolved by the caller (D-110) exactly where `modelId` was resolved, so the loop holds a default and runs
+        // what it is handed without ever choosing between them (D-101).
+        ...(input.provider === undefined ? {} : { provider: input.provider }),
         subject: input.subject,
         // `grants` twice is not a mistake: `EvalContext.grants` is what escalation reads to decide whether a restricted
         // client may be pushed into an approval it cannot answer (D-060), and `LoopSubject.grants` is what policy

@@ -276,6 +276,11 @@ export interface RunInput {
    *  is that a provider "must not be able to alter the tool set, permission state, or approval outcome of a task", and a
    *  loop that picked its own model would be one step from a provider picking one. */
   readonly modelId: string;
+  /** The provider this run calls, resolved from §3.6's pin by the caller beside `modelId` and never chosen here
+   *  (D-101's rule extended from the model to the pair, D-110). Absent means `LoopDeps.provider`, the composed
+   *  default — the same fallback `modelId` takes from `RunnerDeps`, so a run without a pin is the run before this
+   *  existed. It travels inside `RunInput` so a `SuspendedRun`'s resume keeps calling the provider that started it. */
+  readonly provider?: Provider | undefined;
   readonly subject: LoopSubject;
   readonly ctx: EvalContext;
   readonly signal?: AbortSignal | undefined;
@@ -742,7 +747,7 @@ export function createLoop(deps: LoopDeps): Loop {
   ): Promise<ProviderTurn> {
     const { value } = await withDeadline(
       async (signal) => {
-        const result = await provider.generate(
+        const result = await (state.input.provider ?? provider).generate(
           {
             modelId: state.input.modelId,
             messages: state.messages,

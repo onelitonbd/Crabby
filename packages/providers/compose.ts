@@ -230,17 +230,17 @@ export function selectDefaultModel(
   return { ok: true, providerId, modelId, provider: entry.provider };
 }
 
-/** §3.6's per-task pin (D-108, F-57), resolved against the one provider a runner in this build holds — option A. The
- *  pin is `<provider>/<modelId>`, the same spelling `defaultModel` and `/model` take. It is scoped to the composed
- *  provider because the loop holds one: a pin naming another provider is refused here with §4.3's limitation, and
- *  cross-provider resolution is F-57's deferred option B. Returns the bare `modelId` a run uses, so the caller passes
- *  it exactly where it passes the default. */
+/** §3.6's per-task pin (D-108's A, D-110's B, F-57), resolved against every provider the caller composed. The pin is
+ *  `<provider>/<modelId>`, the same spelling `defaultModel` and `/model` take, and it may name any entry in the pool —
+ *  which is the whole of option B: the caller resolves the pin (D-101's rule, extended from the model to the pair) and
+ *  hands the loop the provider and the modelId it answered with, so nothing here becomes a choice the loop gets to
+ *  make. A pin the pool cannot answer is refused with the pool's own ids beside it, and an ok answer is the same
+ *  `ModelSelection` `selectDefaultModel` gives, so the caller passes `selection.provider` into a run the way it would
+ *  pass a selected default. */
 export async function selectPinnedModel(
-  provider: Provider,
+  pool: readonly Provider[],
   pin: string,
-): Promise<
-  { readonly ok: true; readonly modelId: string } | { readonly ok: false; readonly reason: string }
-> {
+): Promise<ModelSelection> {
   const slash = pin.indexOf("/");
   if (slash <= 0 || slash === pin.length - 1) {
     return {
@@ -250,14 +250,18 @@ export async function selectPinnedModel(
   }
   const providerId = pin.slice(0, slash);
   const modelId = pin.slice(slash + 1);
-  if (providerId !== provider.id) {
-    const declared = (await provider.listModels()).join(", ");
+  const provider = pool.find((candidate) => candidate.id === providerId);
+  if (provider === undefined) {
+    const ids = pool.map((candidate) => candidate.id).join(", ");
     return {
       ok: false,
       reason:
-        `a per-task pin names provider '${providerId}', but this task runs on the composed provider '${provider.id}'; ` +
-        "a pin is scoped to the composed provider in this build (docs/INTERFACES_AND_API.md §4.3, D-108) — pin " +
-        `'${provider.id}/<modelId>' instead (it declares: ${declared})`,
+        `no composed provider answers to '${providerId}'` +
+        (ids === ""
+          ? ", and this Gateway composed no provider at all"
+          : `; the composed ones are: ${ids} — pin one of those as <provider>/<modelId>`) +
+        " (docs/INTERFACES_AND_API.md §4.3); a provider that refused composition says why at startup and in " +
+        "GET /api/v1/status",
     };
   }
   const models = await provider.listModels();
@@ -267,5 +271,5 @@ export async function selectPinnedModel(
       reason: `'${providerId}' has no model '${modelId}'; it declares ${models.join(", ")}`,
     };
   }
-  return { ok: true, modelId };
+  return { ok: true, providerId, modelId, provider };
 }

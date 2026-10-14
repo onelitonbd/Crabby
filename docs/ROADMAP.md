@@ -1187,13 +1187,37 @@ answers 400 `invalid_model_pin` — naming the composed provider, listing what i
 `recordAndDriveTask` writes a row, because the runner does not write state and a refusal at start would leave a `queued`
 row nothing settles. Resolution stays with the caller (D-101): the route validates, `recordAndDriveTask` stores the pin
 and extracts the model half, and `StartInput.modelId` carries it into `loop.start` over `RunnerDeps.modelId`. What is not
-here: cross-provider pinning (option B, deferred under D-108), per-task capability narrowing (still no carrier in the
+here: cross-provider pinning (option B, deferred under D-108 — it has since landed as the thirty-eighth slice, D-110),
+per-task capability narrowing (still no carrier in the
 body, F-57), and `schedule` (D-084's approval a route cannot open). §4.3's row now states the pin as accepted and the
 other two as not-built, so the document and the contract describe the same body — which closes F-57. Gates:
 `compose.test.ts` (the crossing refusal, the first-slash split, the malformed and unknown-model refusals),
 `storage.test.ts` (the version-7 ledger and the round trip, plus the two upgrade fixtures that now drop `model` the way
 they already dropped `cancellation_json`), `tasks.test.ts` 8/8 (a crossing pin refused with no row written, a scoped pin
 stored and driven to `completed`), `typecheck`, `docs:check`; CI is the release proof as before.
+
+**Thirty-eighth slice — the pin resolves against every composed provider (D-110, F-57's option B).** The owner chose to
+start the half D-108 deferred, and D-110 records the mechanism as D-101's rule extended from the model to the pair —
+the caller resolves, the loop does not choose. `selectPinnedModel` now takes the pool — every usable `deps.providers`
+entry, with the runner's own provider unioned in so a composition root that hands the two on separately cannot refuse its
+own default — and answers `ModelSelection`, the same shape `selectDefaultModel` gives, so `POST /tasks` passes
+`selection.provider` into the run exactly where a selected default would ride. The resolution travels as data, one hop
+per layer: `DriveTaskInput.pin` into `StartInput.provider` beside `modelId`, and into `RunInput.provider` beside the
+model, so a `SuspendedRun`'s in-process resume keeps calling the provider that started it — the pair rides inside the
+input the resume already replays. The loop's one provider call runs `state.input.provider ?? deps.provider`: it holds
+the composed default and runs what it is handed, never comparing two providers. A pin naming any composed provider is
+served and its run calls that provider; a pin nothing answers is refused 400 `invalid_model_pin` before a row exists,
+with the composed ids in the sentence and §4.3 cited; a provider that refused composition is absent from the pool and
+says why at startup and in `GET /api/v1/status` rather than being quoted a second time here. D-108's sketch said "the
+loop holding every composed provider"; what shipped keeps the loop's deps untouched and puts the pool where D-101
+already puts resolution — the caller's gate — and D-110 records that reading. What is not here: per-task capability
+narrowing (unchanged, F-57) and `schedule` (D-084's approval a route cannot open). Gates: `compose.test.ts` 15/15 (a
+pin naming a second composed provider resolves to that provider's own instance, a provider the pool does not hold is
+refused listing what it does, the first-slash split and the malformed and unknown-model refusals unchanged),
+`tasks.test.ts` 9/9 (an unanswered pin refused with no row written, a pin on the runner's own provider stored and driven
+to `completed`, a pin naming a second composed provider driving the run on *that* provider's script — proven by its
+text in the events, the default's empty script saying nothing), `loop.test.ts`, `runner.test.ts`, `gateway.test.ts`
+green, `typecheck`, `parity`, `docs:check`; CI is the release proof as before.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

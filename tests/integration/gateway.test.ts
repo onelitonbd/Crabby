@@ -2145,7 +2145,9 @@ describe("a spawned gateway that drives tasks, and §7.1's exit codes for the ve
         "  }, 1_200);",
         "});",
         'server.listen(0, "127.0.0.1", () => {',
-        "  process.stdout.write(`PORT ${server.address().port}\\n`);",
+        // Concatenation rather than a template, so the line is written to the stub file as it reads and the linter has no
+        // `${…}` to mistake for an interpolation this process meant to evaluate.
+        '  process.stdout.write("PORT " + server.address().port + "\\n");',
         "});",
         "",
       ].join("\n"),

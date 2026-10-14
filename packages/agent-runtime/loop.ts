@@ -1496,11 +1496,7 @@ export function createLoop(deps: LoopDeps): Loop {
     // else fails here, deliberately — a class that is not retryable has no better model to offer (an invalid request is
     // invalid for all of them, and §9.2 says never retry one), and a `ProviderError` this build cannot classify is
     // exactly the case D-043's "fail closed" sentence is for.
-    if (
-      providerError !== undefined &&
-      providerError.retryable &&
-      attempts >= limits.providerAttempts
-    ) {
+    if (providerError?.retryable === true && attempts >= limits.providerAttempts) {
       return ask(state, { attempts, code, reason });
     }
     return fail(

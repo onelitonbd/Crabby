@@ -11,7 +11,8 @@ import { test } from "node:test";
 import { validate } from "@crabby/api-contracts";
 import type { ConfigFile, ProviderEntryConfig } from "@crabby/core";
 import { ConfigFile as ConfigFileSchema } from "@crabby/core";
-import { composeProviders, deadlinesFrom, selectDefaultModel } from "./compose.ts";
+import { composeProviders, deadlinesFrom, selectDefaultModel, selectPinnedModel } from "./compose.ts";
+import { FakeProvider } from "./fake.ts";
 
 const LOCAL = "http://127.0.0.1:8080/v1";
 
@@ -281,4 +282,37 @@ test("select: §3.6's default model resolves against what composed, and says so 
       /qwen2\.5:3b/,
       "the refusal names the models the entry does declare",
     );
+});
+
+test("a per-task pin resolves against the composed provider and refuses to cross it (D-108, F-57)", async () => {
+  // `team/model-x` on purpose: only the first slash separates the provider, so a modelId may itself contain one.
+  const provider = new FakeProvider({ id: "local", models: ["qwen2.5:3b", "team/model-x"] });
+
+  const pinned = await selectPinnedModel(provider, "local/qwen2.5:3b");
+  assert.equal(pinned.ok, true);
+  if (pinned.ok) assert.equal(pinned.modelId, "qwen2.5:3b");
+
+  const slashed = await selectPinnedModel(provider, "local/team/model-x");
+  assert.equal(slashed.ok, true, "only the first slash splits, so a modelId with a slash still resolves");
+  if (slashed.ok) assert.equal(slashed.modelId, "team/model-x");
+
+  const cross = await selectPinnedModel(provider, "groq/llama-3.3-70b");
+  assert.equal(cross.ok, false, "a pin may not cross to a provider the runner does not hold (option A)");
+  if (!cross.ok) {
+    assert.match(cross.reason, /scoped to the composed provider/, "option A's limitation is named");
+    assert.match(
+      cross.reason,
+      /INTERFACES_AND_API\.md/,
+      "the refusal cites where the limitation is documented",
+    );
+    assert.match(cross.reason, /qwen2\.5:3b/, "the refusal lists what the composed provider does declare");
+  }
+
+  const malformed = await selectPinnedModel(provider, "qwen2.5:3b");
+  assert.equal(malformed.ok, false);
+  if (!malformed.ok) assert.match(malformed.reason, /<provider>\/<modelId>/);
+
+  const unknown = await selectPinnedModel(provider, "local/gpt-4o");
+  assert.equal(unknown.ok, false);
+  if (!unknown.ok) assert.match(unknown.reason, /team\/model-x/, "names the declared models");
 });

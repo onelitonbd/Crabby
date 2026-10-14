@@ -13,6 +13,8 @@ import { touchSession } from "./sessions.ts";
 export interface CreateTaskInput {
   readonly objective: string;
   readonly sessionId?: string;
+  /** §3.6's per-task pin (D-108), the `<provider>/<modelId>` pair the route validated against the composed provider. */
+  readonly model?: string;
   readonly now?: string;
   readonly id?: string;
 }
@@ -28,13 +30,14 @@ export interface ListTasksOptions {
  *  which answers `GET /api/v1/sessions/{id}` with the tasks in one conversation — cannot form a second opinion about what a
  *  row means. Two decoders drift the first time §6.2 adds a column, and the drift shows up as a record with a field missing
  *  in one route and present in another. */
-export const TASK_SELECT = `SELECT id, session_id, state, objective, created_at, updated_at, last_seq, error_code, error_message, cancellation_json FROM task`;
+export const TASK_SELECT = `SELECT id, session_id, state, objective, model, created_at, updated_at, last_seq, error_code, error_message, cancellation_json FROM task`;
 
 export type TaskRow = {
   id: string;
   session_id: string;
   state: string;
   objective: string;
+  model: string | null;
   created_at: string;
   updated_at: string;
   last_seq: number;
@@ -50,14 +53,15 @@ export function createTask(db: SqliteDb, input: CreateTaskInput): TaskRecord {
     sessionId: input.sessionId ?? newId("ses"),
     state: "queued",
     objective: input.objective,
+    ...(input.model === undefined ? {} : { model: input.model }),
     createdAt: now,
     updatedAt: now,
     lastSeq: 0,
   };
   db.prepare(
-    `INSERT INTO task (id, session_id, state, objective, created_at, updated_at, last_seq)
-     VALUES (@id, @sessionId, @state, @objective, @createdAt, @updatedAt, @lastSeq)`,
-  ).run(record);
+    `INSERT INTO task (id, session_id, state, objective, model, created_at, updated_at, last_seq)
+     VALUES (@id, @sessionId, @state, @objective, @model, @createdAt, @updatedAt, @lastSeq)`,
+  ).run({ ...record, model: input.model ?? null });
   return record;
 }
 
@@ -175,6 +179,7 @@ export function taskRecordFromRow(row: TaskRow): TaskRecord {
     sessionId: row.session_id,
     state: row.state as TaskState,
     objective: row.objective,
+    ...(row.model === null ? {} : { model: row.model }),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastSeq: row.last_seq,

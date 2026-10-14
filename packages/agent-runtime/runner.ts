@@ -63,6 +63,9 @@ export interface StartInput {
   readonly taskId: string;
   readonly subject: LoopSubject;
   readonly correlationId?: string | undefined;
+  /** §3.6's per-task pin (D-108), already resolved by the caller against the composed provider. Absent means the
+   *  composed default (`RunnerDeps.modelId`), which is what a run with no pin has always used. */
+  readonly modelId?: string | undefined;
   /** The identity the run belongs to, handed to every tool this run executes (`RunOrigin`). Optional for the reason the
    *  loop's own field is: a harness has no identity to record, and a run started by the scheduler carries the job's
    *  creator rather than the process's. */
@@ -222,7 +225,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     const run = launch(input.taskId, () =>
       loop.start({
         taskId: input.taskId,
-        modelId: deps.modelId,
+        modelId: input.modelId ?? deps.modelId,
         subject: input.subject,
         // `grants` twice is not a mistake: `EvalContext.grants` is what escalation reads to decide whether a restricted
         // client may be pushed into an approval it cannot answer (D-060), and `LoopSubject.grants` is what policy

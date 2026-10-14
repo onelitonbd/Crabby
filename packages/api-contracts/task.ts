@@ -83,6 +83,9 @@ export const TaskRecord = Type.Object(
     /** §4.3 names this field *objective*. A maximum length is a `limits.*` concern (D-074), not a type
      *  concern, so the contract sets no ceiling here. */
     objective: Type.String({ minLength: 1 }),
+    /** §3.6's per-task pin as stored, the `<provider>/<modelId>` pair; absent means the install's default, a different
+     *  fact from "no model" (D-108, mirroring `SessionRecord.model`). */
+    model: Type.Optional(Type.String()),
     createdAt: Type.String({ format: "date-time" }),
     updatedAt: Type.String({ format: "date-time" }),
     /** The last event sequence number the client may safely assume exists; §5.2's `seq` in record form. */
@@ -105,7 +108,14 @@ export const IDEMPOTENCY_HEADER = "idempotency-key";
 export const REQUEST_ID_HEADER = "x-crabby-request-id";
 
 export const CreateTaskBody = Type.Object(
-  { objective: Type.String({ minLength: 1 }), sessionId: Type.Optional(SessionId) },
+  {
+    objective: Type.String({ minLength: 1 }),
+    sessionId: Type.Optional(SessionId),
+    /** §3.6's per-task pin, in the `<provider>/<modelId>` form `defaultModel` takes. Scoped to the composed provider in
+     *  this build (D-108, F-57): a pin naming another provider is refused at the route with §4.3's limitation, because
+     *  the runner holds one provider and cross-provider resolution is F-57's deferred option B. */
+    model: Type.Optional(Type.String({ minLength: 3 })),
+  },
   { additionalProperties: false },
 );
 export type CreateTaskBody = Static<typeof CreateTaskBody>;

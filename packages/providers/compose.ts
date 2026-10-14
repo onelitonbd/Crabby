@@ -229,3 +229,41 @@ export function selectDefaultModel(
   }
   return { ok: true, providerId, modelId, provider: entry.provider };
 }
+
+/** §3.6's per-task pin (D-108, F-57), resolved against the one provider a runner in this build holds — option A. The
+ *  pin is `<provider>/<modelId>`, the same spelling `defaultModel` and `/model` take. It is scoped to the composed
+ *  provider because the loop holds one: a pin naming another provider is refused here with §4.3's limitation, and
+ *  cross-provider resolution is F-57's deferred option B. Returns the bare `modelId` a run uses, so the caller passes
+ *  it exactly where it passes the default. */
+export async function selectPinnedModel(
+  provider: Provider,
+  pin: string,
+): Promise<{ readonly ok: true; readonly modelId: string } | { readonly ok: false; readonly reason: string }> {
+  const slash = pin.indexOf("/");
+  if (slash <= 0 || slash === pin.length - 1) {
+    return {
+      ok: false,
+      reason: `'${pin}' is not a \`<provider>/<modelId>\` pair, which is the spelling §3.6's per-task pin and \`/model\` take`,
+    };
+  }
+  const providerId = pin.slice(0, slash);
+  const modelId = pin.slice(slash + 1);
+  if (providerId !== provider.id) {
+    const declared = (await provider.listModels()).join(", ");
+    return {
+      ok: false,
+      reason:
+        `a per-task pin names provider '${providerId}', but this task runs on the composed provider '${provider.id}'; ` +
+        "a pin is scoped to the composed provider in this build (docs/INTERFACES_AND_API.md §4.3, D-108) — pin " +
+        `'${provider.id}/<modelId>' instead (it declares: ${declared})`,
+    };
+  }
+  const models = await provider.listModels();
+  if (!models.includes(modelId)) {
+    return {
+      ok: false,
+      reason: `'${providerId}' has no model '${modelId}'; it declares ${models.join(", ")}`,
+    };
+  }
+  return { ok: true, modelId };
+}

@@ -1301,7 +1301,8 @@ is defence in depth, not the control) and must not enter model context.
 
 ### F-57 — §4.3's `POST /tasks` row documents four body fields and the contract accepts two
 
-**Severity: low, open, and the runner's to answer rather than a defect in what exists.** `docs/INTERFACES_AND_API.md`
+**Severity: low, closed by the thirty-ninth slice — the contract gained the pin and §4.3 now marks the other two fields
+not-built, so the row and the route agree.** `docs/INTERFACES_AND_API.md`
 §4.3 spells the body out: "Create a task. Body: objective, optional session, **model pin, capability narrowing,
 schedule**. Idempotency key required." `packages/api-contracts/task.ts` answers `CreateTaskBody = { objective,
 sessionId? }` with `additionalProperties: false`, so a client that sends the documented model pin is refused with a
@@ -1348,6 +1349,18 @@ migration list that produces it. Nothing else here moved. Capability narrowing p
 closing condition for the pin is still the contract gaining the field rather than the row losing it — §3.6 says a user
 "may pin a model per task", and a runner that can only take its model from composition is the half of that sentence this
 build answers.
+
+**Amendment (the thirty-ninth slice): the model pin is built, scoped, and the contract and the route now agree.** D-108
+settled the fork the earlier sentences left open. `CreateTaskBody` and `TaskRecord` gain an optional `model`, schema
+version 7 adds `task.model` (nullable, mirroring `session.model`), and a pin is a `<provider>/<modelId>` pair resolved
+against the one provider the runner holds: `selectPinnedModel` validates it at `POST /tasks` and refuses a pin that names
+another provider *before* a row is written (400 `invalid_model_pin`, citing `docs/INTERFACES_AND_API.md` §4.3, which now
+records the limitation beside the field), and `StartInput.modelId` carries the resolved model half into `loop.start` with
+`RunnerDeps.modelId` as the fallback a pinless task keeps. §4.3's row now states the pin as accepted and names capability
+narrowing and `schedule` as not-built, so the document and the contract describe the same body — which was this finding's
+whole complaint. What remains of F-57 is named rather than closed by omission: cross-provider pinning (the loop holding
+every composed provider so a pin may name any of them) is option B and stays deferred under D-108, and per-task
+capability narrowing still has no carrier in `CreateTaskBody`.
 
 ### F-58 — `POST /approvals/{id}/decision` records the answer and nothing in the process spends it
 

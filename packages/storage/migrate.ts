@@ -282,6 +282,20 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // §3.6's per-task model pin (D-108, F-57's model half). The column mirrors `session.model` (version 6): the same
+    // `<provider>/<modelId>` spelling, nullable for the same reason — absent means the install's default, a different
+    // fact from "no model". One column rather than a split pair because no query filters on the provider half and a pin
+    // is one value a reader parses, not two facts to join. A run resolves it against the composed provider (option A):
+    // the runner holds one provider, so a pin naming another is refused at `POST /tasks` before the row is written.
+    version: 7,
+    name: "task-model-pin",
+    up(db) {
+      db.exec(`
+        ALTER TABLE task ADD COLUMN model TEXT;
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

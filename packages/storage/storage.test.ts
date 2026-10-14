@@ -90,7 +90,7 @@ describe("migrations", () => {
       "task_event",
     ])
       assert.ok(names.includes(wanted), `missing table ${wanted}`);
-    assert.equal(schemaVersion(db), 6);
+    assert.equal(schemaVersion(db), 7);
     // One row per migration, in order, and never an update to an old one: that is what `docs/DATA_AND_MEMORY.md`
     // §2.6's "configuration migrations must be considered when upgrading" means for this file — a v1 database gains a
     // table on the next start rather than being rebuilt, so an upgrade cannot silently drop a pending approval.
@@ -109,6 +109,7 @@ describe("migrations", () => {
         { version: 4, name: "checkpoints" },
         { version: 5, name: "jobs" },
         { version: 6, name: "sessions" },
+        { version: 7, name: "task-model-pin" },
       ],
       "one row per migration and never an update to an old one, so a file can say which version it is on",
     );
@@ -119,7 +120,7 @@ describe("migrations", () => {
     const { db, close } = tempDb();
     const second = migrate(db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 6);
+    assert.equal(second.version, 7);
     close();
   });
 
@@ -153,6 +154,17 @@ describe("tasks", () => {
     const session = newId("ses");
     const task = createTask(db, { objective: "next step", sessionId: session });
     assert.equal(task.sessionId, session);
+    close();
+  });
+
+  it("records a per-task model pin and reads it back; absent means no pin (D-108)", () => {
+    const { db, close } = tempDb();
+    const pinned = createTask(db, { objective: "use the small model", model: "local/qwen2.5:3b" });
+    assert.equal(pinned.model, "local/qwen2.5:3b");
+    assert.equal(getTask(db, pinned.id)?.model, "local/qwen2.5:3b", "the pin survives a read");
+    const plain = createTask(db, { objective: "no pin" });
+    assert.equal(plain.model, undefined, "an absent pin is undefined, not an empty string");
+    assert.equal(getTask(db, plain.id)?.model, undefined);
     close();
   });
 

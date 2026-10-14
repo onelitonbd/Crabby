@@ -140,7 +140,7 @@ show` stays planned for the same reason (C11-03's content is five fields and thr
 
 | Method + path | Purpose |
 | --- | --- |
-| `POST /tasks` | Create a task. Body: objective, optional session, **model pin** (accepted since D-108: a `<provider>/<modelId>` pair scoped to the composed provider, and a pin naming another provider is refused with 400 `invalid_model_pin` naming this section), capability narrowing (**not built** — no field in the body carries it, F-57), schedule (**not built** — it needs the T2 approval only `cron.schedule` can open, D-084). Idempotency key required. |
+| `POST /tasks` | Create a task. Body: objective, optional session, **model pin** (accepted since D-108, and since D-110 it resolves against every composed provider: a `<provider>/<modelId>` pair may name any provider this Gateway composed, and a pin no composed provider answers to is refused with 400 `invalid_model_pin` naming this section and listing the composed ids), capability narrowing (**not built** — no field in the body carries it, F-57), schedule (**not built** — it needs the T2 approval only `cron.schedule` can open, D-084). Idempotency key required. |
 | `GET /tasks?state=&sessionId=&cursor=` | Filtered listing. |
 | `GET /tasks/{id}` | Authoritative current state (the fallback a client uses after a missed event). |
 | `GET /tasks/{id}/steps` | Step-level plan and outcomes. |

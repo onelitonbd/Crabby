@@ -289,15 +289,27 @@ test("select: §3.6's default model resolves against what composed, and says so 
     );
 });
 
-test("a per-task pin resolves against the composed provider and refuses to cross it (D-108, F-57)", async () => {
-  // `team/model-x` on purpose: only the first slash separates the provider, so a modelId may itself contain one.
-  const provider = new FakeProvider({ id: "local", models: ["qwen2.5:3b", "team/model-x"] });
+// Option B (D-110): the pool is every provider the caller composed, so a pin may name any of them — the half D-108
+// deferred, which the owner started on 2026-10-14. `team/model-x` on purpose: only the first slash separates the
+// provider, so a modelId may itself contain one.
+test("a per-task pin resolves against every composed provider, and refuses one that is absent (D-110, F-57)", async () => {
+  const local = new FakeProvider({ id: "local", models: ["qwen2.5:3b", "team/model-x"] });
+  const second = new FakeProvider({ id: "second", models: ["big-chat"] });
+  const pool = [local, second];
 
-  const pinned = await selectPinnedModel(provider, "local/qwen2.5:3b");
-  assert.equal(pinned.ok, true);
-  if (pinned.ok) assert.equal(pinned.modelId, "qwen2.5:3b");
+  const pinned = await selectPinnedModel(pool, "local/qwen2.5:3b");
+  assert.equal(pinned.ok, true, pinned.ok ? "" : pinned.reason);
+  if (pinned.ok) {
+    assert.equal(pinned.providerId, "local");
+    assert.equal(pinned.modelId, "qwen2.5:3b");
+    assert.equal(
+      pinned.provider,
+      local,
+      "the pool's own instance returns, so a run calls what composed",
+    );
+  }
 
-  const slashed = await selectPinnedModel(provider, "local/team/model-x");
+  const slashed = await selectPinnedModel(pool, "local/team/model-x");
   assert.equal(
     slashed.ok,
     true,
@@ -305,31 +317,42 @@ test("a per-task pin resolves against the composed provider and refuses to cross
   );
   if (slashed.ok) assert.equal(slashed.modelId, "team/model-x");
 
-  const cross = await selectPinnedModel(provider, "groq/llama-3.3-70b");
-  assert.equal(
-    cross.ok,
-    false,
-    "a pin may not cross to a provider the runner does not hold (option A)",
-  );
-  if (!cross.ok) {
-    assert.match(cross.reason, /scoped to the composed provider/, "option A's limitation is named");
+  const cross = await selectPinnedModel(pool, "second/big-chat");
+  assert.equal(cross.ok, true, "a pin may name any composed provider — D-108's deferred option B");
+  if (cross.ok) {
+    assert.equal(
+      cross.provider,
+      second,
+      "and the run would call that provider rather than the default's",
+    );
+    assert.equal(cross.modelId, "big-chat");
+  }
+
+  const stranger = await selectPinnedModel(pool, "groq/llama-3.3-70b");
+  assert.equal(stranger.ok, false, "a provider this Gateway did not compose cannot be pinned");
+  if (!stranger.ok) {
     assert.match(
-      cross.reason,
-      /INTERFACES_AND_API\.md/,
-      "the refusal cites where the limitation is documented",
+      stranger.reason,
+      /no composed provider answers to 'groq'/,
+      "the refusal names the id that is absent from this Gateway",
     );
     assert.match(
-      cross.reason,
-      /qwen2\.5:3b/,
-      "the refusal lists what the composed provider does declare",
+      stranger.reason,
+      /local, second/,
+      "it lists what is composed instead of only what is not",
+    );
+    assert.match(
+      stranger.reason,
+      /INTERFACES_AND_API\.md/,
+      "it cites where §4.3 documents the pin",
     );
   }
 
-  const malformed = await selectPinnedModel(provider, "qwen2.5:3b");
+  const malformed = await selectPinnedModel(pool, "qwen2.5:3b");
   assert.equal(malformed.ok, false);
   if (!malformed.ok) assert.match(malformed.reason, /<provider>\/<modelId>/);
 
-  const unknown = await selectPinnedModel(provider, "local/gpt-4o");
+  const unknown = await selectPinnedModel(pool, "local/gpt-4o");
   assert.equal(unknown.ok, false);
   if (!unknown.ok) assert.match(unknown.reason, /team\/model-x/, "names the declared models");
 });

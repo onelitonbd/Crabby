@@ -1362,6 +1362,16 @@ whole complaint. What remains of F-57 is named rather than closed by omission: c
 every composed provider so a pin may name any of them) is option B and stays deferred under D-108, and per-task
 capability narrowing still has no carrier in `CreateTaskBody`.
 
+**Amendment (the fortieth slice): option B has landed, and the pin resolves against every composed provider.** The owner
+chose to start it, and D-110 records the mechanism as D-101 read literally rather than this finding's earlier sketch: the
+composition root holds the pool (`deps.providers`' usable entries, with the runner's own provider unioned in) and the
+caller resolves the pin against it at the same gate that resolved the model, so `DriveTaskInput.pin`,
+`StartInput.provider` and `RunInput.provider` carry the answer down and the loop — which still holds one composed
+default — runs what it is handed without ever choosing. A pin naming any composed provider is served and its run calls
+that provider; a pin no entry answers is refused 400 with the pool's ids before a row exists. What remains of F-57 is
+exactly what the thirty-ninth slice named minus the pin: per-task capability narrowing still has no carrier in
+`CreateTaskBody`.
+
 ### F-58 — `POST /approvals/{id}/decision` records the answer and nothing in the process spends it
 
 **Severity: high, closed by the thirty-first slice one commit after it was opened, and kept here in full because the

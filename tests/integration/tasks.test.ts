@@ -22,7 +22,13 @@ import { createLogger } from "@crabby/core";
 import { buildApp, createClient, type GatewayClient, GatewayFailure } from "@crabby/gateway";
 import { dataLayout, homeDirectory } from "@crabby/platform";
 import { capabilitiesFor } from "@crabby/policy";
-import { composeProviders, FAKE_TOOL_MODEL_ID, type FakeStep } from "@crabby/providers";
+import {
+  composeProviders,
+  FAKE_MODEL_ID,
+  FAKE_TOOL_MODEL_ID,
+  type FakeStep,
+  type ProviderComposition,
+} from "@crabby/providers";
 import {
   migrate,
   mintPairingCode,
@@ -71,6 +77,10 @@ interface BootOptions {
   /** Restart over a data dir that already exists instead of making one. §7.1's recovery is a property of a second
    *  process reading the first one's database, so a test about a kill and a restart has to boot twice over one file. */
   readonly dataDir?: string | undefined;
+  /** A second composed provider (id `second`), scripted like `rounds` — so a pin may name a provider other than the
+   *  drive's, which is D-110's cross-provider half. Absent keeps the composition to `local` plus the drive's fake,
+   *  which is what every other test in this file pins against. */
+  readonly secondRounds?: readonly (readonly FakeStep[])[] | undefined;
 }
 
 async function boot(options: BootOptions): Promise<Harness> {
@@ -111,37 +121,40 @@ async function boot(options: BootOptions): Promise<Harness> {
     // real install hands `buildApp` both. This harness drives with the fake — D-081's conformance reference, not a
     // stub — while reporting one configured local endpoint. Without the pair the row would answer `absent` in a Gateway
     // that is plainly driving tasks, and the note's driven branch would be the one no test reads.
-    providers: composeProviders({
-      local: {
-        baseUrl: "http://127.0.0.1:8080/v1",
-        // A whole descriptor, because §3.2's capability questions are answered from it and the adapter refuses one it
-        // cannot parse: `contextWindow` is required, and an entry that declares no models is refused for the reason
-        // `compose.ts` gives. The shape is the one `tests/integration/gateway.test.ts` composes, so the two harnesses
-        // report the same subsystem from the same kind of configuration.
-        models: {
-          "qwen2.5:3b": {
-            contextWindow: 4096,
-            maxOutputTokens: 512,
-            supports: {
-              streaming: true,
-              toolCalling: true,
-              parallelToolCalls: false,
-              systemRole: true,
-              structuredOutput: false,
-              imageInput: false,
-              audioInput: false,
-              reasoning: false,
-              promptCaching: false,
-              jsonSchemaValidation: false,
+    providers: composeWithSecond(
+      composeProviders({
+        local: {
+          baseUrl: "http://127.0.0.1:8080/v1",
+          // A whole descriptor, because §3.2's capability questions are answered from it and the adapter refuses one it
+          // cannot parse: `contextWindow` is required, and an entry that declares no models is refused for the reason
+          // `compose.ts` gives. The shape is the one `tests/integration/gateway.test.ts` composes, so the two harnesses
+          // report the same subsystem from the same kind of configuration.
+          models: {
+            "qwen2.5:3b": {
+              contextWindow: 4096,
+              maxOutputTokens: 512,
+              supports: {
+                streaming: true,
+                toolCalling: true,
+                parallelToolCalls: false,
+                systemRole: true,
+                structuredOutput: false,
+                imageInput: false,
+                audioInput: false,
+                reasoning: false,
+                promptCaching: false,
+                jsonSchemaValidation: false,
+              },
+              cancellation: "best-effort",
+              rateLimits: null,
+              cost: "local",
+              batching: null,
             },
-            cancellation: "best-effort",
-            rateLimits: null,
-            cost: "local",
-            batching: null,
           },
         },
-      },
-    }),
+      }),
+      options.secondRounds,
+    ),
     log: createLogger({ level: "error", write: () => {} }, "tasks-test"),
     version: "test",
     startedAt: new Date(),
@@ -186,6 +199,26 @@ function pair(
   const redeemed = redeemPairingCode(db, minted.code);
   assert.ok(redeemed.ok && redeemed.token, `the harness's ${iface} identity has to pair`);
   return { token: redeemed.token as string, clientId: redeemed.clientId as string };
+}
+
+/** D-110's cross-provider half in the harness: a test that scripts a second provider composes it here, as a
+ *  configuration entry would become one — because the route only resolves a pin against this list, so a provider that
+ *  is not on it is one no pin may name, test or no test. */
+function composeWithSecond(
+  configured: readonly ProviderComposition[],
+  secondRounds: readonly (readonly FakeStep[])[] | undefined,
+): readonly ProviderComposition[] {
+  if (secondRounds === undefined) return configured;
+  return [
+    ...configured,
+    {
+      id: "second",
+      ok: true,
+      provider: createScriptedProvider(secondRounds, { id: "second" }),
+      modelIds: [FAKE_MODEL_ID, FAKE_TOOL_MODEL_ID],
+      warnings: [],
+    },
+  ];
 }
 
 /** Polling rather than streaming, because a test that waits on a socket for a fact it can also read is a test that can
@@ -711,24 +744,29 @@ describe("the task handoff over http (M2's Exit criterion)", () => {
   });
 });
 
-describe("a per-task model pin is scoped to the composed provider (D-108, F-57)", () => {
-  it("refuses a pin naming another provider before any task row is written, with §4.3's limitation", async () => {
+describe("a per-task model pin resolves against every composed provider (D-110, D-108, F-57)", () => {
+  it("refuses a pin no composed provider answers to, before any task row is written", async () => {
     const h = await boot({ rounds: [] });
     try {
       const ask = () =>
         h.cli.createTask(
-          { objective: "pin to a provider this run does not hold", model: "groq/llama-3.3-70b" },
-          "idem-pin-cross",
+          { objective: "pin to a provider nothing composed", model: "groq/llama-3.3-70b" },
+          "idem-pin-absent",
         );
       await assert.rejects(ask, (error: unknown) => {
         assert.ok(error instanceof GatewayFailure, "the route answers with an error envelope");
-        assert.equal(error.status, 400, "a pin this build cannot serve is a validation failure");
+        assert.equal(error.status, 400, "a pin no runner can serve is a validation failure");
         assert.equal(error.envelope.error.code, "invalid_model_pin");
-        assert.match(error.envelope.error.message, /scoped to the composed provider/);
+        assert.match(error.envelope.error.message, /no composed provider answers to 'groq'/);
+        assert.match(
+          error.envelope.error.message,
+          /local, fake/,
+          "the refusal lists what this Gateway did compose instead of only what it did not",
+        );
         assert.match(
           error.envelope.error.message,
           /INTERFACES_AND_API/,
-          "the refusal cites the section that documents the limitation",
+          "the refusal cites the section that documents the pin",
         );
         return true;
       });
@@ -743,17 +781,18 @@ describe("a per-task model pin is scoped to the composed provider (D-108, F-57)"
     }
   });
 
-  it("accepts a pin on the composed provider, stores it on the record, and the run reaches terminal", async () => {
+  it("accepts a pin on the runner's own provider, stores it on the record, and reaches terminal", async () => {
     const h = await boot({ rounds: [[{ kind: "text", text: "pinned run done" }]] });
     try {
-      // The harness composes a scripted provider whose id is `fake` (the `FakeProvider` default), so the composed
-      // provider a pin has to name is `fake/<model>`; `fake-tools` is one of the two models it declares.
+      // The drive's scripted provider answers to `fake` (the `FakeProvider` default) and the route unions it into the
+      // pool beside the configured `local` entry, so `fake/<model>` pins the runner's own provider; `fake-tools` is
+      // one of the two models it declares.
       const pin = `fake/${FAKE_TOOL_MODEL_ID}`;
       const created = await h.cli.createTask(
         { objective: "run on the pinned model", model: pin },
         "idem-pin-same",
       );
-      assert.equal(created.status, 201, "a pin on the composed provider is served");
+      assert.equal(created.status, 201, "a pin on the runner's own provider is served");
       const record = created.body as TaskRecord;
       assert.equal(record.model, pin, "the pin is stored on the record §4.3 returns");
       const final = await untilTerminal(h, record.id);
@@ -761,6 +800,38 @@ describe("a per-task model pin is scoped to the composed provider (D-108, F-57)"
         final.state,
         "completed",
         "the run reached a terminal state under the pinned model",
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("runs the task on the provider its pin names, not the one the default sits on (D-110)", async () => {
+    // The drive's own script is empty, so a run on it would complete with the fake's empty default text; the second
+    // provider's script says something specific, which is what makes the completion below attributable to the pin
+    // rather than to whichever provider happened to answer.
+    const h = await boot({
+      rounds: [],
+      secondRounds: [[{ kind: "text", text: "the second provider answered" }]],
+    });
+    try {
+      const created = await h.cli.createTask(
+        { objective: "run on the second provider", model: "second/fake-tools" },
+        "idem-pin-second",
+      );
+      assert.equal(created.status, 201, "a pin naming any composed provider is served");
+      const record = created.body as TaskRecord;
+      assert.equal(record.model, "second/fake-tools");
+      const final = await untilTerminal(h, record.id);
+      assert.equal(final.state, "completed");
+      const spoken = readEvents(h.db, record.id)
+        .filter((event) => event.type === "message.added")
+        .map((event) => String((event.payload as { content?: string }).content ?? ""))
+        .join("\n");
+      assert.match(
+        spoken,
+        /the second provider answered/,
+        "the run called the pinned provider's script — the default's empty script would have said nothing",
       );
     } finally {
       await h.close();

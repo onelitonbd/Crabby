@@ -627,9 +627,14 @@ function providersRow(
 export interface DriveTaskInput {
   readonly objective: string;
   readonly sessionId?: string | undefined;
-  /** §3.6's per-task pin (D-108), validated by the route against the composed provider. Stored on the task and used for
-   *  the run instead of the composed default; absent means the default. */
+  /** §3.6's per-task pin (D-108), stored on the task exactly as it was asked, for §4.3's record to return. Absent
+   *  means no pin was asked for. */
   readonly model?: string | undefined;
+  /** The same pin already resolved to the pair it names (D-110): the provider the run calls and the bare modelId. The
+   *  route resolved it against every composed provider before the task row existed, so a caller that passes a pin
+   *  string passes its resolution beside it; a caller that passes only `model` gets that model on the composed
+   *  default, which is all a raw string could mean before `pin` existed. */
+  readonly pin?: { readonly provider: Provider; readonly modelId: string } | undefined;
   readonly origin: {
     readonly clientId: string;
     readonly clientName: string;
@@ -709,11 +714,14 @@ function recordAndDriveTask(
       reason: withheld.reason,
       source: input.source,
     });
-  // §3.6's per-task pin (D-108): the route validated it names the composed provider before the task was created, so the
-  // run uses the pinned model instead of the composed default. Absent pin means the default, which `RunnerDeps.modelId`
-  // holds; the runner reads `StartInput.modelId` and falls back to it.
+  // §3.6's per-task pin (D-108's A, D-110's B): the route resolved it against every composed provider before the task
+  // was created, so the run uses the pair the pin named — the provider and the bare modelId — instead of the composed
+  // default, which is `RunnerDeps.provider` under `RunnerDeps.modelId`. Absent pin means that default, and a caller
+  // that passed a raw `model` without resolving it keeps the model on the composed provider: half a pin is still the
+  // model it spelled.
   const pinnedModelId =
-    input.model === undefined ? undefined : input.model.slice(input.model.indexOf("/") + 1);
+    input.pin?.modelId ??
+    (input.model === undefined ? undefined : input.model.slice(input.model.indexOf("/") + 1));
   const started = runner.start({
     taskId: created.id,
     subject: {
@@ -736,6 +744,7 @@ function recordAndDriveTask(
       sessionId: created.sessionId,
     },
     ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+    ...(input.pin === undefined ? {} : { provider: input.pin.provider }),
     ...(pinnedModelId === undefined ? {} : { modelId: pinnedModelId }),
   });
   if (!started.ok)
@@ -1183,13 +1192,24 @@ function registerTaskRoutes(
       // is `POST /auth/pair`, and this is not it.
       const client = request.crabbyClient;
       if (client === undefined) throw authError("missing", request.crabbyRequestId);
-      // §3.6's per-task pin (D-108, F-57). Validated here, before the task is created, so a pin this build cannot serve is
-      // refused with the reason rather than accepted and left to fail at the first provider call. The runner holds the
-      // one provider composition resolved (option A), so a pin naming another provider is refused with §4.3's
-      // limitation. A Gateway that composed no provider has no runner and no provider to scope against — the task is
-      // recorded and never runs either way, so the pin is stored inert rather than refused against nothing.
-      if (body.model !== undefined && deps.drive !== undefined) {
-        const pinned = await selectPinnedModel(deps.drive.provider, body.model);
+      // §3.6's per-task pin (D-108's A, D-110's B, F-57). Validated here, before the task is created, against every
+      // provider this Gateway composed — the usable `deps.providers` entries, with the runner's own provider unioned in
+      // so a composition root that hands the two on separately cannot refuse its own default. A pin no entry answers is
+      // refused with the reason rather than accepted and left to fail at the first provider call. A Gateway with no
+      // drive has no runner and no provider to resolve against — the task is recorded and never runs either way, so the
+      // pin is stored inert rather than refused against nothing (D-108's rule, unchanged). The resolution travels into
+      // the act as `pin`, because D-101's rule is that the caller resolves and the loop does not: the provider is
+      // chosen here, at the same gate that chose the model.
+      const drive = deps.drive;
+      let pin: { readonly provider: Provider; readonly modelId: string } | undefined;
+      if (body.model !== undefined && drive !== undefined) {
+        const composed = (deps.providers ?? []).flatMap((entry) =>
+          entry.ok ? [entry.provider] : [],
+        );
+        const pool = composed.some((candidate) => candidate.id === drive.provider.id)
+          ? composed
+          : [...composed, drive.provider];
+        const pinned = await selectPinnedModel(pool, body.model);
         if (!pinned.ok) {
           throw new GatewayError({
             code: "invalid_model_pin",
@@ -1198,11 +1218,13 @@ function registerTaskRoutes(
             retryable: false,
           });
         }
+        pin = { provider: pinned.provider, modelId: pinned.modelId };
       }
       const driven = recordAndDriveTask(deps, bus, runner, {
         objective: body.objective,
         ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
         ...(body.model === undefined ? {} : { model: body.model }),
+        ...(pin === undefined ? {} : { pin }),
         // The identity the guard resolved, which is the only party that knows who asked. F-52's third question — how
         // `capability_json` becomes a run's grants — is answered inside the shared act rather than here, so that a task a
         // job fires is built the same way as a task a client asks for (§4.5's "every execution is a fresh policy

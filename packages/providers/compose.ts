@@ -238,7 +238,9 @@ export function selectDefaultModel(
 export async function selectPinnedModel(
   provider: Provider,
   pin: string,
-): Promise<{ readonly ok: true; readonly modelId: string } | { readonly ok: false; readonly reason: string }> {
+): Promise<
+  { readonly ok: true; readonly modelId: string } | { readonly ok: false; readonly reason: string }
+> {
   const slash = pin.indexOf("/");
   if (slash <= 0 || slash === pin.length - 1) {
     return {

@@ -44,7 +44,11 @@ function fileDb(): { db: SqliteDb; close(): void } {
 test("schema version 6 is the session table, and the index is the order the list is read in", () => {
   const { db, close } = fileDb();
   try {
-    assert.equal(schemaVersion(db), 7, "the file advances past 6 (the task model pin) but v6 is still sessions");
+    assert.equal(
+      schemaVersion(db),
+      7,
+      "the file advances past 6 (the task model pin) but v6 is still sessions",
+    );
     assert.equal(MIGRATIONS.find((entry) => entry.version === 6)?.name, "sessions");
     const indexes = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'session%'")

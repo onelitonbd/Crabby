@@ -1252,6 +1252,30 @@ act over HTTP, including that a refused pin moves nothing), `gateway.test.ts` (a
 an `auth` class instead of walking a ladder, plus a real ladder walk that stops at the ask and is answered over HTTP),
 `typecheck`, `parity`, `docs:check`; CI is the release proof as before.
 
+**Fortieth slice — a task a restart interrupted can be continued (F-47, D-111).** The owner asked for M2's remaining items
+one at a time and this was the next; it is the finding that had been open "by choice" since M2g because §7.2's rule reads
+like it forbids the act entirely. It does not. It forbids *automation* from authorizing — and the authorization arrives
+here as an answer a person gives, which is the same shape as an approval decision. `POST /tasks/{id}/resume` now answers two
+positions: a park this process holds (the thirty-ninth slice) and a task a restart left `interrupted`, which is rebuilt
+from D-095's boundary rather than continued. The rebuild is `loop.restart(input, saved)` — the loop owns the round machinery
+and the state move, the runner reads the record and owns the one-run-per-task rule, and the route owns the two questions that
+are its own: *whose* run and *under which authority*. The first needed D-111: the task table now names the identity that
+created the task (schema version 9, a nullable `origin_json`, no foreign key because O-071's revocation deletes an identity
+and a task must outlive the name), and the route **looks that identity up** rather than trusting a stored copy of its
+capabilities — the rule D-054 already follows for a job's fire, which is why a revoked creator is refused with 409 instead
+of inheriting authority, and why the answerer's own identity is recorded beside the continuation as §14's audit rather than
+becoming the author of someone else's task. The second is D-065's verdict, read **in the runner** so no route can rebuild
+work the runtime would not have permitted: `resume` and `pass` continue, `re-ask` is refused with the verdict's own
+sentence, and a task with no boundary is a 404 because there is nothing to continue from. The move is `interrupted` →
+`planning` (the edge into `running` needs `resumeApprovalValid`, and claiming it would be §7.2's forbidden claim) and its
+event is `task.resumed`, which the vocabulary has had since M2c. Three tests carry the weight, all over two real processes
+on one data dir: a committed step continues and is **not run twice**; the F-47 scenario itself — a prompt a dead process
+opened — now ends in a *fresh* prompt that can be answered, because SECURITY.md §7 keeps `call.args` out of the checkpoint
+on purpose, so a continuation re-plans and asks again rather than spending a row it cannot read; and a revoked creator is
+refused with the task untouched. Gates: `loop.test.ts` 43/43, `runner.test.ts` 16/16, `tasks.test.ts` 15/15 (including the
+three above), `journal.test.ts`, `contracts.test.ts`, `storage` 68/68, `agent-runtime.test.ts`, `typecheck`, `parity`,
+`docs:check`; CI is the release proof as before.
+
 ## 5. Phase M3 — Four interfaces in parallel
 
 Workstreams share contracts and fixtures, so they proceed independently; none of them may add core logic

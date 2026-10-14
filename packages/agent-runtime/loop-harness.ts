@@ -200,6 +200,11 @@ export interface Harness {
    *  it: the point of a unit test here is that the loop's own refusals (a pair the ask never offered, a park that is not
    *  an ask, a terminal task) are the loop's, and a wrapper would be somewhere for them to hide. */
   answerModel(run: ModelSuspendedRun, answer?: ModelAnswer): Promise<LoopOutcome>;
+  /** What `createRecovery` does at startup, written through the same journal it uses. Present because F-47's rebuild is
+   *  only reachable from `interrupted`, and a harness that could not put a task there would test the entry point's
+   *  refusals and never its continuation. No event, because this fixture does not need one — the state is the part the
+   *  loop reads. */
+  interrupt(): void;
   /** §6.1's step 1 from the outside: record a request, and let the manager decide whether anything is in flight. */
   cancel(input?: {
     mode?: CancellationMode;
@@ -708,6 +713,7 @@ export function createHarness(options: HarnessOptions): Harness {
       }),
     resume: (run) => loop.resume(run),
     answerModel: (run, answer = {}) => loop.answerModel(run, answer),
+    interrupt: () => memory.journal.setState(taskId, "interrupted"),
     cancel: (input = {}) =>
       cancellation.request({
         taskId,

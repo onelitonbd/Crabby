@@ -398,10 +398,20 @@ Full auto-resume therefore means *automatic orchestration of recovery*, not *aut
 `packages/agent-runtime/recovery.ts` reports, for each interrupted task, whether a still-valid approval covers it, D-065's
 verdict on the boundary the run left behind (`resume`, `pass`, `re-ask` or `none`, in the `task.interrupted` payload as well
 as in the report), and resumes none — a report whose `resumed` field is the literal `false` rather than a boolean, so no
-caller can read a resumption that did not happen. Since M2i the saved state a resume would need exists; the party that would
-use it does not, and that is the difference this section's rule is about: even a `resume` verdict is not an authorization,
-and the two documents that could have confused them (§7.1's "MUST attempt to resume" and §3.6's stage 3) are kept apart by
-`verdictFor` being a *reading* of the record rather than an act on it.
+caller can read a resumption that did not happen. That is still true after F-47, and it is the point rather than a
+limitation: recovery still orchestrates nothing on its own, because nothing here has a clock, and the authorization arrives
+as an answer a person gives — `POST /api/v1/tasks/{id}/resume` (§4.3), which rebuilds the run from the boundary D-065
+judged and refuses it on a `re-ask`. So the rule this section states is unchanged by the route existing: even a `resume`
+verdict is not an authorization, and the two documents that could have confused them (§7.1's "MUST attempt to resume" and
+§3.6's stage 3) stay apart because `verdictFor` is a *reading* of the record rather than an act on it, and the act is a
+human's.
+
+**What the answer runs under (D-111).** The run continues as the identity the task records, not as the identity that
+answered: `task.origin_json` names the creator (schema version 9), the route looks that identity *up* so §13's revocation
+applies to a continuation the way it applies to every other request, and a revoked creator is refused rather than
+inherited. The answering client's identity is recorded beside the continuation as §14's `by`/`via`. The continuation moves
+`interrupted` → `planning` — §4.1's edge into `running` from there needs `resumeApprovalValid`, and claiming that evidence
+would be this section's forbidden claim.
 
 ### 7.3 Safe recovery
 

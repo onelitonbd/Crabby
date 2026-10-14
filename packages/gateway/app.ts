@@ -26,9 +26,10 @@
 // root: the eight keys the loop enforces map one each, and the rest belong to the parties that enforce them (§3.1's
 // wrapper, the storage layer, the task manager), so a key the loop does not read is never handed to it to no effect.
 // And
-// there is no `POST /api/v1/tasks/{id}/resume` (F-47): §7.1's recovery marks an interrupted task and sweeps the prompts
-// whose deadlines passed, and never resurrects a run, because a recovery that could resume work would be a way past an
-// approval.
+// `POST /api/v1/tasks/{id}/resume` *is* wired, and it does not resurrect anything: §7.1's recovery still marks every
+// non-terminal task `interrupted` and still sweeps the prompts whose deadlines passed, because a recovery that resumed on
+// its own would be a way past an approval. What the route adds is the half §7.2 withholds from automation — a human
+// answering, for a run rebuilt from D-095's boundary and refused on D-065's verdict (F-47, D-111).
 //
 // §6's cancellation *is* wired, because stopping work is not the same act as doing it and needs no grants: `buildApp`
 // composes the process's one manager and `POST /api/v1/tasks/{id}/cancel` requests through it. A `queued` task has
@@ -60,6 +61,9 @@ import {
   type LoopLimits,
   type LoopSubject,
   localStamp,
+  type RestartFailureCode,
+  type RestartResult,
+  type ResumeFailureCode,
   type Runner,
   type Scheduler,
   type StartResult,
@@ -613,7 +617,9 @@ function providersRow(
       ? "the adapter is composed into the runner this Gateway drives tasks with, so `POST /api/v1/tasks` is handed a " +
         "run, and a task's model may be pinned per task (D-108, D-110) — what is still absent is per-task narrowing and " +
         "a schedule (F-57's remaining fields), and a resume across a restart: `POST /tasks/{id}/resume` answers a " +
-        "ladder ask this process is holding, while an `interrupted` task waits for F-47's cross-process rebuild"
+        "ladder ask this process is holding, and `POST /tasks/{id}/resume` continues a task a restart left `interrupted` " +
+        "from the checkpoint it committed (F-47) — what is still absent is per-task narrowing and a schedule (F-57's " +
+        "remaining fields)"
       : "the adapter is ready and a runner exists (M2n), but this Gateway composed none, because that takes an " +
         "executor over a configured workspace root and a selected default model together: a task created over HTTP is " +
         "recorded and stays `queued`, and `GET /api/v1/diagnostics` reports `runs.composed` " +
@@ -687,6 +693,177 @@ export interface DrivenTask {
   readonly started: StartResult | undefined;
 }
 
+/** F-47's continuation, as a route performs it: the run no longer exists, so the question is not "which park is this"
+ *  but "whose run was it", and D-111's answer is that the record knows — the origin written with the row.
+ *
+ *  The identity is then **looked up**, not trusted from the row, which is the same rule a scheduled job's fire follows
+ *  (D-054: "a job inherits no ambient authority beyond its own recorded capability set", re-read at fire time so a
+ *  revocation is not undone by a timer). O-071's revocation deletes the identity's row, so a revoked creator answers
+ *  `undefined` here and the continuation is refused rather than performed under authority that no longer exists.
+ *
+ *  Who answered is recorded on the route's event and in the log as §14's `by`/`via`, and it is not who the run belongs to:
+ *  the run belongs to the creator, which is what `RunInput.origin` has always said about a human answering a prompt in the
+ *  middle of a run. */
+function restartTask(
+  deps: GatewayDeps,
+  runner: Runner,
+  task: TaskRecord,
+  client: { readonly id: string; readonly interface: ClientInterface },
+  pair: { readonly provider: string; readonly modelId: string } | undefined,
+  provider: Provider | undefined,
+): RestartResult {
+  const origin = task.origin;
+  if (origin === undefined) {
+    return {
+      ok: false,
+      code: "not-interrupted",
+      reason:
+        `task ${task.id} records no origin, so the run that was on it cannot be rebuilt under an identity anybody can name: ` +
+        'rows written before schema version 9 keep answering "no origin" rather than a guess, and a resumption ' +
+        "attributed to whoever is asking would be authority a dead process handed over",
+    };
+  }
+  const identity = getIdentity(deps.db, origin.clientId);
+  if (identity === undefined) {
+    return {
+      ok: false,
+      code: "not-interrupted",
+      reason:
+        `task ${task.id} was created by client ${origin.clientId}, which no longer exists — §3.1's revocation took effect ` +
+        "and deleted the row, so §7.2's 'recovery never authorizes itself' has nothing left to authorize a continuation " +
+        "with. The task can be cancelled, or started again by an identity that still exists",
+    };
+  }
+  // `Identity.interface` is a `string` in storage and a `ClientInterface` everywhere else, so the narrowing happens here
+  // rather than by a cast: an interface this build does not know is an identity whose removal rules cannot be computed, and
+  // it is refused as the unknown thing it is.
+  const iface = identity.interface;
+  if (iface !== "cli" && iface !== "tui" && iface !== "web" && iface !== "telegram") {
+    return {
+      ok: false,
+      code: "not-interrupted",
+      reason:
+        `client ${origin.clientId} was paired for interface \`${iface}\`, which this build does not know, so the grants a ` +
+        "continuation would run under cannot be computed (SECURITY.md §13)",
+    };
+  }
+  const { subject } = subjectFor(
+    deps,
+    { capabilities: identity.capabilities, interface: iface },
+    task.id,
+  );
+  const restart = runner.restart({
+    taskId: task.id,
+    subject,
+    origin: {
+      clientId: origin.clientId,
+      clientName: origin.clientName,
+      interface: origin.interface,
+      capabilities: identity.capabilities,
+      sessionId: task.sessionId,
+    },
+    ...(pair === undefined ? {} : { modelId: pair.modelId }),
+    ...(provider === undefined ? {} : { provider }),
+  });
+  if (restart.ok) {
+    deps.log.info("task resumed after a restart", {
+      task: task.id,
+      by: client.id,
+      via: client.interface,
+      origin: origin.clientId,
+    });
+  }
+  return restart;
+}
+
+/** The in-process refusal, in the route's own words where the world disagreed and the runner's where it did not —
+ *  the split `CANCEL_REFUSAL_CLASS` already draws. `not-parked` is the world's: a task in `awaiting_approval` with no
+ *  pending approval and no run here is a refusal pause or a run this process never held, and neither is the runner's fault. */
+function resumeRefusal(
+  result: { readonly ok: false; readonly code: ResumeFailureCode; readonly reason: string },
+  requestId: string | undefined,
+  taskId: string,
+): GatewayError {
+  return new GatewayError({
+    code: `resume_${result.code}`,
+    message:
+      result.code === "not-parked"
+        ? `task ${taskId} is in \`awaiting_approval\` with no pending approval and no run of it in this process: ` +
+          "it is D-086's refusal pause, which a materially different action or a cancellation resolves, or a run this " +
+          "process does not hold"
+        : result.reason,
+    class: RESUME_REFUSAL_CLASS[result.code],
+    retryable: false,
+    ...(requestId === undefined ? {} : { requestId }),
+  });
+}
+
+/** The runner's own sentences, verbatim, for the refusal classes F-47 added. A route that rephrased them would be a second
+ *  voice telling a user why their task will not continue, and the one that knows is the party that read D-065's verdict. */
+function restartRefusal(result: {
+  readonly ok: false;
+  readonly code: RestartFailureCode;
+  readonly reason: string;
+}): GatewayError {
+  return new GatewayError({
+    code: `resume_${result.code}`,
+    message: result.reason,
+    // `re-ask` is a conflict with the *world* (a step whose effect cannot be established), not with the request, and the
+    // other two are the same shape as the in-process refusals beside them.
+    class: result.code === "no-checkpoint" ? "not-found" : "conflict",
+    retryable: false,
+  });
+}
+
+const NO_RUNNER_SENTENCE =
+  "this Gateway composed no runner, so no run of this task exists to rebuild; GET /api/v1/diagnostics reports " +
+  "runs.composed and says what is missing";
+
+/** §13's expansion of an identity into a run's `PolicySubject`, in one function because there are now two callers and
+ *  they must not disagree: a task that started and a task that continues after a restart are the same act of authority, and
+ *  two copies would be two opinions about which capabilities a client holds.
+ *
+ *  The capabilities passed in are the identity's **current** ones, never a copy from the task row: D-111 stores the
+ *  identity and deliberately not its capabilities, so a revocation between the task's creation and its resumption takes
+ *  effect on the resumption — which is the whole point of §13's "next request" and the reason a resume is not a replay.
+ *  `withheld` comes back because the operator is owed the same log line either way. */
+function subjectFor(
+  deps: GatewayDeps,
+  identity: { readonly capabilities: readonly string[]; readonly interface: ClientInterface },
+  taskId: string,
+  source?: string,
+): {
+  readonly subject: LoopSubject;
+  readonly withheld: readonly { readonly capability: string; readonly reason: string }[];
+} {
+  const expansion = grantsFor(identity.capabilities, {
+    roots: deps.drive?.ctx.paths?.roots ?? [],
+  });
+  for (const withheld of expansion.withheld) {
+    deps.log.info("capability held, no grant emitted", {
+      task: taskId,
+      capability: withheld.capability,
+      reason: withheld.reason,
+      ...(source === undefined ? {} : { source }),
+    });
+  }
+  return {
+    subject: {
+      grants: expansion.grants,
+      // The other half of `PolicySubject`, and the reason a narrowed client gets §13's sentence instead of a denial that
+      // reads as repairable: what a restriction removed is not discoverable from `grants`, because an absent grant and a
+      // removed one are the same absence. Only the party that knows which interface the identity was paired for can
+      // compute the difference.
+      removedGrants: removedGrantsFor(identity.capabilities, identity.interface),
+      // `ClientInterface` is a subset of policy's `ClientKind` — the same four names — so the kind arrives as the
+      // interface that was paired rather than as a guess about the transport. That matters beyond bookkeeping: the kind
+      // is what decides whether a T3 prompt may be answered from here at all (D-085).
+      clientKind: identity.interface satisfies ClientKind,
+    } satisfies LoopSubject,
+    withheld: expansion.withheld,
+  };
+}
+
 function recordAndDriveTask(
   deps: GatewayDeps,
   bus: ReturnType<typeof createEventBus>,
@@ -697,6 +874,14 @@ function recordAndDriveTask(
     objective: input.objective,
     ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
     ...(input.model === undefined ? {} : { model: input.model }),
+    // D-111: the identity, written with the row rather than left in the act's arguments. The run below already has it in
+    // hand, and the only reader a restart will have is the record — so a task whose origin lives only in the act that
+    // created it is a task that cannot be continued by the next process, and cannot be attributed by anything but the log.
+    origin: {
+      clientId: input.origin.clientId,
+      clientName: input.origin.clientName,
+      interface: input.origin.interface,
+    },
   });
   // The conversation record behind the id, written in the same act as the task rather than left to a route: `createTask`
   // has minted `ses_…` values since schema version 1 and nothing owned them, so an install could hold forty conversations
@@ -730,19 +915,7 @@ function recordAndDriveTask(
   const task = getTask(deps.db, created.id) ?? created;
   if (runner === undefined) return { task, withheld: [], started: undefined };
 
-  const expansion = grantsFor(input.origin.capabilities, {
-    roots: deps.drive?.ctx.paths?.roots ?? [],
-  });
-  // Withheld rather than dropped, and logged rather than silent: an identity that holds `fs.write` and can write nowhere
-  // is a fact an operator should be able to find, instead of having to read a denied tool call backwards and wonder
-  // whether the capability or the configuration was missing.
-  for (const withheld of expansion.withheld)
-    deps.log.info("capability held, no grant emitted", {
-      task: created.id,
-      capability: withheld.capability,
-      reason: withheld.reason,
-      source: input.source,
-    });
+  const { subject, withheld } = subjectFor(deps, input.origin, created.id, input.source);
   // §3.6's per-task pin (D-108's A, D-110's B): the route resolved it against every composed provider before the task
   // was created, so the run uses the pair the pin named — the provider and the bare modelId — instead of the composed
   // default, which is `RunnerDeps.provider` under `RunnerDeps.modelId`. Absent pin means that default, and a caller
@@ -753,18 +926,7 @@ function recordAndDriveTask(
     (input.model === undefined ? undefined : input.model.slice(input.model.indexOf("/") + 1));
   const started = runner.start({
     taskId: created.id,
-    subject: {
-      grants: expansion.grants,
-      // The other half of `PolicySubject`, and the reason a narrowed client gets §13's sentence instead of a denial that
-      // reads as repairable: what a restriction removed is not discoverable from `grants`, because an absent grant and a
-      // removed one are the same absence. Only the party that knows which interface the identity was paired for can
-      // compute the difference.
-      removedGrants: removedGrantsFor(input.origin.capabilities, input.origin.interface),
-      // `ClientInterface` is a subset of policy's `ClientKind` — the same four names — so the kind arrives as the
-      // interface that was paired rather than as a guess about the transport. That matters beyond bookkeeping: the kind
-      // is what decides whether a T3 prompt may be answered from here at all (D-085).
-      clientKind: input.origin.interface satisfies ClientKind,
-    } satisfies LoopSubject,
+    subject,
     origin: {
       clientId: input.origin.clientId,
       clientName: input.origin.clientName,
@@ -804,7 +966,7 @@ function recordAndDriveTask(
           source: input.source,
         }),
     );
-  return { task, withheld: expansion.withheld, started };
+  return { task, withheld, started };
 }
 
 // ------------------------------------------------------------------ system (§4.1)
@@ -1338,8 +1500,8 @@ function registerTaskRoutes(
    *  What it can reach, stated before what it cannot: a ladder ask **this process is holding**. The run's messages live in
    *  the runner's memory — that is what makes the continuation a continuation rather than a rebuild — and a task whose ask
    *  was parked by a process that has since ended is `interrupted` (§7.1), which this route refuses with the sentence
-   *  below rather than pretending. The cross-process half is F-47, and it needs a rebuild from D-095's checkpoint that no
-   *  route offers yet.
+   *  below rather than pretending. The cross-process half arrived with F-47: an `interrupted` task is rebuilt from
+   *  D-095's boundary in the same route, under the identity its own record names (D-111) and refused on D-065's verdict.
    *
    *  The ordering of the checks is the design, not an accident. The pin is resolved *before* anything moves, because a
    *  route that accepted an answer and then discovered the model does not exist would have woken a run for nothing. The
@@ -1361,16 +1523,19 @@ function registerTaskRoutes(
       }
       const task = getTask(deps.db, request.params.id);
       if (task === undefined) throw notFound(`task ${request.params.id}`, request.crabbyRequestId);
-      if (task.state !== "awaiting_approval") {
+      // Two positions, two mechanisms, one route. `awaiting_approval` is a park this process still holds, so `resume`
+      // answers it; `interrupted` is a park a process that has ended was holding, so the run has to be rebuilt from
+      // D-095's boundary first (F-47). Both are "waiting for a human", which is why they share a route — and they must be
+      // told apart by the record rather than by the caller's guess, because a task that answered the wrong one would move
+      // a state machine that does not know about the mistake.
+      const afterRestart = task.state === "interrupted";
+      if (task.state !== "awaiting_approval" && !afterRestart) {
         // One sentence per position, because the fixes are four different commands and a generic "cannot resume" sends a
-        // user looking in the wrong place. `interrupted` gets its own: it is the restart case, and the thing to do about
-        // it is not a resume at all.
+        // user looking in the wrong place.
         const where =
-          task.state === "interrupted"
-            ? "§7.1's recovery marked it interrupted, and a task parked by a process that has ended keeps its messages in that process's memory — the cross-process rebuild is docs/CONSISTENCY_REVIEW.md F-47, and nothing here can answer an ask that process was holding"
-            : task.state === "queued"
-              ? "a queued task has not run far enough to spend a ladder budget, and it starts on its own when a runner picks it up"
-              : `it is \`${task.state}\`, which is not a pause waiting on a model: a moving task is not interrupted, and a settled one is terminal and absorbing (AGENT_RUNTIME.md §4.1)`;
+          task.state === "queued"
+            ? "a queued task has not run far enough to spend a ladder budget, and it starts on its own when a runner picks it up"
+            : `it is \`${task.state}\`, which is not a pause waiting on a human: a moving task is not interrupted, and a settled one is terminal and absorbing (AGENT_RUNTIME.md §4.1)`;
         throw new GatewayError({
           code: "not_resumable",
           message: `task ${task.id} cannot be resumed by this route: ${where}`,
@@ -1379,7 +1544,9 @@ function registerTaskRoutes(
           ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
         });
       }
-      const pending = approvals.list({ taskId: task.id }).find((row) => row.state === "pending");
+      const pending = afterRestart
+        ? undefined
+        : approvals.list({ taskId: task.id }).find((row) => row.state === "pending");
       if (pending !== undefined) {
         throw new GatewayError({
           code: "approval_pending",
@@ -1416,33 +1583,23 @@ function registerTaskRoutes(
         // run to wake, so nothing here would move, and refusing says why.
         throw new GatewayError({
           code: "no_runner",
-          message:
-            `task ${task.id} is paused, but this Gateway composed no runner, so no run of it exists here to continue; ` +
-            "GET /api/v1/diagnostics reports runs.composed and says what is missing",
+          message: `task ${task.id} is paused, but ${NO_RUNNER_SENTENCE}`,
           class: "conflict",
           retryable: false,
           ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
         });
       }
-      const result = runner.resume(task.id, {
-        ...(pair === undefined ? {} : { pair }),
-        ...(provider === undefined ? {} : { provider }),
-        byClientId: client.id,
-        via: client.interface,
-      });
-      if (!result.ok) {
-        throw new GatewayError({
-          code: `resume_${result.code}`,
-          message:
-            result.code === "not-parked"
-              ? `task ${task.id} is in \`awaiting_approval\` with no pending approval and no run of it in this process: ` +
-                "it is D-086's refusal pause, which a materially different action or a cancellation resolves, or a run this " +
-                "process does not hold"
-              : result.reason,
-          class: RESUME_REFUSAL_CLASS[result.code],
-          retryable: false,
-          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      if (afterRestart) {
+        const rebuilt = restartTask(deps, runner, task, client, pair, provider);
+        if (!rebuilt.ok) throw restartRefusal(rebuilt);
+      } else {
+        const woken = runner.resume(task.id, {
+          ...(pair === undefined ? {} : { pair }),
+          ...(provider === undefined ? {} : { provider }),
+          byClientId: client.id,
+          via: client.interface,
         });
+        if (!woken.ok) throw resumeRefusal(woken, request.crabbyRequestId, task.id);
       }
       deps.log.info("task resumed", {
         task: task.id,
@@ -2191,7 +2348,7 @@ function registerApprovalRoutes(
  *  What this cannot do, and says rather than hides: a run parked in a *previous* process is not reachable, because
  *  `SuspendedRun` carries the proposed call in memory and SECURITY.md §8.2 keeps `call.args` out of the checkpoint, so
  *  there is nothing to rebuild it from. `Runner.resume` answers that case as `not-parked` with D-065's `re-ask` verdict
- *  beside it, and the note below carries the sentence through to the caller — F-47's absent `POST /tasks/{id}/resume` is
+ *  beside it, and the note below carries the sentence through to the caller — a process holding no run cannot answer, and
  *  the route that would answer it, and this function is not a substitute for that route. */
 function wakeParkedRun(
   runner: Runner | undefined,

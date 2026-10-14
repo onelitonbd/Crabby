@@ -22,7 +22,7 @@ import type { EvalContext, PlatformFactsLike } from "@crabby/policy";
 import type { Provider } from "@crabby/providers";
 import type { Approvals } from "./approvals.ts";
 import type { Cancellation, CancellationResult, RequestInput } from "./cancellation.ts";
-import type { CheckpointGate } from "./checkpoint.ts";
+import type { Checkpoints } from "./checkpoint.ts";
 import type { TaskJournal } from "./journal.ts";
 import {
   type AskCandidates,
@@ -49,7 +49,9 @@ export interface RunnerDeps {
   /** The *same* manager the caller's cancel route uses, never a second one: §6.1's step 2 (stop scheduling new steps)
    *  and §6.2's evidence have to be about one request, and two managers would each hold half of it. */
   readonly cancellation: Cancellation;
-  readonly checkpoints?: CheckpointGate | undefined;
+  /** Both halves of D-065's manager, because the write half goes to the loop and the read half is what a cross-process
+   *  resume is made of — one party holding one manager is the rule the whole checkpoint design rests on. */
+  readonly checkpoints?: Checkpoints | undefined;
   readonly limits?: Partial<LoopLimits> | undefined;
   /** §3.6's selection, resolved from `config.json` by the composition root (D-101). `RunInput.modelId` states the rule
    *  this obeys: the caller resolves it and the loop does not choose, because §3.1's third rule is that a provider must
@@ -83,6 +85,36 @@ export interface StartInput {
 }
 
 export type StartCode = "in-flight" | "parked" | "not-found" | "failed";
+
+/** F-47's answer to §7.1, as a runner takes it: a task recovery marked `interrupted`, and the identity whose
+ *  capabilities the caller turned into the subject. The runner reads nothing about *who* — D-111 makes the caller the
+ *  party that expands grants, and this package holds no identity store. */
+export interface RestartInput {
+  readonly taskId: string;
+  readonly subject: LoopSubject;
+  readonly correlationId?: string | undefined;
+  readonly origin?: RunOrigin | undefined;
+  /** §3.6's switch, for the rare case where the answer names a different model than the boundary recorded. Absent means
+   *  the boundary's own `modelId`, which is the pair the saved context was budgeted for. */
+  readonly modelId?: string | undefined;
+  readonly provider?: Provider | undefined;
+}
+
+export type RestartResult =
+  | { readonly ok: true; readonly taskId: string; readonly run: Promise<LoopOutcome> }
+  | {
+      readonly ok: false;
+      readonly code: RestartFailureCode;
+      readonly reason: string;
+    };
+
+export type RestartFailureCode =
+  | "in-flight"
+  | "not-found"
+  | "not-interrupted"
+  | "no-checkpoint"
+  | "re-ask"
+  | "draining";
 
 export type StartResult =
   | { readonly ok: true; readonly taskId: string; readonly run: Promise<LoopOutcome> }
@@ -120,6 +152,10 @@ export interface ShutdownReport {
 export interface Runner {
   start(input: StartInput): StartResult;
   resume(taskId: string, answer?: ModelAnswer): ResumeResult;
+  /** F-47's cross-process continuation. Separate from `resume` because the two wake different things: `resume` answers a
+   *  park this process still holds, and this rebuilds a run from D-095's boundary for a park the process that held it is
+   *  gone. Same refusal codes as `start` for the reasons that are the same, and two more for the ones that are D-065's. */
+  restart(input: RestartInput): RestartResult;
   /** §6.1, delegated whole: the manager owns the request row, the event, the abort and the settle. A runner that
    *  re-implemented any of it would be a second writer of the same fact. */
   cancel(input: RequestInput): CancellationResult;
@@ -354,9 +390,100 @@ export function createRunner(deps: RunnerDeps): Runner {
     return { ok: true, taskId, run };
   }
 
+  function restart(input: RestartInput): RestartResult {
+    if (draining) {
+      return {
+        ok: false,
+        code: "draining",
+        reason:
+          "this Gateway is draining for shutdown (D-066), so it is not accepting runs; §7.1's recovery marks the task " +
+          "interrupted again on the next start and the same answer is available then",
+      };
+    }
+    if (running.has(input.taskId)) {
+      return {
+        ok: false,
+        code: "in-flight",
+        reason: `task ${input.taskId} is already running in this process, so there is no interrupted run to rebuild`,
+      };
+    }
+    const task = deps.journal.task(input.taskId);
+    if (task === undefined) {
+      return { ok: false, code: "not-found", reason: `no task ${input.taskId} in the journal` };
+    }
+    if (task.state !== "interrupted") {
+      return {
+        ok: false,
+        code: "not-interrupted",
+        reason:
+          `task ${input.taskId} is \`${task.state}\`, not \`interrupted\`: §7.1 marks a task interrupted when a restart finds ` +
+          "it in flight, so this one was either never interrupted or has already been continued",
+      };
+    }
+    const checkpoints = deps.checkpoints;
+    if (checkpoints === undefined) {
+      return {
+        ok: false,
+        code: "no-checkpoint",
+        reason:
+          "no checkpoint manager is composed on this Gateway, so there is no saved state to rebuild a run from — " +
+          "GET /api/v1/diagnostics reports what is missing",
+      };
+    }
+    const saved = checkpoints.latest(input.taskId);
+    if (saved === undefined) {
+      return {
+        ok: false,
+        code: "no-checkpoint",
+        reason:
+          `task ${input.taskId} committed no step boundary before the process ended, so there is no saved context to ` +
+          "continue from and nothing external to repeat; a new run starts it again",
+      };
+    }
+    // D-065's verdict is the gate, and it is read *here* rather than in the route so that no caller can reach a run the
+    // runtime would not have permitted: §7.3's rule is that an in-flight step whose effect cannot be established is
+    // re-asked, not repeated, and a route that rebuilt anyway would be the runtime's rule re-decided by an HTTP handler.
+    const answer = checkpoints.verdict(input.taskId);
+    if (answer.verdict === "re-ask") {
+      return {
+        ok: false,
+        code: "re-ask",
+        reason: answer.reason,
+      };
+    }
+    if (answer.verdict === "none") {
+      return {
+        ok: false,
+        code: "no-checkpoint",
+        reason:
+          `D-065's verdict on task ${input.taskId} is \`none\`: ${answer.reason}. Continuing it would be a new run wearing ` +
+          "a resume's clothes",
+      };
+    }
+    const run = launch(input.taskId, () =>
+      loop.restart(
+        {
+          taskId: input.taskId,
+          // The boundary's own model unless the answer named another: the saved context was budgeted for this one, and
+          // §3.6's re-budgeting happens from the swap onwards rather than by re-sending a context the new model cannot hold.
+          modelId: input.modelId ?? saved.modelId,
+          ...(input.provider === undefined ? {} : { provider: input.provider }),
+          subject: input.subject,
+          ctx: { ...deps.ctx, grants: input.subject.grants },
+          signal: deps.cancellation.signalFor(input.taskId),
+          ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
+          ...(input.origin === undefined ? {} : { origin: input.origin }),
+        },
+        saved,
+      ),
+    );
+    return { ok: true, taskId: input.taskId, run };
+  }
+
   return {
     start,
     resume,
+    restart,
     cancel: (input) => deps.cancellation.request(input),
     outstanding: () => running.size,
     inFlight: (taskId) => running.has(taskId),

@@ -96,7 +96,7 @@ import {
 } from "@crabby/providers";
 import type { ApprovalRecord, Approvals } from "./approvals.ts";
 import type { CancellationEvidence, CancellationGate } from "./cancellation.ts";
-import type { CheckpointGate } from "./checkpoint.ts";
+import type { CheckpointGate, CheckpointRecord } from "./checkpoint.ts";
 import { createPhaseWriter, type Emit, type TaskJournal } from "./journal.ts";
 import type { TransitionEvidence } from "./transitions.ts";
 
@@ -464,6 +464,10 @@ export interface LoopDeps {
 export interface Loop {
   start(input: RunInput): Promise<LoopOutcome>;
   resume(run: SuspendedRun): Promise<LoopOutcome>;
+  /** F-47's resumption: §7.1's obligation, performed rather than reported. The saved boundary arrives as an argument
+   *  because this package holds no checkpoint store — `restart` is told what to continue from by the party that read it,
+   *  which is the same split D-095 drew between the loop's write and everyone else's read. */
+  restart(input: RunInput, saved: CheckpointRecord): Promise<LoopOutcome>;
   /** D-044's answer. Only a run parked at an ask may be answered this way, and `transition()` enforces that in the
    *  record's own terms (§5's rule 5): the move out of `awaiting_approval` carries `modelAnswered` as its evidence, so a
    *  caller cannot present this for a run that is holding an approval instead. */
@@ -1555,6 +1559,85 @@ export function createLoop(deps: LoopDeps): Loop {
     });
   }
 
+  /** §7.1's "attempt to resume interrupted tasks automatically", performed by a human's answer rather than by a timer —
+   *  §7.2 withholds the automatic half, and this build has no timer to withhold anything from.
+   *
+   *  Four things happen here and none of them is the loop's choice. The task must be `interrupted`: recovery's uniform
+   *  target (D-083's `recoveryTarget`) is what "a run that did not survive the process" looks like, and any other state is
+   *  somebody else's business — a live run, a settled task, a prompt. The saved record must belong to this task, because a
+   *  boundary for another task is a conversation the user never had with this one. The messages are the record's, whole: the
+   *  committed context, not a summary and not the log (SECURITY.md §7 redacts what the log would have been needed for here).
+   *  And the move is `interrupted` → `planning`, whose event is `task.resumed` — §4.1's table has no edge straight into
+   *  `running` from here without `resumeApprovalValid`, and claiming that evidence would be §7.2's forbidden claim: no
+   *  approval covers this task's step, because recovery just said so.
+   *
+   *  What is *not* re-decided: the identity (D-111 — the route rebuilt the subject from the record's own origin, so a
+   *  human answering a prompt never becomes the author of a task), the grants (evaluated by that route from the client's
+   *  *current* capabilities, §13), and whether continuing is safe at all — that is D-065's verdict, which the runner read
+   *  before it called this and refuses on. */
+  async function restart(input: RunInput, saved: CheckpointRecord): Promise<LoopOutcome> {
+    const existing = journal.task(input.taskId);
+    if (existing === undefined) {
+      return refused(
+        undefined,
+        "task.not_found",
+        `no task ${input.taskId} in the journal, so there is nothing to resume`,
+      );
+    }
+    if (isTerminal(existing.state)) {
+      return refused(
+        existing,
+        "task.terminal",
+        `task ${existing.id} is \`${existing.state}\`, which is terminal and absorbing (AGENT_RUNTIME.md §4.1), so there is ` +
+          "no interrupted work to continue",
+      );
+    }
+    if (existing.state !== "interrupted") {
+      return refused(
+        existing,
+        "task.not_interrupted",
+        `task ${existing.id} is \`${existing.state}\` and this entry resumes what a restart interrupted; a task in flight is ` +
+          "woken by its own park's answer, and a queued one starts where it started",
+      );
+    }
+    if (saved.taskId !== input.taskId) {
+      return refused(
+        existing,
+        "checkpoint.not_found",
+        `the saved boundary belongs to task ${saved.taskId}, so continuing this task from it would replay a conversation ` +
+          "the user did not have with it",
+      );
+    }
+    const at = now();
+    phase(input.taskId, input.correlationId, (emit) => {
+      move(currentTask(input.taskId), "planning", {}, emit, at, {
+        payload: {
+          // The coordinates of what is being continued, so a client reading the log can tell this move from a new run:
+          // §7.1's resume and `POST /tasks` both move a task, and only one of them is a continuation.
+          resumed: {
+            boundary: saved.boundary,
+            step: saved.step,
+            lastSeq: saved.lastSeq,
+            // The model that produced the saved context. The answer may name another (§3.6's switch), and the client that
+            // prints this line is the one place where "the task was on A and is now on B" is readable as a pair.
+            model: saved.modelId,
+            writtenAt: saved.writtenAt,
+            ...(saved.pending === undefined ? {} : { pending: saved.pending.tool }),
+          },
+        },
+      });
+    });
+    const task = currentTask(input.taskId);
+    // The objective is *not* prepended again. `start` does that because it is building a conversation; here the
+    // conversation is the record's, and a second copy of the user's opening sentence would be a second instruction in it.
+    return drive({
+      input,
+      subject: { ...input.subject, taskId: task.id },
+      messages: saved.messages,
+      steps: saved.step,
+    });
+  }
+
   async function resume(run: SuspendedRun): Promise<LoopOutcome> {
     const at = now();
     const existing = journal.task(run.taskId);
@@ -1925,5 +2008,5 @@ export function createLoop(deps: LoopDeps): Loop {
       : refused(currentTask(run.taskId), "approval.re-request_failed", why);
   }
 
-  return { start, resume, answerModel };
+  return { start, resume, answerModel, restart };
 }

@@ -41,6 +41,20 @@ const SECOND_CANDIDATE = {
 } as const;
 const T3_TTL = 5 * 60_000; // D-064's T3 window.
 
+/** The `EvalContext` half of a run input, and the grants the harness composes its own runs with — written once here so a
+ *  `restart` test is not a second copy of what `createHarness` already decides. */
+const harnessCtx = {
+  // `grants` is the harness's own subject list, because `RunInput.ctx` carries it and a second list here would be a
+  // second opinion about what the identity in these tests holds.
+  grants: ["fs.read", "fs.write", "net.egress", "task.read"],
+  paths: { home: "/home/user", dataDir: "/home/user/.crabby", roots: [WORKSPACE] },
+  realpathOf: (absolutePath: string): string => absolutePath,
+};
+const harnessSubject = {
+  grants: ["fs.read", "fs.write", "net.egress", "task.read"],
+  clientKind: "cli",
+} as const;
+
 function fileTools(): HarnessTool[] {
   return [
     { name: "file.read", parameters: PATH_ARGS, output: "notes.md, as read" },
@@ -866,6 +880,104 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
         "no further — a knob that could turn the ladder off would be a knob against the decision",
     );
     assert.equal(validate(LimitsConfig, { providerAttempts: 5 }).ok, true);
+  });
+
+  it("continues an interrupted run from the boundary the dead process committed, and does not re-run its step", async () => {
+    const harness = createHarness({
+      rounds: [
+        [{ kind: "tool-call", name: "file.read", arguments: { path: "notes.md" } }],
+        // Whatever the restarted process would do next — this fixture's script never reaches it, because the first
+        // process is interrupted after its step and the second starts from the saved context rather than from the start.
+        doneRound,
+      ],
+      tools: fileTools(),
+    });
+    const first = await harness.start();
+    assert.equal(first.kind, "completed");
+    assert.equal(harness.executions.length, 1, "the read ran once, in the first process");
+
+    // Now the restart: the same task, the state recovery leaves behind, and the boundary it left.
+    const saved = harness.checkpoint();
+    assert.ok(saved !== undefined, "a committed step is a committed boundary (D-095)");
+    harness.interrupt();
+    assert.equal(harness.task()?.state, "interrupted");
+    const executionsBefore = harness.executions.length;
+
+    const continued = await harness.loop.restart(
+      {
+        taskId: harness.taskId,
+        modelId: saved.modelId,
+        subject: harnessSubject,
+        ctx: harnessCtx,
+        signal: new AbortController().signal,
+      },
+      saved,
+    );
+
+    assert.equal(continued.kind, "completed");
+    assert.equal(
+      harness.executions.length,
+      executionsBefore,
+      "the committed step did not run again",
+    );
+    const resumed = harness.eventsOfType("task.resumed");
+    assert.equal(
+      resumed.length,
+      1,
+      "the move out of `interrupted` has its own event, so a client watching across the restart can tell it from a new run",
+    );
+    assert.deepEqual(
+      resumed[0]?.payload.resumed as
+        | { step?: number; boundary?: string; model?: string }
+        | undefined,
+      {
+        boundary: saved.boundary,
+        step: saved.step,
+        lastSeq: saved.lastSeq,
+        model: saved.modelId,
+        writtenAt: saved.writtenAt,
+      },
+      "the coordinates of what was continued ride on it: a resume and a fresh task both move a task, and only one of them is a continuation",
+    );
+  });
+
+  it("refuses a rebuild that is not one, rather than rebuilding whatever it is handed", async () => {
+    const harness = createHarness({ rounds: [doneRound], tools: fileTools() });
+    const saved = harness.checkpoint();
+    assert.equal(saved, undefined, "nothing committed, so this fixture builds the record by hand");
+    const boundary = {
+      taskId: harness.taskId,
+      boundary: "step" as const,
+      state: "running" as const,
+      step: 1,
+      lastSeq: 3,
+      modelId: "fake-tools",
+      messages: [{ role: "user" as const, content: "read the roadmap" }],
+      writtenAt: 1_700_000_000_000,
+    };
+    const input = {
+      taskId: harness.taskId,
+      modelId: boundary.modelId,
+      subject: { grants: ["fs.read"], clientKind: "cli" as const },
+      ctx: harnessCtx,
+      signal: new AbortController().signal,
+    };
+
+    const queued = await harness.loop.restart(input, boundary);
+    assert.equal(queued.kind, "refused", "a queued task is not an interrupted one");
+    if (queued.kind === "refused") assert.equal(queued.code, "task.not_interrupted");
+
+    harness.interrupt();
+    const foreign = await harness.loop.restart(input, { ...boundary, taskId: "tsk_someone_else" });
+    assert.equal(foreign.kind, "refused", "a boundary for another task is another conversation");
+    if (foreign.kind === "refused") assert.equal(foreign.code, "checkpoint.not_found");
+    assert.equal(harness.task()?.state, "interrupted", "and neither refusal moved the task");
+
+    harness.cancel({ mode: "immediate", byClientId: "cli_local", via: "cli" });
+    assert.equal(harness.task()?.state, "cancelled");
+    const settled = await harness.loop.restart(input, boundary);
+    assert.equal(settled.kind, "refused", "§4.1: a settled task absorbs");
+    if (settled.kind === "refused") assert.equal(settled.code, "task.terminal");
   });
 
   it("fails without asking when the class is not retryable, because another model has no better answer", async () => {

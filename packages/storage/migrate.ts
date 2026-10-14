@@ -314,6 +314,28 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // Which identity a task belongs to, so §14's attribution and F-47's cross-process resumption read one fact instead of
+    // excavating it from the log. The `session` table's `origin_interface` (version 6) is the same idea for conversations
+    // and kept its own column for the same reason this keeps its own JSON: the record is read whole and written once.
+    //
+    // JSON rather than three columns because `client_id` is deliberately *not* a foreign key: `client_identity` rows are
+    // deleted on revocation (O-071), and a key would either refuse the delete or cascade the task away with it — the exact
+    // failure D-104 avoided for conversations. A task outliving the identity that created it is the correct shape (the
+    // work happened; the attribution stays), and a resumer checks the row is still there before continuing.
+    //
+    // Nullable with no default, and the downgrade stance follows version 8's: a version-8 database opens with no origin on
+    // any row, `absent` is what `GET /tasks/{id}` already answered for every task, and an older build ignores the column.
+    // Rows written before this version keep answering "no origin" rather than a backfilled guess — recovery must refuse
+    // their resumption rather than attribute them to whoever happens to be asking.
+    version: 9,
+    name: "task-origin",
+    up(db) {
+      db.exec(`
+        ALTER TABLE task ADD COLUMN origin_json TEXT;
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

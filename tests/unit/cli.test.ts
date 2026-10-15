@@ -74,13 +74,13 @@ test("an unknown command is refused with exit 2, and a planned verb names its mi
   const typo = crabby(["tsk", "run", "x"]);
   assert.equal(typo.code, 2);
   assert.match(typo.out, /did you mean `crabby task run`\?/, typo.out);
-  // The verb this half of the test used to pin was `task run` ("planned for M2"), then `task resume` (pinned here on the
-  // belief that `POST /api/v1/tasks/{id}/resume` had no route, F-47). Both were built — D-121 built `task resume` and the
-  // route with it — so the pin moved again rather than the assertion being deleted: what is asserted is the *contract*,
-  // that a planned verb says it is planned and names the milestone, with the shape of the sentence rather than a
-  // milestone that will age. `model edit` is the verb in that state now, and it will be built by the next slices, at
-  // which point this pin moves a third time — that is the test working, not the test being wrong.
-  const planned = crabby(["model", "edit"]);
+  // The verb this half of the test used to pin was `task run` ("planned for M2"), then `task resume` (pinned on the
+  // belief that `POST /api/v1/tasks/{id}/resume` had no route, F-47), then `model edit`. All three were built — D-121, then
+  // D-127 — so the pin moved each time rather than the assertion being deleted: what is asserted is the *contract*, that a
+  // planned verb says it is planned and names the milestone, with the shape of the sentence rather than a milestone that
+  // will age. `model probe` is the verb in that state now. It needs a credential a Gateway holds and a route that does not
+  // exist, so it is not the next thing to be built — which is why it is a stable pin for a while.
+  const planned = crabby(["model", "probe"]);
   assert.equal(planned.code, 2);
   assert.match(planned.out, /not implemented yet — planned for M\d/);
   // `task run` is a real command now, so its two refusals are the two §7.1 keeps apart: no objective is a usage

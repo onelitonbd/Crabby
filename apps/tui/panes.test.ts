@@ -184,7 +184,13 @@ describe("the tasks pane inside a frame", () => {
     const descriptor = PANE_DESCRIPTORS.find((entry) => entry.pane === "tasks");
     assert.ok(descriptor !== undefined, "the tasks pane has a descriptor");
     if (descriptor === undefined) return;
-    const state: FrameState = paneState(ctx, descriptor, tasksPane(ctx, TASKS), statusFrom(ctx, TASKS), false);
+    const state: FrameState = paneState(
+      ctx,
+      descriptor,
+      tasksPane(ctx, TASKS),
+      statusFrom(ctx, TASKS),
+      false,
+    );
     const lines = frameLines(state, 40, 24);
     for (const line of lines) {
       assert.ok(visibleWidth(line) <= 40, `${visibleWidth(line)} columns: ${line}`);

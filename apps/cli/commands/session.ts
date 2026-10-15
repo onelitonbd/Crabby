@@ -22,6 +22,7 @@ import {
   EXIT,
   type ExitCode,
   type SessionActionBody,
+  type SessionContextBody,
   type SessionDetailBody,
   type SessionListBody,
   UNNAMED_TITLE,
@@ -70,6 +71,14 @@ export async function runSession(
   // C11-04's title arrives as one positional after the id, quoted by the shell. Taken whole rather than joined from the
   // remaining words, because a title with two spaces in it is a title and a verb that collapsed them would be editing
   // what the user typed.
+  // C11-03's id, answered as a usage question for the reason `task cancel`'s is: a malformed command is exit 2 whether or
+  // not a Gateway is running, and `session show` with no id is a malformed command rather than a conversation with none.
+  const showId = verb === "show" ? tail.positionals[0] : undefined;
+  if (verb === "show" && showId === undefined) {
+    renderer.line("session show", "which session? `crabby session ls` prints the ids");
+    renderer.fix("`crabby context show <id>` prints the budget and pins on their own");
+    return EXIT.usage;
+  }
   const title = verb === "rename" ? tail.positionals[1] : undefined;
   if (verb === "rename") {
     if (tail.positionals[0] === undefined) {
@@ -183,6 +192,66 @@ export async function runSession(
       return EXIT.success;
     }
 
+    if (verb === "show" && showId !== undefined) {
+      const id = showId;
+      // C11-03: "the union of what `context show` and `task ls` say about one session", in <=12 lines. Three reads,
+      // three sentences about failure, and no rendering that hides a zero — the same rule `context show` prints by.
+      const detail = (await client.session(id)).body as SessionDetailBody;
+      if (renderer.json) return renderer.done({ ...detail });
+      const [context, messages] = await Promise.all([
+        client.sessionContext(id).then((response) => response.body as SessionContextBody),
+        client
+          .sessionMessages(id, { limit: 20 })
+          .then(
+            (response) =>
+              response.body as {
+                items: { ordinal: number; role: string; content: string }[];
+                count: number;
+              },
+          ),
+      ]);
+      renderer.line(
+        "session",
+        `${detail.session.id} · ${detail.session.titleShown} · ${detail.session.origin}`,
+      );
+      renderer.line(
+        "model",
+        `${detail.session.model ?? "the install default"} · last activity ${detail.session.lastActivityAt}`,
+      );
+      renderer.line(
+        "budget",
+        context.budget === undefined
+          ? "unknown \u2014 this conversation's model cannot describe itself (PROVIDERS_AND_TOOLS.md \u00a73.2)"
+          : `about ${context.projected.tokens.toLocaleString("en-US")} of ${context.budget.compactAtTokens.toLocaleString("en-US")} tokens before compaction (${context.budget.compactAt}), estimated`,
+      );
+      renderer.line(
+        "turns",
+        `${context.turns} recorded · ${context.compacted.length} compaction(s) · ` +
+          `${context.pinned.length === 0 ? "nothing pinned" : context.pinned.map((range) => `turns ${range.from}-${range.through} pinned`).join(", ")}`,
+      );
+      // The recent turns, not all of them: a conversation kept for a month holds more text than \u00a712 lines can
+      // print, and a truncated page with its true count beside it is the honest shape \u00a72's bounded-list rule asks for.
+      for (const turn of messages.items.slice(-3)) {
+        const text = turn.content.replace(/\s+/g, " ").trim();
+        renderer.raw(
+          `  ${String(turn.ordinal).padStart(3)} ${turn.role.padEnd(9)} ${text.slice(0, 88)}${text.length > 88 ? "\u2026" : ""}`,
+        );
+      }
+      renderer.line(
+        "tasks",
+        detail.taskCount === 0
+          ? "none"
+          : detail.tasks
+              .slice(0, 5)
+              .map((task) => `${task.id} ${task.state}`)
+              .join(", ") + (detail.taskCount > 5 ? `, and ${detail.taskCount - 5} more` : ""),
+      );
+      renderer.fix(
+        `crabby context show ${id} for the section costs, and \`crabby session messages ${id}\` for every turn`,
+      );
+      return EXIT.success;
+    }
+
     if (verb === "compact") {
       const id = tail.positionals[0];
       if (id === undefined) {
@@ -220,7 +289,7 @@ export async function runSession(
       "which verb? `ls`, `new`, `rename`, `compact`, `pin`, `unpin` or `context`",
     );
     renderer.fix(
-      "`show` is planned and there is deliberately no `delete`: destroying a conversation is " +
+      "there is deliberately no `delete`: destroying a conversation is " +
         "`crabby history delete-session`, so there is one command that does it and one place to look (C11-05)",
     );
     return EXIT.usage;

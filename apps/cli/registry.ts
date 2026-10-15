@@ -369,13 +369,12 @@ export const COMMANDS: readonly CommandSpec[] = [
     verb: "show",
     summary: "one conversation: title, turns, tasks, budget, pinned items (C11-03)",
     flags: ["--json"],
-    // Planned and not missing, and the distinction is the whole row. C11-03 asks for five fields in one screen; three of
-    // them now exist but on their own routes (`messages`, `context`, and the pin verbs), and `session context` is the
-    // verb a person would use today. `GET /api/v1/sessions/{id}` still names `context` and `pins` in its `absent` list,
-    // because *this* route does not carry them — a combined screen is a design that M3's interfaces will have to earn,
-    // not one this slice should assemble for them.
-    status: "planned",
-    milestone: "M3 (the combined session screen across CLI, TUI, Web and Telegram)",
+    // Ready because all five of C11-03's fields now have a route behind them: `GET /sessions/{id}` for the title, the
+    // tasks and the origin, `GET /sessions/{id}/messages` for the turns (D-112), and `GET /sessions/{id}/context` for the
+    // budget and the pinned items (D-119). The verb reads all three rather than asking for a sixth route, because §19's
+    // rule is that an interface requests, displays and relays — a combined screen assembled by the Gateway would be a
+    // second opinion about what a conversation is, which is D-103's reason applied to a screen rather than to a list.
+    status: "ready",
   },
   {
     noun: "session",

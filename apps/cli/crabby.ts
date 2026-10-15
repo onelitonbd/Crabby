@@ -45,6 +45,7 @@ import { runSession, type SessionVerb } from "./commands/session.ts";
 import { runStatus } from "./commands/status.ts";
 import { runTask, type TaskVerb } from "./commands/task.ts";
 import { runTools } from "./commands/tools.ts";
+import { runTuiCommand } from "./commands/tui.ts";
 import { readVersion, runVersion } from "./commands/version.ts";
 import { commandName, findCommand, helpText, suggest } from "./registry.ts";
 
@@ -268,6 +269,20 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     case "model": {
       return runModel(verb as ModelVerb | undefined, rest, layout, renderer);
+    }
+    case "tui": {
+      // The TUI is an application, not a verb, so it is answered here rather than from `registry.ts` — and the reason is
+      // written at the top of `commands/tui.ts`. It runs against `--data-dir` like every other command, because the pairing,
+      // the config and the database are one install's facts whichever surface asks.
+      return runTuiCommand(
+        rest,
+        resolveDataDir({
+          home,
+          cwd: process.cwd(),
+          ...(parsed.dataDir ? { dataDir: parsed.dataDir } : {}),
+        }),
+        process.stdout,
+      );
     }
     case "chat": {
       // The one verb that takes no sub-verb: C5-01 writes `crabby chat "…"`, and a bare `crabby chat` is C11-06's

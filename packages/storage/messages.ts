@@ -126,6 +126,24 @@ export function countMessages(db: SqliteDb, sessionId: string): number {
   ).n;
 }
 
+/** One small integer per turn: its ordinal, whether it is pinned, and how long its content is. D-119's context view
+ *  needs a cost *per section* (C10-01: "each section with its cost"), and this is how it gets one without loading
+ *  the conversation: SQLite counts the characters and hands over three numbers per turn, so a conversation of a
+ *  thousand turns costs a thousand tiny rows rather than a thousand texts. `LENGTH(content)` on a TEXT value counts
+ *  characters, not bytes, which is what §3.4's heuristic divides — so the number that leaves the store is already
+ *  in the unit the estimate wants. */
+export function messageLengths(
+  db: SqliteDb,
+  sessionId: string,
+): readonly { readonly ordinal: number; readonly pinned: boolean; readonly chars: number }[] {
+  const rows = db
+    .prepare(
+      "SELECT ordinal, pinned, LENGTH(content) AS chars FROM message WHERE session_id = ? ORDER BY ordinal ASC",
+    )
+    .all(sessionId) as { ordinal: number; pinned: number; chars: number }[];
+  return rows.map((row) => ({ ordinal: row.ordinal, pinned: row.pinned === 1, chars: row.chars }));
+}
+
 /** D-119's three pin operations, over ordinals because ordinals are what a reader of
  *  `GET /sessions/{id}/messages` holds — a turn's id is a machine name, its ordinal is the number the transcript
  *  prints, and a pin named in the number a person can see is a pin a person can check.

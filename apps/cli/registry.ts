@@ -320,18 +320,23 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "context",
     verb: "show",
-    summary: "what is in budget, compacted, and pinned",
+    summary: "what is in budget, what was compacted, what is pinned — each section with its cost (C10-01)",
     flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (the context manager)",
+    // C10-01 and C10-05, built on `GET /sessions/{id}/context` (D-119). The row's load-bearing clause is the one about
+    // empties: "a section costing 0 prints `0` rather than being hidden", because a drawer that hides an empty section
+    // says "there is nothing pinned" — which is a different and wrong claim. `--json` carries the contracts' own body,
+    // byte counts included, so a cron wrapper can stop filling a session it cannot see.
+    status: "ready",
   },
   {
     noun: "context",
     verb: "pin",
-    summary: "keep a ref alive through compaction",
-    flags: ["--remove"],
-    status: "planned",
-    milestone: "M2 (the context manager)",
+    summary: "list pinned turns, pin a ref, or unpin one (C10-02)",
+    flags: ["--remove", "--json"],
+    // Three jobs in one verb because C10-02 says so: no ref lists, a ref pins, `--remove` unpins. A ref is an ordinal
+    // or `first..last`, because that is what `session messages` prints; a pinned turn is sent as it is and is never
+    // summarized, so a conversation whose pins crowd its budget is refused rather than quietly trimmed.
+    status: "ready",
   },
   {
     noun: "session",
@@ -388,29 +393,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     // printed from the contracts rather than written a fifth time.
     status: "ready",
   },
-  {
-    noun: "session",
-    verb: "pin",
-    summary: "protect a turn, or a range of them, from compaction (D-119)",
-    flags: ["--json"],
-    // Ordinals, because `session messages` prints them. A pinned turn is sent as it is and is never summarized,
-    // which also means a conversation whose pins crowd its budget is refused rather than quietly trimmed.
-    status: "ready",
-  },
-  {
-    noun: "session",
-    verb: "unpin",
-    summary: "stop protecting a turn (D-119)",
-    flags: ["--json"],
-    status: "ready",
-  },
-  {
-    noun: "session",
-    verb: "context",
-    summary: "what is in budget, what was compacted, what is protected (D-119, §8.1)",
-    flags: ["--json"],
-    status: "ready",
-  },
+
   {
     noun: "job",
     verb: "ls",

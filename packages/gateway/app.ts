@@ -118,6 +118,7 @@ import {
   SESSION_ORIGINS,
   type SessionActionBody,
   type SessionActionCode,
+  type ContextSection,
   type SessionContextBody,
   type SessionDetailBody,
   type SessionListBody,
@@ -184,6 +185,7 @@ import {
   listSessions,
   listTasks,
   messageCharCount,
+  messageLengths,
   mintPairingCode,
   patchSession,
   pinMessages,
@@ -751,6 +753,44 @@ async function describedModel(
  *  a rule nobody priced. */
 function budgetDescriptorOf(descriptor: ModelDescriptor): BudgetDescriptor {
   return { contextWindow: descriptor.contextWindow, maxOutputTokens: descriptor.maxOutputTokens };
+}
+
+/** C10-01's per-section costs, in one pass over `messageLengths` rather than three aggregates: the sections are
+ *  defined by membership (a turn is *covered* if some summary's range names it, *pinned* if its flag is set, and
+ *  *current* if neither), and three separate queries would each have to read the same rows to answer a question
+ *  about a partition of them. A summary row is itself current — it is the newest thing in the conversation, not a
+ *  thing a compaction replaced. */
+function contextSections(
+  db: SqliteDb,
+  sessionId: string,
+  summaries: readonly MessageRecord[],
+): Record<"compacted" | "pinned" | "current", ContextSection> {
+  const covered = summaries.flatMap((summary) =>
+    summary.covers === undefined ? [] : [summary.covers],
+  );
+  const section = { chars: 0, turns: 0 };
+  const compacted = { ...section };
+  const pinned = { ...section };
+  const current = { ...section };
+  for (const row of messageLengths(db, sessionId)) {
+    const isCovered =
+      covered.some((range) => row.ordinal >= range.from && row.ordinal <= range.through) &&
+      summaries.every((summary) => summary.ordinal !== row.ordinal);
+    const into = row.pinned ? pinned : isCovered ? compacted : current;
+    into.chars += row.chars;
+    into.turns += 1;
+  }
+  const withTokens = (part: { chars: number; turns: number }) => ({
+    chars: part.chars,
+    tokens: estimateFromChars(part.chars),
+    source: "estimated" as const,
+    turns: part.turns,
+  });
+  return {
+    compacted: withTokens(compacted),
+    pinned: withTokens(pinned),
+    current: withTokens(current),
+  };
 }
 
 function composedPool(deps: GatewayDeps): readonly Provider[] {
@@ -2216,6 +2256,7 @@ function registerSessionRoutes(app: FastifyInstance, deps: GatewayDeps): void {
             },
           }),
       turns: size.rows,
+      sections: contextSections(deps.db, session.id, summaries),
       ...(modelId === undefined ? {} : { model: modelId }),
       compacted: summaries.map((row) => ({
         messageId: row.id,

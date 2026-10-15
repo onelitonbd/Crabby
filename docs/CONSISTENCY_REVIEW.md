@@ -1408,6 +1408,37 @@ that provider; a pin no entry answers is refused 400 with the pool's ids before 
 exactly what the thirty-ninth slice named minus the pin: per-task capability narrowing still has no carrier in
 `CreateTaskBody`.
 
+### F-59 — The forty-sixth slice built the context verbs under the wrong noun, and a row's empties clause went unread
+
+**Severity: low, closed by the forty-seventh slice one commit after it was opened, and kept because the shape of it is
+the lesson: an element inventory is a specification, and building a feature from the architecture instead of from the
+inventory produces working code in the wrong place.** `docs/review/CLI.md` region C10 says `crabby context show
+<session>` and `crabby context pin <session> [ref]`, and the forty-sixth slice shipped `crabby session context`,
+`crabby session pin` and `crabby session unpin` instead — three verbs that answer the same questions and are spelled
+the way the slice that wrote them happened to think of them. Nothing failed: the routes were the routes, the parity
+check counted commands rather than names, and `scripts/parity.ts` compares §8's matrix against the registry, which
+agreed with itself. What the slice *also* could not do, because the route it built did not answer it, is C10-01's
+"each section with its cost" — and the clause that matters most in that row is the one about **empties**: "a section
+costing 0 prints `0` rather than being hidden". A view that hides an empty section does not look empty; it looks like
+"there is nothing pinned", which is a different and wrong claim, and it is the kind of small lie a screen tells while
+being perfectly reasonable.
+
+The lesson is about *where the specification lives*. §4.2, §6.1 and the transition table were all read while building,
+because they are the documents a runtime is argued from; the element inventories were read afterwards, to check the
+names. C10 is a case where the inventory carried the requirement the architecture did not: no document says "print
+each section's cost", and §8.1 says only that a user should be able to review what was compacted. So the fix in D-120 is
+the verb move (the noun C10 names, and the session-level verbs removed rather than aliased — §9's one-path rule is about
+behaviour and an alias is a second path nobody asked for), the per-section costs with **characters** beside tokens
+(C10-05's "byte counts … so a cron wrapper can stop filling a session it cannot see", and a heuristic's token count is
+not a byte count), and `session compact`'s promise printed in every outcome because C10-03's clause is about what the
+output *must not* imply.
+
+**Closing condition:** the `context` noun carries the rows' two verbs, `GET /sessions/{id}/context` answers a cost per
+section with the empties still printable, and the three sections are a partition of the conversation so a client can
+add them up. Closed by D-120; what remains planned is C11-03's combined `session show`, whose milestone now names the
+reason precisely — its five fields exist across three routes, and assembling them for one screen is a decision M3's four
+interfaces should earn rather than one a runtime slice should make for them.
+
 ### F-58 — `POST /approvals/{id}/decision` records the answer and nothing in the process spends it
 
 **Severity: high, closed by the thirty-first slice one commit after it was opened, and kept here in full because the

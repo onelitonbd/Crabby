@@ -215,6 +215,16 @@ export const COMPACTION_REFUSALS = [
 ] as const;
 export type CompactionRefusalName = (typeof COMPACTION_REFUSALS)[number];
 
+/** One section's cost. `chars` is measured (§3.4 counts characters); `tokens` is D-064's heuristic over them and
+ *  carries its label, because the only way this build can produce a measurement is an adapter that ships a counter
+ *  and `GET /sessions/{id}/context` never has one. */
+export interface ContextSection {
+  readonly chars: number;
+  readonly tokens: number;
+  readonly source: "measured" | "estimated";
+  readonly turns: number;
+}
+
 /** `POST /sessions/{id}/pin`'s body. A turn **or a range**, because the owner's answer was exactly that: pinning
  *  one turn is the common case and a range is the same fact written twice, so one body carries both and the route
  *  turns `from === through` into a single turn rather than making the caller know which spelling it wants.
@@ -250,6 +260,13 @@ export interface SessionContextBody {
   };
   readonly turns: number;
   readonly model?: string | undefined;
+  /** C10-01's "each section with its cost", and C10-05's "byte counts and budget headroom in machine form". Three
+   *  sections because three questions are asked about a conversation's context: what a compaction replaced
+   *  (`compacted`), what the user protected (`pinned`), and what would actually be sent (`current` — the two above
+   *  plus the verbatim tail). Each carries characters as well as tokens, because a script deciding whether to keep
+   *  talking to this session wants the number the store counted, not only the number a heuristic guessed. */
+  readonly sections: Readonly<Record<"compacted" | "pinned" | "current", ContextSection>>;
+
   /** Every compaction this conversation has had: the summary row and the range it stands in for. Present rather
    *  than absent-when-empty, so a client can draw "nothing compacted yet" without a null check. */
   readonly compacted: readonly {

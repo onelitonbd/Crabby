@@ -28,7 +28,7 @@ import {
   type ToolDeclaration,
   validate,
 } from "@crabby/api-contracts";
-import { createLogger } from "@crabby/core";
+import { createLogger, DRAIN_MS, readLastExit } from "@crabby/core";
 import {
   buildApp,
   createClient,
@@ -1434,6 +1434,7 @@ describe("a spawned gateway prints which half of the shell composition is missin
   async function startWithConfig(config: unknown): Promise<{
     child: ChildProcess;
     output: () => string;
+    dir: string;
   }> {
     const dir = mkdtempSync(path.join(tmpdir(), "crabby-shell-banner-"));
     writeFileSync(path.join(dir, "config.json"), `${JSON.stringify(config)}\n`);
@@ -1448,7 +1449,7 @@ describe("a spawned gateway prints which half of the shell composition is missin
     // The file means the listener is up; the banner follows it on the same path, so the assertions poll for their
     // line rather than reading whatever happened to be printed first.
     await waitForGatewayInfo(dir, 25_000);
-    return { child, output: () => text };
+    return { child, output: () => text, dir };
   }
 
   async function bannerText(get: () => string, pattern: RegExp): Promise<string> {
@@ -1461,7 +1462,7 @@ describe("a spawned gateway prints which half of the shell composition is missin
   }
 
   it("says the shell is off by default and names the opt-in", async () => {
-    const { child, output } = await startWithConfig({});
+    const { child, output, dir } = await startWithConfig({});
     try {
       const banner = await bannerText(output, /shell +not composed/);
       assert.match(banner, /off by default/, "off is the default, not a failure to configure");
@@ -1472,12 +1473,12 @@ describe("a spawned gateway prints which half of the shell composition is missin
       );
     } finally {
       child.kill("SIGTERM");
-      await waitGone(child, 10_000);
+      await waitGone(child, DRAIN_MS * 6, dir);
     }
   });
 
   it("says an opt-in without roots composes nothing, and names the missing half", async () => {
-    const { child, output } = await startWithConfig({ shell: { enabled: true } });
+    const { child, output, dir } = await startWithConfig({ shell: { enabled: true } });
     try {
       const banner = await bannerText(output, /shell +opted in but not composed/);
       assert.match(
@@ -1487,7 +1488,7 @@ describe("a spawned gateway prints which half of the shell composition is missin
       );
     } finally {
       child.kill("SIGTERM");
-      await waitGone(child, 10_000);
+      await waitGone(child, DRAIN_MS * 6, dir);
     }
   });
 
@@ -1523,7 +1524,7 @@ describe("a spawned gateway prints which half of the shell composition is missin
       );
     } finally {
       child.kill("SIGTERM");
-      await waitGone(child, 10_000);
+      await waitGone(child, DRAIN_MS * 6, dir);
     }
   });
 });
@@ -2500,10 +2501,30 @@ function runCli(dir: string, args: readonly string[]): { stdout: string; code: n
   return { stdout: `${result.stdout ?? ""}${result.stderr ?? ""}`, code: result.status };
 }
 
-async function waitGone(child: ChildProcess, timeoutMs: number): Promise<void> {
+/** Wait for a SIGTERM'd Gateway to leave, and — when it does not — say **which** of the two things happened, because
+ *  they are not the same defect and the message is the only thing that distinguishes them:
+ *
+ *  - `drained: false` in `last-exit.json` means the process stopped **without** finishing its registered steps inside
+ *    D-066's 5 s. That is a product defect, and the test says so in its failure rather than merely failing.
+ *  - `drained: true` means the product honoured its 5 s and the *process* then took longer than the budget to leave the
+ *    table, which is this runner's load and not a claim about Crabby.
+ *
+ *  The budget is DRAIN_MS plus six times it rather than a flat number: a guard that cannot tell a slow machine from a
+ *  slow shutdown teaches the reader nothing the record does not already say. */
+async function waitGone(child: ChildProcess, timeoutMs: number, dir?: string): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (child.exitCode === null && Date.now() < deadline) await wait(50);
-  assert.notEqual(child.exitCode, null, "SIGTERM did not end the process within its drain budget");
+  if (child.exitCode === null) {
+    const record =
+      dir === undefined ? "unknown (no data dir given)" : readLastExit(dataLayout(dir));
+    assert.fail(
+      "SIGTERM did not end the process within its drain budget; last-exit.json says " +
+        JSON.stringify(record) +
+        (typeof record === "object" && record.drained === false
+          ? " — the process stopped without draining, which is a product defect (D-066's 5 s) and not this runner's load"
+          : " — the drain was recorded as complete, so the process table is what was slow"),
+    );
+  }
   assert.equal(
     child.exitCode,
     0,

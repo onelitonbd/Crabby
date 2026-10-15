@@ -187,10 +187,13 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "task",
     verb: "resume",
-    summary: "explicit resume after an auto-recovery decline",
+    summary: "continue a paused task, and print what will be skipped vs repeated (C6-10)",
     flags: ["--json"],
-    status: "planned",
-    milestone: "M2 (recovery that cannot bypass approvals)",
+    // Ready because the route is, and it answers two positions with one verb: this process's park (D-044's model ask,
+    // answered with `<id> [provider/model]`, no model meaning the same one again) and a task a restart left
+    // `interrupted`, which D-111 rebuilt from the boundary. C6-10's clause is why the checkpoint is read *before* the
+    // answer: after the resume the boundary has moved, so "skipped vs repeated" would be a fact the user cannot act on.
+    status: "ready",
   },
   {
     // `ready` because the milestone named a service that has been composed into the Gateway since before this entry was

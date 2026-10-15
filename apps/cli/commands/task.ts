@@ -33,7 +33,7 @@ import { connect, reportFailure, reportNoGateway } from "../connect.ts";
 import { clip, type Renderer, shortId } from "../output.ts";
 import { findCommand } from "../registry.ts";
 
-export type TaskVerb = "ls" | "show" | "cancel" | "watch" | "run";
+export type TaskVerb = "ls" | "show" | "cancel" | "watch" | "run" | "resume";
 
 /** The events that end a task, derived rather than retyped: `TERMINAL_STATES` is the constant the runtime uses to decide
  *  that a run is over, and a watch that could not see those events would never know to stop. Naming them as
@@ -61,6 +61,17 @@ export async function runTask(
   const cancelId = verb === "cancel" ? tail.positionals[0] : undefined;
   if (verb === "cancel" && cancelId === undefined) {
     renderer.line("task cancel", "which task? `crabby task ls` prints the ids");
+    return EXIT.usage;
+  }
+  // C6-10's model answer: `crabby task resume <id> <provider>/<model>` answers D-044's ask, and with no model the
+  // answer is "the same one again". Read before the Gateway is asked, for the reason the cancel guard gives.
+  const resumeId = verb === "resume" ? tail.positionals[0] : undefined;
+  if (verb === "resume" && resumeId === undefined) {
+    renderer.line("task resume", "which task? `crabby task ls` prints the ids");
+    renderer.fix(
+      "`crabby task resume <id>` answers a pause, and `crabby task resume <id> <provider>/<model>` answers D-044's ask " +
+        "for a different model; a task waiting on approval is answered at `crabby approval approve <id>` instead",
+    );
     return EXIT.usage;
   }
   const cancelMode = verb === "cancel" ? tail.values.mode : undefined;
@@ -282,6 +293,81 @@ export async function runTask(
     } catch (error) {
       return reportFailure(renderer, error);
     }
+  }
+
+  if (verb === "resume" && resumeId !== undefined) {
+    // C6-10's whole content: "resumes from the checkpoint and prints what will be skipped vs repeated, so nothing
+    // re-runs silently (D-044)". The checkpoint is read **before** the answer, because that is the only moment the
+    // skipped-vs-repeated answer is knowable in advance: after the resume the boundary has moved and the verdict has
+    // been spent, so a resume that printed it afterwards would be printing a fact the user cannot act on.
+    let checkpoint: TaskCheckpoint | undefined;
+    try {
+      checkpoint = (await connection.client.taskCheckpoint(resumeId)).body as TaskCheckpoint;
+    } catch {
+      // A task that never committed a step has no boundary and §4.1 answers 404 for it. That is not a failure of this
+      // command: D-065 has nothing to resume from, and the verdict line below says so rather than hiding it.
+      checkpoint = undefined;
+    }
+    const model = tail.positionals[1];
+    let task: TaskRecord;
+    try {
+      task = (await connection.client.resumeTask(resumeId, model === undefined ? {} : { model }))
+        .body as TaskRecord;
+    } catch (error) {
+      // The route's refusals are sentences written to be read (§4.3): not-parked, already settled, a pending approval
+      // row, an in-flight step whose effect cannot be established. `reportFailure` prints the Gateway's own words
+      // rather than a summary of them, because the difference between "you asked for the wrong kind of task" and
+      // "this task cannot be continued" is the whole content of the answer.
+      return reportFailure(renderer, error);
+    }
+    if (renderer.json) {
+      renderer.raw(
+        JSON.stringify({ ok: true, task, ...(checkpoint === undefined ? {} : { checkpoint }) }),
+      );
+      return EXIT.success;
+    }
+    renderer.line("task", `${task.id} \u00b7 ${task.state}`);
+    if (checkpoint === undefined) {
+      renderer.line(
+        "skipped vs repeated",
+        "no committed step boundary \u2014 nothing was skipped, nothing will be repeated, and the run starts from its " +
+          "prompt",
+      );
+    } else {
+      const verdict = checkpoint.resume.verdict;
+      const tool = checkpoint.resume.inFlight?.tool;
+      const skipped = `${checkpoint.step} committed step(s) up to the ${checkpoint.boundary} boundary`;
+      renderer.line(
+        "skipped vs repeated",
+        verdict === "re-ask"
+          ? "skipped: " +
+              skipped +
+              "; repeated: nothing \u2014 but " +
+              (tool === undefined
+                ? "a step was in flight when the process ended and its effect cannot be established, so the run asks again " +
+                  "rather than assuming either way (SECURITY.md \u00a77 keeps call.args out of the checkpoint)"
+                : tool +
+                  " was in flight and its effect cannot be established, so the run asks again rather than " +
+                  "repeating a step whose side effect may already have happened")
+          : "skipped: " +
+              skipped +
+              "; repeated: none \u2014 the steps before the boundary are not run again (D-044)",
+      );
+    }
+    if (model !== undefined) {
+      // D-044's switch is on the task, so the record is where the user checks it, and \u00a73.6 stage 3 requires the
+      // record to show the original model beside the chosen one.
+      renderer.line("model", task.model ?? "the install default");
+      renderer.fix(
+        "the switch, the reason and the ladder stage that reached it are on crabby task show <id>",
+      );
+    }
+    renderer.fix(
+      "crabby task watch " +
+        task.id +
+        " \u2014 the run continues from here and the events are on the record",
+    );
+    return EXIT.success;
   }
 
   if (verb === "run" && runObjective !== undefined) {
@@ -613,9 +699,10 @@ export async function followTask(input: FollowInput): Promise<ExitCode> {
         (state === "awaiting_approval" || event.type === "approval.requested")
       ) {
         await reader.cancel();
-        // Three sentences for three pauses, because the fixes are three different things. The ladder's ask names the route
-        // that answers it, because that is what exists in this build — the `task resume` verb C6-10 prints is M3's grammar,
-        // and a fix line naming a command that cannot run is worse than one naming the route that can.
+        // Three sentences for three pauses, because the fixes are three different things. The ladder's ask names the verb
+        // that answers it now (`task resume`, C6-10) and the pair to pass it, because a fix line naming a command that
+        // cannot run is worse than one that can — and naming the route instead was only right while the verb was M3's
+        // unwritten grammar.
         const answer =
           promptId !== undefined
             ? "`crabby approval approve " +
@@ -624,11 +711,12 @@ export async function followTask(input: FollowInput): Promise<ExitCode> {
               promptId +
               "` ends the step; `--wait-approval`, §7.1's opt-in to keep blocking here, is in no registry yet"
             : askSpent !== undefined
-              ? "answer POST /api/v1/tasks/" +
+              ? "crabby task resume " +
                 taskId +
-                "/resume with one of the models the ask offers, or with `{}` to retry the same one (`crabby task resume " +
+                " [provider/model] answers it \u2014 with no model the answer is the same one again; the models the " +
+                "ask offered are on `crabby task show " +
                 taskId +
-                "`, C6-10, is M3's grammar and is in no registry yet)"
+                "`"
               : "`crabby task show " +
                 taskId +
                 "` prints why — a task paused under D-086 has no prompt to answer, and nothing resumes it but a new run";

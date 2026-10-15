@@ -22,6 +22,8 @@
 // properties a screen depends on — an unchanged frame writes *nothing* (P-011's budget spent only where something moved),
 // a changed frame writes only the changed lines, and a shrinking frame never moves the cursor above where it started
 // (which in a normal buffer means erasing the user's scrollback).
+export { clip } from "@crabby/platform";
+
 import { clip } from "@crabby/platform";
 
 /** The four things a terminal can be asked to do, and nothing else. Pane code never writes an escape sequence itself, so

@@ -9,8 +9,11 @@
 // sibling (`frame.test.ts`) exists to catch, and a pane that asserts nothing is how that failure arrives unnoticed.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { type FrameState, frameLines } from "./frame.ts";
+import { applyAction, emptyComposer } from "./composer.ts";
+import { FRAME_CHROME_ROWS, type FrameState, frameLines } from "./frame.ts";
 import {
+  chatKey,
+  chatPane,
   PANE_DESCRIPTORS,
   type PaneContext,
   paneState,
@@ -20,6 +23,7 @@ import {
   tasksPane,
 } from "./panes.ts";
 import { visibleWidth } from "./render.ts";
+import { applyEvent, emptyTranscript } from "./transcript.ts";
 
 const TASKS: readonly TaskSummary[] = [
   {
@@ -200,5 +204,129 @@ describe("the tasks pane inside a frame", () => {
       lines.join(" | "),
     );
     assert.ok(lines.at(-2)?.includes("approvals"), lines.at(-2) ?? "");
+  });
+});
+
+describe("the chat pane", () => {
+  const CAPS = { fs: "workspace", net: false, shell: false };
+
+  function transcriptWith(
+    ...frames: readonly { type: string; payload: Record<string, unknown> }[]
+  ) {
+    let state = emptyTranscript(40, "none");
+    for (const frame of frames) state = applyEvent(state, frame);
+    return state;
+  }
+
+  it("shows the transcript, the composer and the capability line, in that order", () => {
+    const transcript = transcriptWith(
+      {
+        type: "message.added",
+        payload: { role: "user", ordinal: 1, content: "what is in the roadmap" },
+      },
+      {
+        type: "message.added",
+        payload: { role: "assistant", ordinal: 1, content: "five decisions" },
+      },
+    );
+    const lines = chatPane(transcript, emptyComposer(), CAPS, 40, 24);
+    assert.ok(
+      lines.some((line) => line.includes("what is in the roadmap")),
+      lines.join(" | "),
+    );
+    // The capability line is last: T5-06 describes it as what you see *before sending*, and putting it above the input
+    // would make it read as part of the message being composed.
+    assert.equal(lines.at(-1), "fs: workspace · net: off · shell: off");
+  });
+
+  it("a user message is marked so the two sides of a conversation are distinguishable", () => {
+    const transcript = transcriptWith({
+      type: "message.added",
+      payload: { role: "user", ordinal: 1, content: "a question" },
+    });
+    const lines = chatPane(transcript, emptyComposer(), CAPS, 40, 24);
+    assert.ok(
+      lines.some((line) => line.startsWith("│")),
+      lines.join(" | "),
+    );
+  });
+
+  it("a failure is a panel with its code and whether it can resume (T4-11)", () => {
+    const transcript = transcriptWith({
+      type: "task.failed",
+      payload: { code: "provider_auth", message: "the endpoint refused the key", resumable: true },
+    });
+    const lines = chatPane(transcript, emptyComposer(), CAPS, 40, 24);
+    assert.ok(
+      lines.some((line) => line.includes("provider_auth")),
+      lines.join(" | "),
+    );
+    // There is no toast in a terminal, so the panel stays in the list and names the command that continues the run.
+    assert.ok(
+      lines.some((line) => line.includes("crabby task resume")),
+      lines.join(" | "),
+    );
+  });
+
+  it("the slash menu appears under the input while a command is being typed", () => {
+    let composer = emptyComposer();
+    for (const char of "/co")
+      composer = applyAction(composer, { kind: "insert", text: char }, undefined);
+    const lines = chatPane(emptyTranscript(40, "none"), composer, CAPS, 40, 24);
+    assert.ok(
+      lines.some((line) => line.trim() === "/compact"),
+      lines.join(" | "),
+    );
+  });
+
+  it("printable keys go to the composer, so the pane's own bindings cannot swallow them (T3-04)", () => {
+    // `a` is an approve in the approvals pane and a literal here. A pane-level binding that took printable keys would make
+    // the composer unusable, which is the failure T3-04's row exists to prevent.
+    const typed = chatKey(emptyComposer(), undefined, { kind: "char", char: "a" }, undefined);
+    assert.equal(typed.composer.buffer, "a");
+    const bound = chatKey(emptyComposer(), undefined, { kind: "char", char: "a" }, "approve");
+    assert.equal(bound.action, "approve");
+  });
+
+  it("Enter sends and clears the composer, Ctrl+J does not", () => {
+    const composer = applyAction(emptyComposer(), { kind: "insert", text: "hello" }, undefined);
+    const sent = chatKey(composer, undefined, { kind: "enter" }, undefined);
+    assert.equal(sent.action, "send");
+    assert.equal(
+      sent.composer.buffer,
+      "",
+      "the composer empties so the next question is not appended to this one",
+    );
+    const typed = chatKey(composer, undefined, { kind: "ctrl", letter: "j" }, undefined);
+    assert.equal(typed.action, undefined);
+    assert.equal(typed.composer.buffer, "hello\n");
+  });
+
+  it("the held note appears only when something is held", () => {
+    const transcript = emptyTranscript(40, "none");
+    assert.ok(
+      !chatPane(transcript, emptyComposer(), CAPS, 40, 24).some((line) =>
+        line.includes("new content"),
+      ),
+    );
+    assert.ok(
+      chatPane({ ...transcript, held: 3 }, emptyComposer(), CAPS, 40, 24).some((line) =>
+        line.includes("new content (3)"),
+      ),
+    );
+  });
+
+  it("the transcript never gets zero rows, even with nothing said yet", () => {
+    // A pane that has nothing left for the conversation cannot show the answer, which is the opposite of the row's purpose.
+    // The height here is the pane's, so the frame's own rows are subtracted by the caller — one party owns the chrome.
+    const body = 24 - FRAME_CHROME_ROWS;
+    const lines = chatPane(emptyTranscript(40, "none"), emptyComposer(), CAPS, 40, body);
+    // Never more than the height it was given: the status line is the one row T2 says is always true, and a pane that
+    // overflowed it by one line would push it off the bottom of a phone.
+    assert.ok(lines.length <= body, `${lines.length} lines for a body of ${body}`);
+    assert.ok(
+      lines.filter((line) => line === "").length >= body - lines.length - 1,
+      "the empty transcript is padded, not missing",
+    );
   });
 });

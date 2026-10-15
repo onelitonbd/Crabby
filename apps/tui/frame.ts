@@ -22,6 +22,11 @@ import { fit, visibleWidth } from "./render.ts";
 export const DESIGN_COLUMNS = 40;
 export const MINIMUM_COLUMNS = 40;
 
+/** Rows the frame spends on itself: the pane switch row, the pinned status line and the hint strip. **Exported because a
+ *  pane has to size itself against it**, and a pane that guessed 3 while the frame spent 4 would draw one line too many and
+ *  push the status line off the bottom — which is the one row T2 says must always be true. */
+export const FRAME_CHROME_ROWS = 3;
+
 export type ConnectionState = "live" | "reconnecting" | "offline";
 
 export interface StatusState {
@@ -317,7 +322,7 @@ export function frameLines(state: FrameState, columns: number, rows: number): re
       statusLine(state.status, columns),
     ];
   }
-  const chrome = 3;
+  const chrome = FRAME_CHROME_ROWS;
   const bodyHeight = Math.max(1, rows - chrome);
   // Fitted here as well as in the renderer, and the reason is that **the frame is where widths are decided**: a body line
   // that only gets clipped at write time is a line a pane can measure wrongly (a progress bar sized for 80 columns, a wrap

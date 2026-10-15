@@ -10,8 +10,18 @@
 // objective, its state with progress, and its model with an approval mark. At 40 columns each line is clipped by the frame,
 // so nothing here wraps: a wrapped card is how a task list turns into a wall of text on a phone.
 
+import {
+  actionFor,
+  applyAction,
+  type ComposerState,
+  capabilityLine,
+  composerView,
+  emptyComposer,
+  filterSlash,
+} from "./composer.ts";
 import type { FrameState, Pane, StatusState } from "./frame.ts";
 import { statusLine } from "./frame.ts";
+import { type TranscriptRow, type TranscriptState, visibleRows } from "./transcript.ts";
 
 /** What the pane layer is given. A client, a layout and a renderer: no terminal, no escape sequences, no clock. That is the
  *  same boundary the CLI keeps (`apps/cli/connect.ts`), and it is what lets the panes be tested without a pty. */
@@ -123,6 +133,89 @@ export function plannedPane(pane: Pane, milestone: string, equivalent: string): 
     `the same thing from a shell today: ${equivalent}`,
     "the row that asks for it is in docs/review/TUI.md",
   ];
+}
+
+/** The chat pane's body (T4/T5), built from a transcript state and a composer state. **Both are plain data**, so the pane
+ *  is a projection and the tests can read the rows without a stream, a pty or a clock.
+ *
+ *  The body is ordered transcript → composer → capability line, because that is the order the eye needs them in: the
+ *  conversation, what you are about to add to it, and what that turn may do. The capability line is **below** the input on
+ *  purpose (T5-06's row describes it as "before send"), so it is never mistaken for part of the message being composed. */
+export function chatPane(
+  transcript: TranscriptState,
+  composer: ComposerState,
+  capabilities: { readonly fs: string; readonly net: boolean; readonly shell: boolean },
+  columns: number,
+  /** The height **this pane** has, not the screen: the frame's own rows are subtracted by the caller, because the frame is
+   *  the party that owns them and a pane that re-guessed the number would drift from it the first time the help sheet added a
+   *  row. */
+  rows: number,
+): readonly string[] {
+  // The composer takes up to six rows (T5-01), the capability line one, and the transcript gets what is left — never zero,
+  // because a pane that has nothing left for the conversation is a pane that cannot show the answer.
+  const composerLines = composerView(composer, columns).lines;
+  const chrome = composerLines.length + 2;
+  const height = Math.max(1, rows - chrome);
+  const lines: string[] = [];
+  const shown = visibleRows(transcript, height);
+  for (const row of shown) {
+    for (const line of rowLines(row)) lines.push(line);
+  }
+  const padding = Math.max(0, height - lines.length);
+  for (let index = 0; index < padding; index += 1) lines.push("");
+  lines.push(...composerLines);
+  lines.push(capabilityLine(capabilities));
+  // T5-03's menu, filtered as typed, under the input and at most six lines.
+  for (const command of filterSlash(composer.buffer.slice(0, composer.cursor)))
+    lines.push(`  ${command}`);
+  // T4-12's held-position note, only when something is actually held.
+  if (transcript.held > 0) lines.push(`  new content (${transcript.held}) — press End to follow`);
+  return lines;
+}
+
+/** One transcript row's lines, flattened. A `tool` row is one collapsed line unless it was expanded (T4-07/T4-08), and an
+ *  error row is the panel T4-11 asks for: a code, one human line, and whether it can be resumed — three facts and no toast,
+ *  because there is no toast in a terminal. */
+function rowLines(row: TranscriptRow): readonly string[] {
+  switch (row.kind) {
+    case "turn":
+      return row.lines.map((line) => (row.role === "user" ? `│ ${line}` : line));
+    case "system":
+      return [`· ${row.text}`];
+    case "tool":
+      return row.lines.map((line) => `  ${line}`);
+    case "error":
+      return [
+        `! ${row.code}: ${row.line}`,
+        `  ${row.resumable ? "resumable: crabby task resume <id>" : "not resumable — the run cannot continue"}`,
+      ];
+    case "note":
+      return [row.text];
+    default:
+      return [];
+  }
+}
+
+/** Key handling for the chat pane: the composer's own table first, then the pane's bindings. **The composer wins for
+ *  printable characters**, because T3-04's rule is that `a` is a literal in the composer and an approve elsewhere — a
+ *  pane-level binding that swallowed printable keys would make the composer unusable. */
+export function chatKey(
+  composer: ComposerState,
+  previousInput: string | undefined,
+  key: Parameters<typeof actionFor>[0],
+  paneBinding: string | undefined,
+): {
+  readonly composer: ComposerState;
+  readonly action: string | undefined;
+  readonly unbound?: string;
+} {
+  if (paneBinding !== undefined) {
+    return { composer, action: paneBinding };
+  }
+  const action = actionFor(key, composer.buffer.length === 0);
+  if (action.kind === "unbound") return { composer, action: undefined, unbound: action.bytes };
+  if (action.kind === "send") return { composer: emptyComposer(), action: "send" };
+  return { composer: applyAction(composer, action, previousInput), action: undefined };
 }
 
 export interface PaneDescriptor {

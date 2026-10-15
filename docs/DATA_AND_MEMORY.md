@@ -26,7 +26,7 @@ The design must support local-first operation, Android through Termux, safe reco
 **Decided (D-104, then D-112, then D-116).** The conversation itself is a record from schema version 6, and three of the bullets above are
 answered by it; its **turns** are records from schema version 10, which answers the first three bullets outright — role,
 ordering (`ordinal`), timestamp — and the association with the right conversation, with the task named where there was one
-(`task_id` nullable, because a `/ask` turn has no task and a NOT NULL column would have made the honest row illegal). History persists across restarts because a
+(`task_id` nullable, because a `/ask` turn has no task and a NOT NULL column would have made the honest row illegal). Since D-117 the table holds **every** turn a run produces — the assistant's proposal, each tool's result, a refusal, a denial — written in the same transaction as the frame that announces it, so §2.5's second bullet ("tool calls and their results must remain associated with the relevant assistant turn or task where applicable") is answered by adjacency plus `task_id` rather than by a join table nobody built. History persists across restarts because a
 conversation now has a row that survives one, with the title W15-03 describes ("the new session starts empty and un-named,
 and the title becomes the first question asked in it"), the interface that created it (W15-11), and the moment something
 last happened in it — which is a task being created or changing state, the only activity this build records. Users can

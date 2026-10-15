@@ -97,8 +97,9 @@ import {
 import type { ApprovalRecord, Approvals } from "./approvals.ts";
 import type { CancellationEvidence, CancellationGate } from "./cancellation.ts";
 import type { CheckpointGate, CheckpointRecord } from "./checkpoint.ts";
+import type { ContextManager } from "./compact.ts";
 import { createPhaseWriter, type Emit, type TaskJournal } from "./journal.ts";
-import type { MessageWriter } from "./messages.ts";
+import type { MessageWriter, RecordedMessage } from "./messages.ts";
 import type { TransitionEvidence } from "./transitions.ts";
 
 /** §5.2's limits, priced by D-088. Each one is a `limits.*` key in `config.json` (D-074's override path), and the
@@ -449,6 +450,14 @@ export interface LoopDeps {
    *  §5.2's "anything a client must act on is also retrievable" — so with no writer there is no `message.added` either,
    *  and a transcript built from the stream shows nothing rather than showing something unretrievable. */
   readonly messages?: MessageWriter | undefined;
+  /** D-117's context manager: what to do about a request that no longer fits the window. Optional for the
+   *  same reason `messages` is — a loop with no compactor still runs — and what it loses is *automatic*
+   *  compaction: the run keeps growing until the provider reports `context-overflow`, which §3.4 then
+   *  surfaces as a failure. That asymmetry is deliberate. A loop that trimmed its own history to stay under
+   *  a limit would be discarding turns the user can see, and §2.5's "must not silently replace or destroy
+   *  original conversation records" is the rule that forbids it. A run that *fails* with a readable reason
+   *  costs one retry; a run that quietly forgets the first question costs the user the conversation. */
+  readonly context?: ContextManager | undefined;
   readonly limits?: Partial<LoopLimits> | undefined;
   readonly now?: (() => number) | undefined;
   /** D-064's jitter source, injected for the reason `now` is: a jittered schedule a test cannot pin is a schedule nobody
@@ -776,23 +785,126 @@ export function createLoop(deps: LoopDeps): Loop {
    *  `idempotent` for every file tool now (D-098), and the declaration is read where §7.3 reads it — by a resume deciding
    *  whether a step may be repeated (`checkpoint.ts`'s verdict), not by a retry ladder deciding whether to guess. A failed
    *  tool result goes back to the model to plan around, which is the ladder's rung for an action with consequences. */
-  async function callProvider(
+  /** D-117's per-turn record, and the reason it exists in three places at once: §2.5's second bullet ("tool
+   *  calls and their results must remain associated with the relevant assistant turn or task where
+   *  applicable"), D-116's `covers` range (a summary may only name turns that are records), and a live
+   *  transcript (C4-05). D-112 wrote the *completion* only, inside the phase that completes the task, which
+   *  was right while a summary had nothing to point at — an in-run compaction cannot state "turns 1–6" when
+   *  turns 1–6 were never written down.
+   *
+   *  Written at the moment the turn exists, not when the run ends: the assistant's proposal arrived, the tool's
+   *  result came back, and both are facts about the world whether or not the task goes on to finish. A record
+   *  written at the end would lose exactly the turns a cancellation interrupted — the ones a user most wants
+   *  to read afterwards.
+   *
+   *  One phase per turn, so the row and the frame that announces it commit together (§9's invariant), and the
+   *  ordinal is kept beside the message object so a later compaction can name it: a `WeakMap` rather than an
+   *  index into `RunState.messages`, because that array is rebuilt on every tool round and a parallel index
+   *  is a second thing to keep aligned. */
+  const turnOrdinals = new WeakMap<ProviderMessage, number>();
+
+  /** The write half of D-117's per-turn record. Split from the announcement on purpose: a tool result commits
+   *  inside the phase that already writes `tool.execution.completed` and the step's boundary, and a second
+   *  transaction there would let a rollback take the boundary back while the turn stayed. Callers emit
+   *  `message.added` in the phase they are already in. */
+  function storeTurn(
     state: RunState,
+    message: ProviderMessage,
+    content: string,
+    at: number,
+  ): RecordedMessage | undefined {
+    const task = currentTask(state.input.taskId);
+    const stored = deps.messages?.record({
+      sessionId: task.sessionId,
+      taskId: state.input.taskId,
+      role: message.role === "system" ? "system" : message.role,
+      content,
+      at,
+    });
+    if (stored !== undefined) turnOrdinals.set(message, stored.ordinal);
+    return stored;
+  }
+
+  /** D-113's automatic trigger and §3.4's overflow rule, in one place, because both are "this request may
+   *  not fit; make it fit or say why it cannot". Called immediately before every provider call.
+   *
+   *  The ladder's own retry rule does **not** apply to a context overflow — a second identical request cannot
+   *  fix one — so the one retry §3.4 prices belongs here: compact, then try again once. That retry is spent
+   *  for the whole call, not per attempt, because a compaction that did not shrink the request is a
+   *  compaction that will not shrink the next one either. */
+  async function fitContext(
+    state: RunState,
+  ): Promise<
+    | { readonly ok: true; readonly state: RunState }
+    | { readonly ok: false; readonly error: ProviderError }
+  > {
+    const manager = deps.context;
+    if (manager === undefined) return { ok: true, state };
+    const task = currentTask(state.input.taskId);
+    const result = await manager.compact({
+      sessionId: task.sessionId,
+      taskId: state.input.taskId,
+      messages: state.messages,
+      ordinalOf: (message) => turnOrdinals.get(message),
+      ...((state.input.provider ?? provider).countTokens
+        ? { countTokens: (state.input.provider ?? provider).countTokens }
+        : {}),
+    });
+    if (result.kind === "unchanged" || result.kind === "refused") return { ok: true, state };
+    if (result.kind === "failed") {
+      return {
+        ok: false,
+        error: new ProviderError("context-overflow", result.reason, { attempt: 1 }),
+      };
+    }
+    // The new request is the summary plus the tail, so the messages that carried the covered turns are no
+    //  longer in it and their ordinals go with them: the WeakMap entries go out with the objects, which is
+    //  why nothing here has to forget them.
+    return { ok: true, state: { ...state, messages: result.messages } };
+  }
+
+  async function callProvider(
+    initial: RunState,
     offered: readonly ProviderToolSpec[],
   ): Promise<
-    | { ok: true; turn: ProviderTurn; attempts: number }
+    | { ok: true; turn: ProviderTurn; attempts: number; state: RunState }
     | { ok: false; error: unknown; attempts: number }
   > {
+    let state = initial;
     let attempt = 0;
+    // §3.4's overflow retry is spent once per call rather than per attempt: a compaction that did not shrink
+    // the request will not shrink the next one either, and a ladder that kept re-offering the same window
+    // would spend a task's whole attempt budget discovering that.
+    let overflowRetrySpent = false;
     for (;;) {
       attempt += 1;
+      // D-113's automatic trigger: before the request is built, not after it fails. A loop with no
+      // compactor wired (no Gateway, or no summarizer configured) skips this and reaches §3.4's overflow
+      // path below, which is the failure §3.4 says to surface rather than truncate around.
+      const fitted = await fitContext(state);
+      if (!fitted.ok) return { ok: false, error: fitted.error, attempts: attempt };
+      state = fitted.state;
       try {
         return {
           ok: true,
           turn: await oneProviderCall(state, offered, attempt),
           attempts: attempt,
+          state,
         };
       } catch (error) {
+        // §3.4: "on provider-reported context overflow it retries once after compaction, then surfaces the
+        // failure". The retry is this branch's own, because `shouldRetry` refuses the class on purpose.
+        if (
+          error instanceof ProviderError &&
+          error.class === "context-overflow" &&
+          !overflowRetrySpent &&
+          deps.context !== undefined &&
+          deps.cancellation?.requested(state.input.taskId) === undefined &&
+          state.input.signal?.aborted !== true
+        ) {
+          overflowRetrySpent = true;
+          continue;
+        }
         const retryable =
           error instanceof ProviderError &&
           shouldRetry(error, attempt, limits.providerAttempts) &&
@@ -987,7 +1099,25 @@ export function createLoop(deps: LoopDeps): Loop {
         );
         // A refusal is a committed boundary too: the step has an outcome (the reason), the model will be told it, and the
         // run continues from there. Nothing external happened, which is what makes it the easy case for §7.3.
-        const next = [...input.messages, toolMessage(input.toolCallId, refusal.reason)];
+        const result = toolMessage(input.toolCallId, refusal.reason);
+        const next = [...input.messages, result];
+        // D-117: the model is about to read this sentence, so the transcript must carry it — a refused step that
+        // left no record would be a turn in the conversation with a hole in it.
+        const stored = storeTurn(state, result, refusal.reason, now());
+        if (stored !== undefined) {
+          emit(
+            "message.added",
+            {
+              role: "tool",
+              messageId: stored.id,
+              ordinal: stored.ordinal,
+              content: refusal.reason,
+              tool: input.call.tool,
+              refused: true,
+            },
+            now(),
+          );
+        }
         checkpointAt(state, "step", next, input.steps);
         return { refusal, nextMessages: next };
       }
@@ -1022,7 +1152,8 @@ export function createLoop(deps: LoopDeps): Loop {
     );
     const outcome = ran.outcome;
     const doneAt = now();
-    const next = [...input.messages, toolMessage(input.toolCallId, outcome.output)];
+    const result = toolMessage(input.toolCallId, outcome.output);
+    const next = [...input.messages, result];
     phase(state.input.taskId, state.input.correlationId, (emit) => {
       emit(
         outcome.ok ? "tool.execution.completed" : "tool.execution.failed",
@@ -1035,6 +1166,23 @@ export function createLoop(deps: LoopDeps): Loop {
         },
         doneAt,
       );
+      // D-117: the result is the half of §2.5's second bullet the assistant's proposal cannot supply, and it is
+      // written in this same transaction as the outcome and the boundary — three facts about one step, or none.
+      const stored = storeTurn(state, result, outcome.output, doneAt);
+      if (stored !== undefined) {
+        emit(
+          "message.added",
+          {
+            role: "tool",
+            messageId: stored.id,
+            ordinal: stored.ordinal,
+            content: outcome.output,
+            tool: input.call.tool,
+            ...(outcome.code === undefined ? {} : { code: outcome.code }),
+          },
+          doneAt,
+        );
+      }
       // The outcome event first and the boundary second, in that order and in one transaction: the boundary's `lastSeq`
       // has to be the sequence number of the event that made the step committed, because the verdict's whole question is
       // "what does the log say happened after this point".
@@ -1107,8 +1255,28 @@ export function createLoop(deps: LoopDeps): Loop {
       if (refusals >= limits.refusalsBeforePause) {
         return { stop: pause(state, task.id, call.tool, opened.reason, refusals, at) };
       }
-      const next = [...messages, toolMessage(proposed.id, opened.reason)];
+      const blocked = toolMessage(proposed.id, opened.reason);
+      const next = [...messages, blocked];
       phase(task.id, state.input.correlationId, (emit) => {
+        // D-117: a blocked step is a turn the model is about to read and the user is about to see in the
+        // transcript. It is recorded here, beside `tool.execution.blocked` and the boundary, because a
+        // conversation with a hole where a refusal happened is the one §2.5's association bullet is about.
+        const stored = storeTurn(state, blocked, opened.reason, at);
+        if (stored !== undefined) {
+          emit(
+            "message.added",
+            {
+              role: "tool",
+              messageId: stored.id,
+              ordinal: stored.ordinal,
+              content: opened.reason,
+              tool: call.tool,
+              blocked: true,
+              refusals,
+            },
+            at,
+          );
+        }
         emit("tool.execution.blocked", { tool: call.tool, reason: opened.reason, refusals }, at);
         checkpointAt(state, "step", next, steps);
       });
@@ -1258,8 +1426,29 @@ export function createLoop(deps: LoopDeps): Loop {
       // `unavailable` carries no tier on purpose: a tool this client does not have was never classified for it, and
       // printing one would suggest the platform was the reason rather than the pairing.
       const tier = decision.outcome === "deny" ? decision.tier : undefined;
-      const next = [...messages, toolMessage(proposed.id, decision.reason)];
+      const blocked = toolMessage(proposed.id, decision.reason);
+      const next = [...messages, blocked];
       phase(task.id, correlationId, (emit) => {
+        // D-117, and the fourth of these: a denial the model is about to read is a turn like any other. A
+        // transcript that records what was *allowed* and skips what was refused is a transcript that makes
+        // the agent look more capable than it was, which is the opposite of what §2.5's association bullet
+        // is for.
+        const stored = storeTurn(state, blocked, decision.reason, at);
+        if (stored !== undefined) {
+          emit(
+            "message.added",
+            {
+              role: "tool",
+              messageId: stored.id,
+              ordinal: stored.ordinal,
+              content: decision.reason,
+              tool: call.tool,
+              blocked: true,
+              class: decision.outcome === "unavailable" ? "platform-unsupported" : "policy",
+            },
+            at,
+          );
+        }
         emit(
           "tool.execution.blocked",
           {
@@ -1319,9 +1508,44 @@ export function createLoop(deps: LoopDeps): Loop {
       const offered = offeredTools(current.subject);
       const round = await callProvider(current, offered);
       if (!round.ok) return providerFailure(current, round.error, round.attempts);
+      // A compacted call answers with the state its request was actually built from (D-113): the summary
+      // and the tail, not the turns the summary stands in for.
+      current = round.state;
       const turn = round.turn;
 
-      if (turn.toolCalls.length === 0) return complete(current, turn);
+      // One message object for this round, whatever it turns out to be: a proposal or a completion. Built
+      // once, here, because D-117's ordinal is keyed on the *object* the conversation carries, and an object
+      // built in two places is two objects a compaction cannot recognise as the same turn.
+      const proposal: ProviderMessage =
+        turn.toolCalls.length === 0
+          ? { role: "assistant", content: turn.text }
+          : { role: "assistant", content: turn.text, toolCalls: turn.toolCalls };
+
+      if (turn.toolCalls.length > 0) {
+        // §2.5's second bullet, written at the moment the proposal arrived (D-117): the transcript and any
+        // later compaction both need this turn to exist as a record, and a turn only recorded when the task
+        // finishes is a turn a cancellation erases.
+        const at = now();
+        phase(current.input.taskId, current.input.correlationId, (emit) => {
+          const stored = storeTurn(current, proposal, turn.text, at);
+          if (stored === undefined) return;
+          emit(
+            "message.added",
+            {
+              role: "assistant",
+              messageId: stored.id,
+              ordinal: stored.ordinal,
+              content: turn.text,
+              toolCalls: turn.toolCalls.map((call) => ({ id: call.id, name: call.name })),
+              usage: turn.usage,
+              finishReason: turn.finishReason,
+            },
+            at,
+          );
+        });
+      }
+
+      if (turn.toolCalls.length === 0) return complete(current, turn, proposal);
       if (turn.toolCalls.length > limits.toolCallsPerResponse) {
         return fail(
           task.id,
@@ -1335,10 +1559,9 @@ export function createLoop(deps: LoopDeps): Loop {
         );
       }
 
-      let messages: readonly ProviderMessage[] = [
-        ...current.messages,
-        { role: "assistant", content: turn.text, toolCalls: turn.toolCalls },
-      ];
+      // The same object the proposal record keyed on, so a later compaction names this turn's ordinal rather
+      // than failing to recognise it (§2.5's association bullet, read from the other end).
+      let messages: readonly ProviderMessage[] = [...current.messages, proposal];
       let steps = current.steps;
       for (const proposed of turn.toolCalls) {
         steps += 1;
@@ -1362,24 +1585,21 @@ export function createLoop(deps: LoopDeps): Loop {
     }
   }
 
-  function complete(state: RunState, turn: ProviderTurn): LoopOutcome {
+  function complete(state: RunState, turn: ProviderTurn, proposal: ProviderMessage): LoopOutcome {
     const at = now();
     const taskId = state.input.taskId;
     phase(taskId, state.input.correlationId, (emit) => {
       if (turn.text.length > 0) {
-        // D-112: the turn is written here, inside the phase that completes the task, and the frame that announces it goes
-        // out with it. Two writes, one transaction, one call — so the row and the log cannot disagree, which is the whole
-        // reason the seam is a writer rather than something a route or a tool fills in afterwards. The role is the
-        // assistant's even when the text is empty: an empty completion carries a `finishReason` a reader needs, and §2.5's
-        // "role" bullet is about who spoke rather than whether it said anything.
+        // D-112's original rule, still true and now one case of D-117's: the final turn is written here,
+        // inside the phase that completes the task, and the frame that announces it goes out with it. Two
+        // writes, one transaction, one call — so the row and the log cannot disagree, which is the whole
+        // reason the seam is a writer rather than something a route or a tool fills in afterwards. The role is
+        // the assistant's even when the text is empty: an empty completion carries a `finishReason` a reader
+        // needs, and §2.5's "role" bullet is about who spoke rather than whether it said anything. This is
+        // not a second record of the same turn — the proposal above is only recorded when the model asked for
+        // tools, and a completion is a turn that ends the run.
         const task = currentTask(taskId);
-        const stored = deps.messages?.record({
-          sessionId: task.sessionId,
-          taskId,
-          role: "assistant",
-          content: turn.text,
-          at,
-        });
+        const stored = storeTurn(state, proposal, turn.text, at);
         if (stored !== undefined) {
           emit(
             "message.added",

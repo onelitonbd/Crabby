@@ -67,6 +67,7 @@ import {
   createCheckpoints,
   type StepFacts,
 } from "./checkpoint.ts";
+import type { ContextManager } from "./compact.ts";
 import type { TaskJournal } from "./journal.ts";
 import {
   type AskCandidates,
@@ -125,6 +126,10 @@ export interface HarnessOptions {
    *  which is the rule D-112 records and the loop test below asserts. Present composes the memory writer, so a test that
    *  wants to read a transcript gets one. */
   readonly messages?: boolean;
+  /** D-117's context manager, injected rather than composed for the same reason `askCandidates` is: a harness
+   *  that built its own compactor would be testing the harness's opinion about when a conversation is full.
+   *  A test that wants automatic compaction says what its compactor decides, round by round. */
+  readonly context?: ContextManager | undefined;
   /** D-064's jitter source and the backoff wait, both injected so a ladder test asserts the *schedule* instead of
    *  sleeping through it: five rungs cost 31 real seconds, and a test that slow is a test nobody runs twice. */
   readonly random?: () => number;
@@ -677,6 +682,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.random === undefined ? {} : { random: options.random }),
     ...(options.askCandidates === undefined ? {} : { askCandidates: options.askCandidates }),
     ...(options.messages === true ? { messages: messageStore.writer } : {}),
+    ...(options.context === undefined ? {} : { context: options.context }),
     wait: recordWait,
     now: clock.now,
   });

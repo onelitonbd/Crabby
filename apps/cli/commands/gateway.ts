@@ -427,6 +427,10 @@ async function runStart(
     startedAt,
     listenerMode: "local",
     providers,
+    // D-115's context section, handed to the Gateway rather than read there (the same rule `drive` follows):
+    // this command is the composition root, and a Gateway that loaded its own configuration could not be
+    // tested against a second one. Absent when the file has none, which is exactly the defaults.
+    context: loaded.config.limits?.context,
     // The declarations `GET /api/v1/tools` merges §4.1's runtime fields from: the combined surface when a runner exists,
     // so `cron.schedule` is reported as implemented exactly when a job could fire, and the workspace executors alone
     // when it does not — a count that rose on a Gateway that drives nothing would be F-55's number lying.

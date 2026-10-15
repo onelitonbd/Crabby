@@ -6,7 +6,13 @@
 import { ok, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import { FAKE_MODEL_ID, FakeProvider, type FakeStep, ProviderError } from "@crabby/providers";
-import { type CompactionDeps, type ConversationTurn, compactConversation } from "./compact.ts";
+import {
+  type CompactionDeps,
+  type ContextRequest,
+  type ConversationTurn,
+  compactConversation,
+  createContextManager,
+} from "./compact.ts";
 import type { ContextLimits } from "./context.ts";
 import type { MessageWriter, RecordedMessage, SummarizeMessageInput } from "./messages.ts";
 
@@ -97,6 +103,92 @@ const request = (overrides: Partial<Parameters<typeof compactConversation>[0]> =
   limits: LIMITS,
   now: () => 1_700_000_000_000,
   ...overrides,
+});
+
+describe("createContextManager — what the loop is handed", () => {
+  const RUN = { contextWindow: 8192, maxOutputTokens: 1024 };
+
+  function managerFor(overrides: { run?: typeof RUN | undefined; summarizer?: boolean } = {}) {
+    const { written, writer } = recordingWriter();
+    const provider = summarizerProvider([{ kind: "text", text: "the notes" }]);
+    return {
+      written,
+      manager: createContextManager({
+        resolveRun: async () => overrides.run,
+        resolveSummarizer: async () =>
+          overrides.summarizer === false ? undefined : { provider, descriptor: { ...SUMMARIZER } },
+        messages: writer,
+        limits: LIMITS,
+        wait: async () => undefined,
+      }),
+    };
+  }
+
+  /** Twelve recorded turns plus the task's opening message, which the runner built and no row exists for —
+   *  the shape a real run has, and the reason `ordinalOf` answers `undefined` for the first one. Twelve at
+   *  400 characters each is D-115's threshold being crossed with the verbatim tail still affordable. */
+  function recordedRequest(): ContextRequest {
+    // Distinct text per turn, because `ordinalOf` below keys on content: twelve identical turns would all
+    // answer the same ordinal, and a test that hid that would be testing a map with one entry.
+    const recorded = turns(12, 400).map((turn, index) => ({
+      ...turn,
+      content: `${turn.content}#${index + 1}`,
+    }));
+    const byContent = new Map(recorded.map((turn) => [turn.content, turn.ordinal]));
+    return {
+      sessionId: "ses_1",
+      taskId: "tsk_1",
+      messages: [
+        { role: "user", content: "read the roadmap" },
+        ...recorded.map((t) => ({ role: t.role, content: t.content })),
+      ],
+      ordinalOf: (message) => byContent.get(message.content),
+    };
+  }
+
+  it("does nothing while no turn has been recorded, because it cannot state a range", async () => {
+    const { manager } = managerFor({ run: RUN });
+    const result = await manager.compact({
+      sessionId: "ses_1",
+      taskId: "tsk_1",
+      messages: [{ role: "user", content: "read the roadmap" }],
+      ordinalOf: () => undefined,
+    });
+    strictEqual(result.kind, "unchanged");
+  });
+
+  it("compacts a recorded conversation into a summary plus the tail the plan kept", async () => {
+    const { manager, written } = managerFor({ run: RUN });
+    const result = await manager.compact(recordedRequest());
+    if (result.kind !== "compacted") throw new Error(`expected a compaction, got ${result.kind}`);
+    strictEqual(result.messages[0]?.role, "system");
+    strictEqual(result.messages[0]?.content, "the notes");
+    strictEqual(
+      result.messages.length,
+      7,
+      "the summary and the six verbatim turns — the covered six leave the request, and only the request",
+    );
+    strictEqual(written.length, 1, "and one summary row was written");
+    strictEqual(written[0]?.covers.from, 1);
+  });
+
+  it("says it cannot rather than trimming, when this process resolved no summarizer", async () => {
+    const { manager, written } = managerFor({ run: RUN, summarizer: false });
+    const result = await manager.compact(recordedRequest());
+    strictEqual(result.kind, "refused");
+    if (result.kind !== "refused") return;
+    strictEqual(result.reason, "summarizer-unavailable");
+    strictEqual(written.length, 0);
+  });
+
+  it("answers unchanged when the run's own model cannot describe itself", async () => {
+    // §3.2: a provider that cannot describe a model has disabled it, and a compactor with no descriptor has no
+    // budget to enforce. Zero would be a budget everything exceeds, which would compact on every request.
+    const { manager, written } = managerFor({ run: undefined });
+    const result = await manager.compact(recordedRequest());
+    strictEqual(result.kind, "unchanged");
+    strictEqual(written.length, 0);
+  });
 });
 
 describe("compactConversation — a conversation that fits is left alone", () => {

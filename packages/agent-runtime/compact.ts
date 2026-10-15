@@ -83,8 +83,13 @@ export interface CompactionDeps {
 }
 
 /** Why a compaction did not happen. The first two come from the planner and mean the conversation is
- *  fine or cannot be helped; the third means the user's own configuration does not fit the turns. */
-export type CompactionOutcomeReason = CompactionRefusal | "summarizer-window-too-small";
+ *  fine or cannot be helped; the third means the user's own configuration does not fit the turns, and the
+ *  fourth that this process resolved no summarizer at all — which is a Gateway that cannot drive tasks in
+ *  the first place, named here so a reader is not told the conversation is the problem. */
+export type CompactionOutcomeReason =
+  | CompactionRefusal
+  | "summarizer-window-too-small"
+  | "summarizer-unavailable";
 
 export type CompactionOutcome =
   | { readonly kind: "not-needed"; readonly projected: number; readonly threshold: number }
@@ -98,6 +103,11 @@ export type CompactionOutcome =
       readonly stored: RecordedMessage;
       readonly covers: { readonly from: number; readonly through: number };
       readonly turns: number;
+      /** The summary's own text and the turns the plan kept verbatim, both carried out of the act because
+       *  the caller's next request is built from them and re-deriving either would mean re-deciding what
+       *  was kept — which is the one thing a plan must not have decided twice. */
+      readonly summary: string;
+      readonly verbatim: readonly ConversationTurn[];
       /** D-064's `estimated` label travels with these two numbers, because §3.4 requires it and because
        *  "we saved 4,000 tokens" is a claim a screen should not make in the present tense. */
       readonly tokensBefore: { readonly tokens: number; readonly source: "measured" | "estimated" };
@@ -239,6 +249,13 @@ export async function compactConversation(
         stored,
         covers: { from: first.ordinal, through: last.ordinal },
         turns: turns.length,
+        summary: text,
+        verbatim: plan.verbatim.map((unit) => {
+          const turn = request.turns.find((candidate) => candidate.id === unit.id);
+          if (turn === undefined)
+            throw new Error(`unit ${unit.id} is not one of the conversation's turns`);
+          return turn;
+        }),
         // D-064's `estimated` label travels with both numbers, because §3.4 requires it and because
         // "we saved 4,000 tokens" is a claim a screen should not make in the present tense.
         // `tokensBefore` is an estimate by construction: it is a sum of per-turn measures, and only an
@@ -261,4 +278,163 @@ export async function compactConversation(
     }
   }
   return { kind: "failed", error: lastError as ProviderError, attempts };
+}
+
+/** What the loop knows about its own context when it is about to make a provider call: the messages it
+ *  would send, and — for each one — the conversation ordinal of the row behind it, if the loop wrote that
+ *  turn. `undefined` is a real answer, not a gap: the task's opening user message was built by the runner
+ *  and has no row, and a summary may not claim coverage of an ordinal nobody has named. */
+export interface ContextRequest {
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly messages: readonly ProviderMessage[];
+  readonly ordinalOf: (message: ProviderMessage) => number | undefined;
+  /** §3.4's measurement preference, when the run's adapter ships a counter. */
+  readonly countTokens?: ((text: string) => number) | undefined;
+}
+
+/** What the compactor decided, in the four shapes the loop can act on. A union rather than a nullable
+ *  field because the loop does four different things with these: nothing, replace its messages, fail the
+ *  task, or say why it would not — and a nullable field is how one of those four gets forgotten. */
+export type ContextResult =
+  | { readonly kind: "unchanged"; readonly projected: number; readonly threshold: number }
+  | {
+      readonly kind: "compacted";
+      /** What the next provider call carries: the summary as a `system` message followed by the tail the
+       *  plan kept verbatim, oldest first. The covered turns are *not* included — they are what the
+       *  summary stands in for, and sending them again would undo the compaction. */
+      readonly messages: readonly ProviderMessage[];
+      readonly covers: { readonly from: number; readonly through: number };
+      readonly turns: number;
+      readonly tokensBefore: { readonly tokens: number; readonly source: "measured" | "estimated" };
+    }
+  | {
+      readonly kind: "refused";
+      readonly reason: CompactionOutcomeReason;
+      readonly projected: number;
+    }
+  | { readonly kind: "failed"; readonly reason: string };
+
+/** The seam the loop is handed, named for what it is rather than for who implements it: the loop knows
+ *  what it is about to send and nothing about models, pools or rows, so everything else arrives through
+ *  this one function. A Gateway with no summarizer configured wires nothing, and a run with no compactor
+ *  simply grows past its window and fails the way §3.4 says it should — with a `context-overflow` the user
+ *  can read, not with a silent trim. */
+export interface ContextManager {
+  compact(request: ContextRequest): Promise<ContextResult>;
+}
+
+/** The compactor the Gateway wires, built from the parts it alone holds: the pool that can answer with a
+ *  summarizer (D-115's `limits.context.summaryModel`, or the run's own model when that key is absent), the
+ *  writer seam, and the descriptors the budget is derived from.
+ *
+ *  Both descriptors are *resolvers* rather than values because they are read from adapters, and `describe()`
+ *  is async: a Gateway that resolved them once at startup would carry a descriptor the user changed
+ *  underneath it, which is the same reason `composeAskCandidates` reads them per ask rather than per
+ *  process. A resolver that answers `undefined` — a provider that cannot describe itself, §3.2's rule — is
+ *  a Gateway with no budget to enforce, and the honest answer is `unchanged`: the run proceeds and, if the
+ *  request really does overflow, §3.4's own failure says so. */
+export function createContextManager(parts: {
+  readonly resolveRun: () => Promise<BudgetDescriptor | undefined>;
+  readonly resolveSummarizer: () => Promise<
+    | {
+        readonly provider: Provider;
+        readonly descriptor: BudgetDescriptor & { readonly modelId: string };
+      }
+    | undefined
+  >;
+  readonly messages: MessageWriter;
+  readonly limits?: ContextLimits | undefined;
+  readonly wait?: ((ms: number) => Promise<void>) | undefined;
+}): ContextManager {
+  return {
+    async compact(request: ContextRequest): Promise<ContextResult> {
+      const runDescriptor = await parts.resolveRun();
+      if (runDescriptor === undefined) {
+        const fallback = contextBudget({ contextWindow: 1, maxOutputTokens: 0 }, parts.limits);
+        return { kind: "unchanged", projected: 0, threshold: fallback.compactAtTokens };
+      }
+      const summarizer = await parts.resolveSummarizer();
+      // No summarizer is a configuration fact, not an error: D-115 says the run's own model writes the
+      // summary unless a user names another, and a Gateway that resolved no provider at all has nothing to
+      // write with. Reporting it as a refusal keeps the conversation untouched and says why.
+      if (summarizer === undefined) {
+        return {
+          kind: "refused",
+          reason: "summarizer-unavailable",
+          projected: 0,
+        };
+      }
+
+      const turns = request.messages
+        .map((message) => {
+          const ordinal = request.ordinalOf(message);
+          return ordinal === undefined
+            ? undefined
+            : ({
+                id: `${request.taskId}:${ordinal}`,
+                ordinal,
+                role: message.role,
+                content: message.content,
+              } as ConversationTurn);
+        })
+        .filter((turn): turn is ConversationTurn => turn !== undefined);
+
+      // A run whose every message predates the writer cannot state a range, and a summary that claims to
+      // stand in for turns nobody named is a lie in a row. So: if there is nothing recorded yet, there is
+      // nothing to summarize *as records*, and the honest answer is "unchanged" until the first turn lands.
+      if (turns.length === 0) {
+        const budget = contextBudget(runDescriptor, parts.limits);
+        return { kind: "unchanged", projected: 0, threshold: budget.compactAtTokens };
+      }
+
+      const outcome = await compactConversation(
+        {
+          sessionId: request.sessionId,
+          taskId: request.taskId,
+          turns,
+          descriptor: runDescriptor,
+          summarizer: summarizer.descriptor,
+          ...(parts.limits === undefined ? {} : { limits: parts.limits }),
+          ...(request.countTokens === undefined ? {} : { countTokens: request.countTokens }),
+          now: () => Date.now(),
+        },
+        {
+          provider: summarizer.provider,
+          messages: parts.messages,
+          ...(parts.wait === undefined ? {} : { wait: parts.wait }),
+        },
+      );
+      if (outcome.kind === "not-needed") {
+        return { kind: "unchanged", projected: outcome.projected, threshold: outcome.threshold };
+      }
+      if (outcome.kind === "refused") {
+        return { kind: "refused", reason: outcome.reason, projected: outcome.projected };
+      }
+      if (outcome.kind === "failed") {
+        return {
+          kind: "failed",
+          reason:
+            `compaction could not summarize the older turns after ${outcome.attempts} ` +
+            `attempt${outcome.attempts === 1 ? "" : "s"} (${outcome.error.class}: ${outcome.error.message}); ` +
+            "the conversation is unchanged and the task stops rather than dropping turns nobody can see are gone",
+        };
+      }
+      // What the next call carries: the summary first, then the turns the plan kept verbatim — and the
+      // covered turns are *not* included, because sending them again is precisely what the compaction
+      // was for. The rows stay in the store either way; this is the request, not the history.
+      return {
+        kind: "compacted",
+        messages: [
+          { role: "system", content: outcome.summary },
+          ...outcome.verbatim.map(
+            (turn) => ({ role: turn.role, content: turn.content }) as ProviderMessage,
+          ),
+        ],
+        covers: outcome.covers,
+        turns: outcome.turns,
+        tokensBefore: outcome.tokensBefore,
+      };
+    },
+  };
 }

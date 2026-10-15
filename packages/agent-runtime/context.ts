@@ -56,27 +56,24 @@ export const DEFAULT_CONTEXT_LIMITS: ContextLimits = {
   verbatimTurns: 6,
 };
 
-/** §3.4's tuning values out of a config's `limits.context`, with defaults for whatever is absent.
- *  A caller may pass `undefined` for a process with no config at all — `crabby` itself has one, a
- *  test may not. */
+/** §3.4's tuning values out of configuration, with defaults for whatever is absent. The argument is the
+ *  `limits.context` *section* itself (`ContextLimitsConfig` in `packages/core`), not the whole limits
+ *  object: a caller holding a configuration already knows which section it holds, and a function that dug a
+ *  section out for you would be a second path to the same three numbers. `undefined` is allowed for a
+ *  process with no config at all — `crabby` itself has one, a test may not. */
 export function contextLimits(
-  limits:
+  section:
     | {
-        readonly context?:
-          | {
-              readonly compactAt?: number | undefined;
-              readonly verbatimTurns?: number | undefined;
-              readonly summaryModel?: string | undefined;
-            }
-          | undefined;
+        readonly compactAt?: number | undefined;
+        readonly verbatimTurns?: number | undefined;
+        readonly summaryModel?: string | undefined;
       }
     | undefined,
 ): ContextLimits {
-  const context = limits?.context;
   return {
-    compactAt: context?.compactAt ?? DEFAULT_CONTEXT_LIMITS.compactAt,
-    verbatimTurns: context?.verbatimTurns ?? DEFAULT_CONTEXT_LIMITS.verbatimTurns,
-    summaryModel: context?.summaryModel,
+    compactAt: section?.compactAt ?? DEFAULT_CONTEXT_LIMITS.compactAt,
+    verbatimTurns: section?.verbatimTurns ?? DEFAULT_CONTEXT_LIMITS.verbatimTurns,
+    summaryModel: section?.summaryModel,
   };
 }
 

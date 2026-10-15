@@ -23,6 +23,7 @@ import type { Provider } from "@crabby/providers";
 import type { Approvals } from "./approvals.ts";
 import type { Cancellation, CancellationResult, RequestInput } from "./cancellation.ts";
 import type { Checkpoints } from "./checkpoint.ts";
+import type { ContextManager } from "./compact.ts";
 import type { TaskJournal } from "./journal.ts";
 import {
   type AskCandidates,
@@ -56,6 +57,10 @@ export interface RunnerDeps {
   /** D-112's conversation store, handed to the loop unchanged — the runner resolves no model and stores no turn itself,
    *  because the loop is the only party that knows when a turn happened. */
   readonly messages?: MessageWriter | undefined;
+  /** D-117's context manager, handed to the loop unchanged. The runner does not call it: compaction is a
+   *  fact about a run's own request, and a runner that compacted between runs would be deciding for a
+   *  conversation it is only carrying. */
+  readonly context?: ContextManager | undefined;
   readonly limits?: Partial<LoopLimits> | undefined;
   /** §3.6's selection, resolved from `config.json` by the composition root (D-101). `RunInput.modelId` states the rule
    *  this obeys: the caller resolves it and the loop does not choose, because §3.1's third rule is that a provider must
@@ -188,6 +193,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     cancellation: deps.cancellation,
     ...(deps.checkpoints === undefined ? {} : { checkpoints: deps.checkpoints }),
     ...(deps.messages === undefined ? {} : { messages: deps.messages }),
+    ...(deps.context === undefined ? {} : { context: deps.context }),
     ...(deps.limits === undefined ? {} : { limits: deps.limits }),
     ...(deps.askCandidates === undefined ? {} : { askCandidates: deps.askCandidates }),
     now,

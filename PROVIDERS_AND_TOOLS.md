@@ -179,7 +179,12 @@ budget it applies to differs by three orders of magnitude between descriptors. `
 spells the `<provider>/<modelId>` that writes a summary and has **no default**: absent, the run's own model does
 it, which is a default rather than a switch. A failed summary retries once and then surfaces the failure — the
 same rule this section gives a provider-reported overflow, applied at the budget instead of after it
-(D-113, D-115).
+(D-113, D-115). **Where it runs**: the runtime asks before it builds a request, on every provider call, so a
+conversation that outgrows its window is summarized while it still can be (D-117). The overflow rule above is
+the backstop for an estimate that was wrong rather than the primary path: one retry after compaction, spent
+once per call, then the failure is surfaced. A loop with no context manager wired — no Gateway, or no
+summarizer resolved — keeps growing and reports `context-overflow`, because trimming a conversation to stay
+under a limit is §2.5's "silently replace or destroy" wearing a feature's name.
 
 ### 3.5 Error taxonomy (shared, provider-independent)
 

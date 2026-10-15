@@ -943,8 +943,114 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
     );
   });
 
+  it("records the proposal and its result as turns, not only the completion (D-117)", async () => {
+    // §2.5's second bullet: tool calls and their results stay associated with the turn they belong to. A
+    // run that recorded only its completion would leave a cancelled task with a transcript that starts at the end.
+    const harness = createHarness({
+      rounds: [readRound, doneRound],
+      tools: [{ name: "file.read", output: "notes" }],
+      messages: true,
+    });
+    const outcome = await harness.start();
+    assert.equal(outcome.kind, "completed");
+    assert.deepEqual(
+      harness.turns.map((turn) => turn.ordinal),
+      [1, 2, 3],
+      "the proposal, the result and the completion are three turns in the order they happened",
+    );
+    const frames = harness.eventsOfType("message.added");
+    assert.equal(frames.length, 3, "each one is announced, because each one is retrievable");
+    assert.equal(
+      (frames[0]?.payload as { toolCalls?: unknown }).toolCalls !== undefined,
+      true,
+      "the proposal's frame names the calls it proposed — the association §2.5 asks for is not in the row",
+    );
+    assert.equal((frames[1]?.payload as { role: string }).role, "tool");
+    assert.equal((frames[2]?.payload as { role: string }).role, "assistant");
+  });
+
+  it("compacts before the request is built, so the covered turns are not sent twice (D-113, D-117)", async () => {
+    const calls: { readonly messages: readonly unknown[] }[] = [];
+    const harness = createHarness({
+      rounds: [readRound, doneRound],
+      tools: [{ name: "file.read", output: "notes" }],
+      messages: true,
+      context: {
+        compact: async (request) => {
+          calls.push(request);
+          // Nothing to do until the first turn has been recorded, which is what a real compactor sees:
+          // D-117's ordinals exist only for turns the writer stored.
+          if (request.messages.length < 3)
+            return { kind: "unchanged", projected: 10, threshold: 5 };
+          return {
+            kind: "compacted",
+            messages: [
+              { role: "system", content: "summary of turns 1-2" },
+              { role: "assistant", content: "the tail" },
+            ],
+            covers: { from: 1, through: 2 },
+            turns: 2,
+            tokensBefore: { tokens: 9000, source: "estimated" },
+          };
+        },
+      },
+    });
+    const outcome = await harness.start();
+    assert.equal(outcome.kind, "completed");
+    const second = harness.provider.calls[1]?.messages as { role: string; content: string }[];
+    assert.equal(second[0]?.role, "system", "the next request opens with the summary");
+    assert.equal(second[0]?.content, "summary of turns 1-2");
+    assert.equal(
+      second.some((message) => message.content === "read the roadmap"),
+      false,
+      "and carries neither the opening message nor the turns the summary stands in for",
+    );
+  });
+
+  it("surfaces a compaction that could not be written, rather than trimming quietly (D-115)", async () => {
+    const harness = createHarness({
+      rounds: [readRound, doneRound],
+      tools: [{ name: "file.read", output: "notes" }],
+      messages: true,
+      context: {
+        compact: async () => ({
+          kind: "failed",
+          reason: "compaction could not summarize the older turns after 2 attempts (rate-limit)",
+        }),
+      },
+    });
+    const outcome = await harness.start();
+    assert.equal(
+      outcome.kind,
+      "failed",
+      "the run stops rather than dropping turns nobody can see are gone",
+    );
+    if (outcome.kind !== "failed") return;
+    assert.equal(outcome.code, "provider.context-overflow");
+    assert.match(outcome.reason, /rate-limit/);
+  });
+
+  it("spends §3.4's overflow retry exactly once, and surfaces the second overflow (D-117)", async () => {
+    let seen = 0;
+    const harness = createHarness({
+      // The fake replays its whole script per request, so a provider that reports an overflow every time is
+      // what "the retry did not help" looks like from the runtime's side.
+      rounds: [[{ kind: "fail", class: "context-overflow" }]],
+      tools: [],
+      context: {
+        compact: async () => {
+          seen += 1;
+          return { kind: "unchanged", projected: 9000, threshold: 5734 };
+        },
+      },
+    });
+    const outcome = await harness.start();
+    assert.equal(outcome.kind, "failed");
+    assert.equal(harness.provider.calls.length, 2, "one attempt, one retry — and no more");
+    assert.equal(seen, 2, "the compactor was asked before each of the two requests");
+  });
+
   it("writes a turn and announces it in the same phase, or announces nothing at all (D-112)", async () => {
-    // With a writer: the row is written, and the frame that announces it carries the row's id so the pair is checkable.
     const written = createHarness({ rounds: [doneRound], tools: [], messages: true });
     const outcome = await written.start();
     assert.equal(outcome.kind, "completed");

@@ -47,11 +47,15 @@
 import {
   type ApprovalRecord,
   type Approvals,
+  type BudgetDescriptor,
   type Cancellation,
   type Checkpoints,
+  type ContextLimits,
+  contextLimits,
   createApprovals,
   createCancellation,
   createCheckpoints,
+  createContextManager,
   createRecovery,
   createRunner,
   createScheduler,
@@ -61,6 +65,7 @@ import {
   type LoopLimits,
   type LoopSubject,
   localStamp,
+  type MessageWriter,
   type RestartFailureCode,
   type RestartResult,
   type ResumeFailureCode,
@@ -120,6 +125,7 @@ import {
 } from "@crabby/api-contracts";
 import {
   type ConfigFile,
+  type ContextLimitsConfig,
   configDocument,
   configSchema,
   differingPaths,
@@ -145,6 +151,7 @@ import {
 } from "@crabby/policy";
 import {
   composeAskCandidates,
+  type ModelDescriptor,
   type Provider,
   type ProviderComposition,
   selectPinnedModel,
@@ -258,6 +265,11 @@ export interface GatewayDeps {
    *  and the startup banner says so — which is the honest answer for an install that configured no workspace root or
    *  selected no default model, and the reason the field is one bundle rather than four optionals. */
   readonly drive?: DriveFacts | undefined;
+  /** D-115's `limits.context.*`, handed in rather than read here for the reason `drive` is: this file has no
+   *  opinion about where configuration comes from, and a Gateway that loaded its own could not be tested
+   *  against a second configuration. Absent means the defaults (compact at 0.8, six verbatim turns, and the
+   *  run's own model as the summarizer) — which is also what a Gateway started without a config file gets. */
+  readonly context?: ContextLimitsConfig | undefined;
 }
 
 export interface BuiltApp {
@@ -377,28 +389,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
           // D-112's conversation store, composed here because this is where the database is, and handed to the loop
           // through the same phase that completes a task: the turn and the frame that announces it commit together or not
           // at all, which is what makes §2.5's record and §5.2's log one fact rather than two that may disagree.
-          messages: {
-            record: ({ sessionId, taskId, role, content, at }) =>
-              appendMessage(deps.db, {
-                sessionId,
-                ...(taskId === undefined ? {} : { taskId }),
-                role,
-                content,
-                now: new Date(at).toISOString(),
-              }),
-            // D-116's second method, and the same function with a range attached: a summary is written
-            // through the same writer, in the same transaction as the frame that announces it, so a
-            // conversation has one history and one opinion about what stands in for what.
-            summarize: ({ sessionId, taskId, content, covers, at }) =>
-              appendMessage(deps.db, {
-                sessionId,
-                ...(taskId === undefined ? {} : { taskId }),
-                role: "system",
-                content,
-                covers,
-                now: new Date(at).toISOString(),
-              }),
-          },
+          messages: conversationWriter(deps.db),
           modelId: deps.drive.modelId,
           ctx: deps.drive.ctx,
           // D-044's stage 2, as a seam rather than a pool: the Gateway is the only party that knows which providers
@@ -407,6 +398,39 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
           // started with may have changed by the time its budget runs out, and a prompt listing models that are no longer
           // configured is a prompt offering an answer that would be refused.
           askCandidates: (current) => composeAskCandidates(composedPool(deps), current),
+          // D-117's context manager, composed here for the same reason the writer above is: this is where the
+          // database is and where the pool lives. The summarizer is D-115's `limits.context.summaryModel`
+          // resolved against that pool, or the run's own provider and model when the key is absent — which is
+          // a default rather than a switch, since the same model already in use learns nothing new. Both
+          // descriptors are read per compaction, not cached, for `composeAskCandidates`'s reason.
+          context: createContextManager({
+            resolveRun: async () => {
+              const described = await describedModel(deps.drive?.provider, deps.drive?.modelId);
+              return described === undefined ? undefined : budgetDescriptorOf(described);
+            },
+            resolveSummarizer: async () => {
+              const configured = deps.context?.summaryModel;
+              if (configured !== undefined) {
+                const [providerId, ...rest] = configured.split("/");
+                const modelId = rest.join("/");
+                const provider = composedPool(deps).find(
+                  (candidate) => candidate.id === providerId,
+                );
+                if (provider === undefined) return undefined;
+                const described = await describedModel(provider, modelId);
+                if (described === undefined) return undefined;
+                return { provider, descriptor: { ...budgetDescriptorOf(described), modelId } };
+              }
+              const provider = deps.drive?.provider;
+              const modelId = deps.drive?.modelId;
+              if (provider === undefined || modelId === undefined) return undefined;
+              const described = await describedModel(provider, modelId);
+              if (described === undefined) return undefined;
+              return { provider, descriptor: { ...budgetDescriptorOf(described), modelId } };
+            },
+            messages: conversationWriter(deps.db),
+            limits: contextLimits(deps.context),
+          }),
           limits: deps.drive.limits,
           log,
         });
@@ -664,6 +688,55 @@ function providersRow(
  *  (D-110) and the options D-044's ask offers — and they must agree exactly. A resume route that resolved its pin
  *  against a *different* pool than the ask was built from would refuse an answer the prompt had just offered, which is
  *  the kind of failure that looks like a bug and is actually two pools. */
+/** D-112's and D-116's one writer, as a function rather than an inline object because **two** consumers need it:
+ *  the loop, which records turns as they happen, and the context manager, which records a summary. One
+ *  implementation is what makes "a conversation has one writer" true for both kinds of row — an inline copy
+ *  for the summary would be a second writer that happened to be spelled the same way, and §2.5's "must not
+ *  silently replace or destroy original conversation records" is decided at this seam rather than in prose. */
+function conversationWriter(db: SqliteDb): MessageWriter {
+  return {
+    record: ({ sessionId, taskId, role, content, at }) =>
+      appendMessage(db, {
+        sessionId,
+        ...(taskId === undefined ? {} : { taskId }),
+        role,
+        content,
+        now: new Date(at).toISOString(),
+      }),
+    summarize: ({ sessionId, taskId, content, covers, at }) =>
+      appendMessage(db, {
+        sessionId,
+        ...(taskId === undefined ? {} : { taskId }),
+        role: "system",
+        content,
+        covers,
+        now: new Date(at).toISOString(),
+      }),
+  };
+}
+
+/** §3.2's descriptor, read once per need and answering `undefined` when it is absent — a provider that
+ *  cannot describe a model has, per §3.2, disabled it, and a compactor with no descriptor has no budget to
+ *  enforce rather than a budget of zero it would compact against forever. */
+async function describedModel(
+  provider: Provider | undefined,
+  modelId: string | undefined,
+): Promise<ModelDescriptor | undefined> {
+  if (provider === undefined || modelId === undefined) return undefined;
+  try {
+    return (await provider.describe())[modelId];
+  } catch {
+    return undefined;
+  }
+}
+
+/** The two fields §3.4's budget is derived from, and nothing else: a descriptor carries capabilities this
+ *  has no use for, and handing a context manager the whole record would let a future field quietly become
+ *  a rule nobody priced. */
+function budgetDescriptorOf(descriptor: ModelDescriptor): BudgetDescriptor {
+  return { contextWindow: descriptor.contextWindow, maxOutputTokens: descriptor.maxOutputTokens };
+}
+
 function composedPool(deps: GatewayDeps): readonly Provider[] {
   const composed = (deps.providers ?? []).flatMap((entry) => (entry.ok ? [entry.provider] : []));
   const drive = deps.drive;

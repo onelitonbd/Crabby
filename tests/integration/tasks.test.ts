@@ -761,24 +761,32 @@ describe("a conversation's turns are a record, not a stream nobody can fetch (D-
       const final = await untilTerminal(h, task.id);
       assert.equal(final.state, "completed");
 
-      const frame = readEvents(h.db, task.id).find((event) => event.type === "message.added");
-      assert.ok(frame !== undefined, "the answer is announced as well as stored");
+      const frames = readEvents(h.db, task.id).filter((event) => event.type === "message.added");
+      assert.ok(frames.length > 0, "every turn is announced as well as stored (D-117)");
 
       const page = (await h.cli.sessionMessages(task.sessionId)).body as {
         items: { id: string; ordinal: number; role: string; content: string; taskId?: string }[];
         count: number;
       };
-      assert.equal(page.count, 1, "one turn, and the count is beside the page");
-      const turn = page.items[0];
+      // D-117: a run's transcript is every turn, not only the answer — the proposal, the tool's result, and the
+      // completion, in the order they happened. Before this, a conversation held exactly one turn per task and a
+      // cancelled task held none.
+      assert.equal(page.count, 3, "three turns, and the count is beside the page");
+      assert.deepEqual(
+        page.items.map((item) => item.role),
+        ["assistant", "tool", "assistant"],
+        "§2.5's association bullet: the proposal, its result, and the answer that closed the task",
+      );
+      const turn = page.items[2];
       assert.ok(turn !== undefined);
-      assert.equal(turn.role, "assistant");
-      assert.equal(turn.ordinal, 1, "§2.5's ordering, as a number a reader can check");
+      assert.equal(turn.ordinal, 3, "§2.5's ordering, as a number a reader can check");
       assert.equal(turn.taskId, task.id, "and the association with the task that produced it");
       assert.equal(turn.content, "notes.md holds one heading; nothing else is in it");
-      assert.equal(
-        turn.id,
-        (frame.payload as { messageId?: string }).messageId,
-        "D-112: the frame names the row, so the stream and the record are one turn rather than two that may disagree",
+      assert.deepEqual(
+        frames.map((frame) => (frame.payload as { messageId?: string }).messageId),
+        page.items.map((item) => item.id),
+        "D-112 with D-117: every frame names its row, in the same order, so the stream and the record are one " +
+          "transcript rather than two that may disagree",
       );
 
       // The conversation's own summary no longer claims turns are absent, and the task's events still carry the text — the

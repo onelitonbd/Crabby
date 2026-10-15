@@ -485,6 +485,9 @@ describe("the SQLite journal", () => {
       types,
       [
         "task.state.changed",
+        // D-117: the assistant's proposal is a turn the moment it arrives, not a moment the task finishes — so
+        // a task that is cancelled here still has a transcript.
+        "message.added",
         "tool.call.proposed",
         "approval.requested",
         "task.state.changed",
@@ -493,10 +496,13 @@ describe("the SQLite journal", () => {
         "task.state.changed",
         "tool.execution.started",
         "tool.execution.completed",
+        // And the result is a turn in the same transaction as the outcome it describes (D-117), then the
+        // completion closes it.
+        "message.added",
         "message.added",
         "task.completed",
       ],
-      "the whole cycle is in the log, in order, with one event per state change",
+      "the whole cycle is in the log, in order, with one event per state change and one per turn (D-117)",
     );
     assert.deepEqual(
       published.map((event) => event.seq),

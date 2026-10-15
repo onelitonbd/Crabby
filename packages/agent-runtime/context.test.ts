@@ -163,7 +163,7 @@ describe("contextLimits — configuration with defaults, and the one key without
   });
 
   it("fills only what configuration omits", () => {
-    deepStrictEqual(contextLimits({ context: { verbatimTurns: 3 } }), {
+    deepStrictEqual(contextLimits({ verbatimTurns: 3 }), {
       compactAt: 0.8,
       verbatimTurns: 3,
       summaryModel: undefined,
@@ -172,7 +172,7 @@ describe("contextLimits — configuration with defaults, and the one key without
 
   it("keeps a configured summarizer model, spelled as an answer spells it", () => {
     strictEqual(
-      contextLimits({ context: { summaryModel: "groq/llama-3.3-70b" } }).summaryModel,
+      contextLimits({ summaryModel: "groq/llama-3.3-70b" }).summaryModel,
       "groq/llama-3.3-70b",
     );
   });

@@ -262,10 +262,13 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "model",
     verb: "list",
-    summary: "models per provider with limits and capabilities",
+    summary: "provider, model, context, output cap, cost class (C7-07)",
     flags: ["--json"],
-    status: "planned",
-    milestone: "M4 (the §3.2 descriptor cache)",
+    // Ready because both halves of C7-07's row already exist: the descriptors are in `config.json` (D-100 made them
+    // user-supplied and static, because this build cannot ask a live API for one) and §3.4's budgeting reads them.
+    // `--json` includes the descriptor whole, for the row's own reason: a client reading the document should not have to
+    // know which fields are capabilities to learn that a model cannot stream.
+    status: "ready",
   },
   {
     noun: "model",

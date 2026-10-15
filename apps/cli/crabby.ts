@@ -40,6 +40,7 @@ import { runDoctor } from "./commands/doctor.ts";
 import { type GatewayVerb, runGateway } from "./commands/gateway.ts";
 import { runInit } from "./commands/init.ts";
 import { type JobVerb, runJob } from "./commands/job.ts";
+import { type ModelVerb, type ProviderVerb, runModel, runProvider } from "./commands/provider.ts";
 import { runSession, type SessionVerb } from "./commands/session.ts";
 import { runStatus } from "./commands/status.ts";
 import { runTask, type TaskVerb } from "./commands/task.ts";
@@ -261,6 +262,12 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     case "context": {
       return runContext(verb as ContextVerb | undefined, rest, layout, renderer);
+    }
+    case "provider": {
+      return runProvider(verb as ProviderVerb | undefined, rest, layout, renderer);
+    }
+    case "model": {
+      return runModel(verb as ModelVerb | undefined, rest, layout, renderer);
     }
     case "chat": {
       // The one verb that takes no sub-verb: C5-01 writes `crabby chat "…"`, and a bare `crabby chat` is C11-06's

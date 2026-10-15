@@ -12,6 +12,7 @@ import path from "node:path";
 import { describe, it, test } from "node:test";
 import { newId, UNNAMED_TITLE } from "@crabby/api-contracts";
 import { openDatabase, type SqliteDb } from "./db.ts";
+import { appendMessage, listMessages } from "./messages.ts";
 import { MIGRATIONS, migrate, schemaVersion } from "./migrate.ts";
 // The module's own export list, so the "nothing here deletes" assertion is about the file rather than about a copy of it.
 import * as namespace from "./sessions.ts";
@@ -29,7 +30,6 @@ import {
   sessionTasks,
   touchSession,
 } from "./sessions.ts";
-import { appendMessage, listMessages } from "./messages.ts";
 import { createTask, setState } from "./tasks.ts";
 
 const T0 = new Date(2026, 9, 12, 12, 0).getTime();

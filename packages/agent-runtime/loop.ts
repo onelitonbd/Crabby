@@ -97,8 +97,8 @@ import {
 import type { ApprovalRecord, Approvals } from "./approvals.ts";
 import type { CancellationEvidence, CancellationGate } from "./cancellation.ts";
 import type { CheckpointGate, CheckpointRecord } from "./checkpoint.ts";
-import type { MessageWriter } from "./messages.ts";
 import { createPhaseWriter, type Emit, type TaskJournal } from "./journal.ts";
+import type { MessageWriter } from "./messages.ts";
 import type { TransitionEvidence } from "./transitions.ts";
 
 /** §5.2's limits, priced by D-088. Each one is a `limits.*` key in `config.json` (D-074's override path), and the

@@ -4,7 +4,7 @@
 // and ordinal so it can put them on the frame. A seam this small is the point: a message store that the loop could also
 // *read*, *rewrite* or *summarize* would be a context manager (D-027) wearing a store's name, and D-027's own rules about
 // what may summarize are not this interface's to make.
-import { MESSAGE_ROLES } from "@crabby/api-contracts";
+import type { MESSAGE_ROLES } from "@crabby/api-contracts";
 
 /** The contract's own list, re-exported because two packages need the type and neither may own it: `packages/storage` writes
  *  the column and this package hands the value over. */

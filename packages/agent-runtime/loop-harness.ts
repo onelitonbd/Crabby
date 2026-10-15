@@ -68,7 +68,6 @@ import {
   type StepFacts,
 } from "./checkpoint.ts";
 import type { TaskJournal } from "./journal.ts";
-import type { MessageWriter, RecordedMessage } from "./messages.ts";
 import {
   type AskCandidates,
   createLoop,
@@ -83,6 +82,7 @@ import {
   type ToolRunContext,
   type ToolSurface,
 } from "./loop.ts";
+import type { MessageWriter, RecordedMessage } from "./messages.ts";
 import { createRunner, type Runner, type RunnerDeps } from "./runner.ts";
 
 /** One tool the harness's executor can run. `parameters` defaults to a declaration of *no* arguments, which is the

@@ -16,8 +16,9 @@
 //   - **The content is redacted on write**, through the same `redact()` the event payload uses. SECURITY.md §8.2 counts
 //     conversation records and checkpoints as different *categories* of stored data — a category is about which deletion
 //     rule applies, and neither is a place where a credential may sit.
+
+import { type MESSAGE_ROLES, type MessageRecord, newId } from "@crabby/api-contracts";
 import { redact } from "@crabby/core";
-import { MESSAGE_ROLES, newId, type MessageRecord } from "@crabby/api-contracts";
 import type { SqliteDb } from "./db.ts";
 
 /** The contract's list, not a second one: the column's `CHECK` in the migration and the schema in `packages/api-contracts`

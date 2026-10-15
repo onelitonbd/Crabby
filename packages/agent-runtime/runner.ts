@@ -23,7 +23,6 @@ import type { Provider } from "@crabby/providers";
 import type { Approvals } from "./approvals.ts";
 import type { Cancellation, CancellationResult, RequestInput } from "./cancellation.ts";
 import type { Checkpoints } from "./checkpoint.ts";
-import type { MessageWriter } from "./messages.ts";
 import type { TaskJournal } from "./journal.ts";
 import {
   type AskCandidates,
@@ -37,6 +36,7 @@ import {
   type SuspendedRun,
   type ToolSurface,
 } from "./loop.ts";
+import type { MessageWriter } from "./messages.ts";
 
 export interface RunnerDeps {
   readonly journal: TaskJournal;

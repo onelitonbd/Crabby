@@ -26,12 +26,12 @@ import { dataLayout } from "@crabby/platform";
 import type { ToolCall } from "@crabby/policy";
 import { createSqliteApprovalStore } from "./approvals.ts";
 import { createIdentity, getIdentity, revoke } from "./clients.ts";
-import { appendMessage } from "./messages.ts";
-import { ensureSession } from "./sessions.ts";
 import { openDatabase, type SqliteDb } from "./db.ts";
 import { readEvents } from "./events.ts";
 import { createSqliteJournal } from "./journal.ts";
+import { appendMessage } from "./messages.ts";
 import { migrate } from "./migrate.ts";
+import { ensureSession } from "./sessions.ts";
 import { createTask, getTask, setState } from "./tasks.ts";
 
 const PATH_ARGS = { type: "object", properties: { path: { type: "string" } } } as const;

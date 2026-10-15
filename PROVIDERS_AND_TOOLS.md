@@ -356,8 +356,16 @@ Rules:
   capability set.
 - Forcing a capability **on** is a trust decision with a cost: the runtime still verifies at call time, and when a
   forced-on capability fails, Crabby must report "`toolCalling` was declared by override and failed" rather than
-  fall back silently. That failure feeds §3.5's `unsupported-capability`. **Not built yet** — the provenance is on the
-  composition result, and the sentence is the loop's use of it.
+  fall back silently. That failure feeds §3.5's `unsupported-capability`. **Built (D-128)**, and it is said by the
+  **adapter**, which is the only party that knows both halves of the claim — which capability the request used, and which
+  capability the user forced on. Three conditions keep it from being a sentence that cries wolf: the capability must be
+  one the call **exercised**, the class must mean *the endpoint answered and the answer was not usable* (`overloaded` and
+  `timeout` are the endpoint being busy and say nothing about a declared capability), and the forced value must be `true` —
+  nothing was sent that needed a capability the user turned off. The error's class, raw body and attempt survive
+  unchanged, because the ladder's retry decision and the audit record must not depend on whether a human edited a
+  descriptor. What the request can currently exercise is tools and the system role: `ProviderRequest`'s `content` is a
+  string and it has no `responseFormat`, so image input and structured output are not expressible yet and the attribution
+  does not pretend otherwise.
 - Forcing a capability **off** is always allowed and never argued about — that is the user's fastest lever for a
   misbehaving endpoint.
 - Changing a context ceiling affects budgeting (§3.4) immediately and is reflected in the TUI/Web provider screens.

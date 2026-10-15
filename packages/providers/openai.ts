@@ -55,8 +55,9 @@ import {
   type StreamEvent,
   type Usage,
 } from "./contract.ts";
-import { type ModelDescriptor, parseDescriptor } from "./descriptor.ts";
-import { ProviderError, translateProviderError } from "./errors.ts";
+import { type ModelDescriptor, parseDescriptor, type SupportedFeature } from "./descriptor.ts";
+import { ProviderError, type ProviderErrorClass, translateProviderError } from "./errors.ts";
+import type { OverrideProvenance } from "./override.ts";
 
 export const OPENAI_COMPATIBLE_PROVIDER_ID = "openai-compatible";
 /** Appended to the configured base URL, which §3.3 makes the user's responsibility: "Base URL + key + model name". The
@@ -96,9 +97,25 @@ export interface OpenAiProviderOptions {
   /** Injectable for the same reason policy injects `now` and the ladder injects `random`: a wire protocol nobody can
    *  drive in a test is a wire protocol nobody has tested. Defaults to the global `fetch`. */
   readonly fetch?: typeof globalThis.fetch;
+  /** §3.8's provenance, keyed by model id: the capabilities a **user override forced on**, with the value the endpoint
+   *  had reported instead. Handed to the adapter rather than read from a file at failure time, for the reason the
+   *  descriptors are handed in rather than looked up: the adapter is the party that knows which capability a request used,
+   *  so it is the party that can say "declared by override and failed" — and a provenance field on a descriptor would be a
+   *  field §3.2's parser rejects (D-126). Composition is the only caller, so this cannot be forged from a document. */
+  readonly overrides?: Readonly<Record<string, OverrideProvenance>> | undefined;
 }
 
 type DeadlineName = "connect" | "first-token" | "stall" | "absolute";
+
+/** The classes that mean *the endpoint answered and the answer was not usable* — see `withOverrideNote` for why this is
+ *  an allow-list and why `overloaded`, `timeout`, `context-overflow` and `cancelled` are not in it. */
+const CAPABILITY_FAILURE_CLASSES: ReadonlySet<ProviderErrorClass> = new Set([
+  "unsupported-capability",
+  "invalid-response",
+  "content-filter",
+  "billing",
+  "auth",
+]);
 
 interface InFlight {
   readonly controller: AbortController;
@@ -511,6 +528,10 @@ export function createOpenAiCompatibleProvider(options: OpenAiProviderOptions): 
     status?: number | undefined;
     body?: string | undefined;
     retryAfterMs?: number | undefined;
+    /** The request, when the call site has it. §3.8's failure sentence can only be produced by the party that knows both
+     *  halves of the claim — which capability the call used, and which capability the user forced on — so the call sites
+     *  that have the request pass it and the one that does not simply gets no sentence. */
+    request?: ProviderRequest | undefined;
   }): ProviderError {
     if (input.adapterCancelled || input.ctx.signal.aborted) {
       return translateProviderError({ aborted: true, attempt: input.ctx.attempt });
@@ -520,12 +541,15 @@ export function createOpenAiCompatibleProvider(options: OpenAiProviderOptions): 
       return translateProviderError({ deadline: tripped, attempt: input.ctx.attempt });
     }
     if (input.status !== undefined) {
-      return translateProviderError({
-        status: input.status,
-        ...(input.body === undefined ? {} : { body: input.body }),
-        ...(input.retryAfterMs === undefined ? {} : { retryAfterMs: input.retryAfterMs }),
-        attempt: input.ctx.attempt,
-      });
+      return withOverrideNote(
+        translateProviderError({
+          status: input.status,
+          ...(input.body === undefined ? {} : { body: input.body }),
+          ...(input.retryAfterMs === undefined ? {} : { retryAfterMs: input.retryAfterMs }),
+          attempt: input.ctx.attempt,
+        }),
+        input.request,
+      );
     }
     const message = input.error instanceof Error ? input.error.message : String(input.error);
     return new ProviderError(
@@ -533,6 +557,61 @@ export function createOpenAiCompatibleProvider(options: OpenAiProviderOptions): 
       `the endpoint at ${endpoint} could not be reached: ${message}`,
       { raw: message, attempt: input.ctx.attempt },
     );
+  }
+
+  /** §3.8: "when a forced-on capability fails, Crabby must report `toolCalling` was declared by override and failed
+   *  rather than fall back silently". Two conditions, and the second is the one that keeps the sentence honest.
+   *
+   *  **Only for a capability the call actually used** — the adapter knows what it sent, and attributing a failure to a
+   *  capability the request never exercised would blame an override for something else entirely.
+   *
+   *  **Only for a non-retryable class.** `overloaded` and `timeout` are the endpoint being busy, which is no evidence at
+   *  all about whether a declared capability works; printing the sentence there would report a broken capability on every
+   *  slow Tuesday, and a sentence that fires often enough to be ignored is worse than none. §3.5's retry table is the
+   *  authority on which classes are transient.
+   *
+   *  The original error's class, `raw` and attempt are carried through, so the ladder's retry decision and the audit
+   *  record are unchanged — this is a message about *why*, added to the same failure rather than a new failure. */
+  function withOverrideNote(
+    error: ProviderError,
+    request: ProviderRequest | undefined,
+  ): ProviderError {
+    if (request === undefined) return error;
+    // An **allow-list**, because the question is not "is this retryable" but "does this class mean the endpoint answered
+    // and the answer was not usable". `overloaded` and `timeout` are the endpoint being busy; `cancelled` is this
+    // process's own doing; `context-overflow` is a ceiling the user may have raised by hand (a *limits* override, not a
+    // capability one) and says nothing about whether the capability works. A deny-list would have to be updated every
+    // time a class was added, and the failure mode of forgetting is blaming an override for an outage.
+    if (!CAPABILITY_FAILURE_CLASSES.has(error.class)) return error;
+    const provenance = options.overrides?.[request.modelId];
+    if (provenance === undefined) return error;
+    for (const feature of featuresUsedBy(request)) {
+      const move = provenance.supports?.[feature];
+      // `to: true` is the forced-on half. A capability the user forced **off** cannot be the reason a request failed,
+      // because nothing was sent that needed it — and §3.8 is explicit that forcing off is never argued about.
+      if (move === undefined || move.to !== true) continue;
+      return new ProviderError(
+        error.class,
+        `${error.message} — \`${feature}\` was declared by override and failed (§3.8: the endpoint reported ${String(
+          move.from,
+        )}, the user declared true, and the call that used it did not succeed); that feeds §3.5's \`unsupported-capability\``,
+        { ...(error.raw === undefined ? {} : { raw: error.raw }), attempt: error.attempt },
+      );
+    }
+    return error;
+  }
+
+  /** What this request exercised, in §3.2's vocabulary, read off the request rather than kept in a list beside the wire
+   *  builder — a capability list that can drift from the code that sends the request is the same second-opinion problem
+   *  as a parallel descriptor. **It covers the capabilities `ProviderRequest` can currently express**, which is tools and
+   *  the system role: the contract's `content` is a string and it has no `responseFormat`, so image input and structured
+   *  output are not expressible yet and this function does not pretend to know about them. When they arrive, this is the
+   *  one place that learns it. */
+  function featuresUsedBy(request: ProviderRequest): readonly SupportedFeature[] {
+    const used: SupportedFeature[] = [];
+    if (request.tools !== undefined && request.tools.length > 0) used.push("toolCalling");
+    if (request.messages.some((message) => message.role === "system")) used.push("systemRole");
+    return used;
   }
 
   function retryAfterFrom(response: Response): number | undefined {
@@ -598,6 +677,7 @@ export function createOpenAiCompatibleProvider(options: OpenAiProviderOptions): 
           throw failure({
             ctx,
             guard,
+            request,
             error: text,
             adapterCancelled: entry.cancelledByAdapter,
             status: response.status,
@@ -618,7 +698,7 @@ export function createOpenAiCompatibleProvider(options: OpenAiProviderOptions): 
         return completionFrom(body);
       } catch (error) {
         if (error instanceof ProviderError) throw error;
-        throw failure({ ctx, guard, error, adapterCancelled: entry.cancelledByAdapter });
+        throw failure({ ctx, guard, error, request, adapterCancelled: entry.cancelledByAdapter });
       } finally {
         flight.dispose();
         guard.dispose();
@@ -689,6 +769,7 @@ export function createOpenAiCompatibleProvider(options: OpenAiProviderOptions): 
             error: failure({
               ctx,
               guard,
+              request,
               error: body,
               adapterCancelled: entry.cancelledByAdapter,
               status: response.status,
@@ -844,7 +925,13 @@ export function createOpenAiCompatibleProvider(options: OpenAiProviderOptions): 
               ? translateProviderError({ deadline: tripped, attempt: ctx.attempt })
               : error instanceof ProviderError
                 ? error
-                : failure({ ctx, guard, error, adapterCancelled: entry.cancelledByAdapter }),
+                : failure({
+                    ctx,
+                    guard,
+                    error,
+                    request,
+                    adapterCancelled: entry.cancelledByAdapter,
+                  }),
         };
       } finally {
         flight.dispose();

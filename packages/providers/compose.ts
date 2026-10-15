@@ -177,6 +177,10 @@ function composeOne(
       id,
       config,
       models: modelList,
+      // §3.8's provenance, so the adapter can say "declared by override and failed" — it is the only party that knows
+      // both which capability a request used and which one the user forced on. Handed in rather than read from the file,
+      // so a `config.json` cannot put words in the adapter's mouth (D-126).
+      overrides,
       // D-074's provider timeouts are `limits.*` keys, and `crabby config set limits.providerConnectMs 3000` is a
       // documented override path. An adapter that read only `LIMITS_DEFAULTS` would make that sentence false for every
       // process except the one that printed it, so the composed deadlines come from the loaded config.

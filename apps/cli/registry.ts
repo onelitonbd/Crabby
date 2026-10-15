@@ -238,26 +238,48 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "provider",
     verb: "add",
-    summary: "register a provider adapter",
-    flags: [],
-    status: "planned",
-    milestone: "M4 (provider adapters, docs/ROADMAP.md §6)",
+    summary: "register a provider endpoint with its descriptors (C7-01)",
+    flags: [
+      "--base-url URL",
+      "--model ID[,ID]",
+      "--kind KIND",
+      "--context N",
+      "--max-output N",
+      "--key-stdin",
+      "--key-file PATH",
+      "--allow-insecure",
+      "--json",
+    ],
+    // Ready because everything it writes is a document §3.3 already describes and `crabby config set` already writes,
+    // through the same `writeConfig` and §2's compare-and-swap token. The two clauses that needed a decision are
+    // refused rather than faked: C7-02's key is read from stdin or a file and then stored nowhere, because the schema
+    // accepts a `vault://name` and the vault is M5's (F-56) — and C7-06's plain-HTTP transport is a refusal without
+    // `--allow-insecure`, because §3.3's composition warning and a command a person typed are different acts. The
+    // descriptor it writes denies every capability but `systemRole`: §3.2 reads them as permission, so a command that
+    // had never called the endpoint cannot claim them for it.
+    status: "ready",
   },
   {
     noun: "provider",
     verb: "list",
-    summary: "configured providers and their status",
+    summary: "configured providers and their status (C7-03)",
     flags: ["--json"],
-    status: "planned",
-    milestone: "M4 (provider adapters)",
+    // Ready because the two facts it joins already exist and belong to different parties: what the user wrote is
+    // `config.json` (§3.3), and what composed is `GET /status` (D-100 disables an entry whose descriptors do not parse,
+    // so "configured" and "working" are different claims and the list says which is which). C7-01/C7-02/C7-04/C7-06 —
+    // add, the key path, remove and the insecure-transport refusal — are built beside it in this milestone.
+    status: "ready",
   },
   {
     noun: "provider",
     verb: "remove",
-    summary: "drop a provider from configuration",
-    flags: [],
-    status: "planned",
-    milestone: "M4 (provider adapters)",
+    summary: "drop a provider from configuration, naming its pinned tasks (C7-04)",
+    flags: ["--force", "--json"],
+    // Ready for C7-04's two lines and one refusal: the count comes from the Gateway, because only the Gateway knows
+    // which tasks are pinned, and a pin is `<provider>/<model>` (D-108) so the id is compared against the part before
+    // the slash. `--force` proceeds and says what it breaks — those tasks keep a pin no provider resolves, so their
+    // next run is refused by D-110 rather than quietly run on another model (D-043).
+    status: "ready",
   },
   {
     noun: "model",

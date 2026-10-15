@@ -1826,9 +1826,11 @@ describe("a spawned gateway and a spawned cli (P-003)", () => {
       assert.equal(cancelResponse.status, 200, JSON.stringify(cancelBody));
 
       // Bounded, because the whole point is that the watcher ends on its own: waiting on `exit` with a deadline turns a
-      // missing terminal-state check into a red test instead of a hung file.
+      // missing terminal-state check into a red test instead of a hung file. Sixty seconds for the same reason the
+      // approvals file's spawn guard is ninety: the guard is against a hang, and a loaded CI runner booting a Gateway
+      // inside fifteen is a budget failure rather than a stream that never ended (D-119's slice hit exactly that).
       const exited = await new Promise<number | null>((resolve) => {
-        const deadline = setTimeout(() => resolve(null), 15_000);
+        const deadline = setTimeout(() => resolve(null), 60_000);
         watcher.once("exit", (code) => {
           clearTimeout(deadline);
           resolve(code);
@@ -1963,7 +1965,7 @@ describe("a spawned gateway and a spawned cli (P-003)", () => {
       assert.equal(filteredCancel.status, 200);
 
       const filteredExit = await new Promise<number | null>((resolve) => {
-        const deadline = setTimeout(() => resolve(null), 15_000);
+        const deadline = setTimeout(() => resolve(null), 60_000);
         filteredWatcher.once("exit", (code) => {
           clearTimeout(deadline);
           resolve(code);

@@ -188,11 +188,19 @@ async function runCli(
   // waiting on an event loop that a synchronous spawn would have blocked — the pair deadlocks and the file times out
   // instead of failing one test. The deadline is here for the same reason, since a hang in this file stops every later
   // assertion rather than reporting the one that caused it.
+  //
+  // Ninety seconds, and the number is a decision rather than a round figure: this guard is against a **hang**, not
+  // against a slow boot, and CI runs every suite file in parallel on a two-core runner — where booting a Gateway, running
+  // the migrations and starting a CLI child inside twenty seconds is a coin toss, not a defect. It cost a real failure
+  // once (two tests in this file, both at the same 20.3 s, both green alone and green in every run since), and the
+  // honest reading of that failure is a budget too small for the machine rather than a product that stopped answering:
+  // the same file passes on its own in seconds. A guard that fires on a loaded runner is a guard that hides the one
+  // thing it exists to catch.
   const code = await new Promise<number | null>((resolve) => {
     const deadline = setTimeout(() => {
       child.kill("SIGKILL");
       resolve(null);
-    }, 20_000);
+    }, 90_000);
     child.once("exit", (status) => {
       clearTimeout(deadline);
       resolve(status);

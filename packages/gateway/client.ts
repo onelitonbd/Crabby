@@ -214,6 +214,14 @@ export interface GatewayClient {
    *  D-118). No body — there is nothing to say beyond "now", and a body field would be a second way to ask for
    *  the same thing with different words. */
   compactSession(id: string): Promise<Response<unknown>>;
+  /** D-119: protect a turn or a range of them from compaction. Ordinals, because that is what the transcript
+   *  prints; `from === through` is a single turn and the route treats it as one. */
+  pinMessages(id: string, range: { from: number; through: number }): Promise<Response<unknown>>;
+  /** Unpin by the turn's own id — removing a *range* would have to guess whether it means "everything in it"
+   *  or "what I added", and a wrong guess there silently protects or drops turns the user did not name. */
+  unpinMessage(id: string, messageId: string): Promise<Response<unknown>>;
+  /** §8.1's read half: what is in budget, what has been compacted, what is pinned. */
+  sessionContext(id: string): Promise<Response<unknown>>;
   /** C11-01's list: conversations in last-activity order, each with the state word and title a list line prints. */
   sessions(options?: { origin?: string }): Promise<Response<unknown>>;
   /** One conversation with the tasks in it, and the `etag` that a rename has to send back as `If-Match`. */
@@ -379,6 +387,16 @@ export function createClient(input: {
     },
     compactSession: (id) =>
       request(`/api/v1/sessions/${encodeURIComponent(id)}/compact`, { method: "POST" }),
+    pinMessages: (id, range) =>
+      request(`/api/v1/sessions/${encodeURIComponent(id)}/pin`, {
+        method: "POST",
+        body: range,
+      }),
+    unpinMessage: (id, messageId) =>
+      request(`/api/v1/sessions/${encodeURIComponent(id)}/pin/${encodeURIComponent(messageId)}`, {
+        method: "DELETE",
+      }),
+    sessionContext: (id) => request(`/api/v1/sessions/${encodeURIComponent(id)}/context`),
     authList: () => request("/api/v1/auth/clients"),
     authRevoke: (id) =>
       request(`/api/v1/auth/clients/${encodeURIComponent(id)}`, { method: "DELETE" }),

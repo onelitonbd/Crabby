@@ -337,7 +337,7 @@ describe("the SQLite journal", () => {
     // Nothing is read before `migrate` on purpose: v3's SELECT names the new column, so a v2 file is unreadable by v3
     // code until the migration runs. That is why every process migrates on startup rather than lazily, and why this test
     // asserts the upgrade instead of the state before it.
-    assert.deepEqual(migrate(db), { applied: [3, 4, 5, 6, 7, 8, 9, 10, 11], version: 11 });
+    assert.deepEqual(migrate(db), { applied: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12], version: 12 });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,
       1,

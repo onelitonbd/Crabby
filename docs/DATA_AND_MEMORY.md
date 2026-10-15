@@ -35,7 +35,8 @@ prepares no `DELETE` statement so a second path cannot appear quietly.
 
 The fourth bullet — "generated summaries must not silently replace or destroy original conversation records" — is D-116's
 half, and the shape is a summary that is *itself* a row: `message` gained `covers_from` / `covers_through` in schema version
-11, so a compaction writes one `system` turn naming the range it stands in for, and the turns inside that range stay exactly
+11 and `pinned` in schema version 12 (§8.1's user control, D-119: a flag on the turn rather than a
+`pin` table, because a pin that could outlive its turn would be a claim about a turn that is gone), so a compaction writes one `system` turn naming the range it stands in for, and the turns inside that range stay exactly
 where they were — readable, countable as turns, and deleted only when their conversation is. The migration rebuilds the
 table (SQLite cannot add a `CHECK` to an existing one) and copies every row, and its `CHECK`s refuse the three rows that
 cannot be meant: a range with only one end, a range that ends before it starts, and coverage claimed by a role other than

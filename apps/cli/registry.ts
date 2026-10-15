@@ -360,12 +360,13 @@ export const COMMANDS: readonly CommandSpec[] = [
     verb: "show",
     summary: "one conversation: title, turns, tasks, budget, pinned items (C11-03)",
     flags: ["--json"],
-    // Planned and not missing, and the distinction is the whole row. C11-03's content is five fields and three of them —
-    // turns, budget, pinned items — need a message store and D-027's context manager. `GET /api/v1/sessions/{id}` answers
-    // the two that exist and names the other three in its `absent` list, so the route is honest about it; a verb that
-    // printed the same zeroes at a person would be printing a screen full of nothing.
+    // Planned and not missing, and the distinction is the whole row. C11-03 asks for five fields in one screen; three of
+    // them now exist but on their own routes (`messages`, `context`, and the pin verbs), and `session context` is the
+    // verb a person would use today. `GET /api/v1/sessions/{id}` still names `context` and `pins` in its `absent` list,
+    // because *this* route does not carry them — a combined screen is a design that M3's interfaces will have to earn,
+    // not one this slice should assemble for them.
     status: "planned",
-    milestone: "the release that stores messages (§4.3's `messages` paths, C11-03, D-027)",
+    milestone: "M3 (the combined session screen across CLI, TUI, Web and Telegram)",
   },
   {
     noun: "session",
@@ -380,10 +381,35 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "session",
     verb: "compact",
-    summary: "summarize now instead of at the budget limit (D-027)",
-    flags: [],
-    status: "planned",
-    milestone: "M2 (hybrid compaction)",
+    summary: "summarize now instead of at the budget limit (D-027, D-118)",
+    flags: ["--json"],
+    // Ready because the route is: one call to `createContextManager` — the same function the loop calls before every
+    // provider request — and three words back (`not-needed`, `compacted`, `refused`), with the refusal sentence
+    // printed from the contracts rather than written a fifth time.
+    status: "ready",
+  },
+  {
+    noun: "session",
+    verb: "pin",
+    summary: "protect a turn, or a range of them, from compaction (D-119)",
+    flags: ["--json"],
+    // Ordinals, because `session messages` prints them. A pinned turn is sent as it is and is never summarized,
+    // which also means a conversation whose pins crowd its budget is refused rather than quietly trimmed.
+    status: "ready",
+  },
+  {
+    noun: "session",
+    verb: "unpin",
+    summary: "stop protecting a turn (D-119)",
+    flags: ["--json"],
+    status: "ready",
+  },
+  {
+    noun: "session",
+    verb: "context",
+    summary: "what is in budget, what was compacted, what is protected (D-119, §8.1)",
+    flags: ["--json"],
+    status: "ready",
   },
   {
     noun: "job",

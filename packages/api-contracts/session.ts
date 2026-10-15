@@ -155,6 +155,11 @@ export const MessageRecord = Type.Object(
      *  the covered rows stay readable in `GET /sessions/{id}/messages` while the summary sits beside
      *  them. `through` is inclusive, so the next summary starts one ordinal above it and no turn is
      *  ever covered twice (D-116). */
+    /** D-119: §8.1's "users should be able to protect important information", as a fact on the turn rather
+     *  than a table beside it — a pin that could outlive its turn would be a claim about a turn that is gone.
+     *  A pinned turn is never covered by a summary and is always sent verbatim, which is why a conversation whose
+     *  pins crowd its budget is refused rather than quietly trimmed. */
+    pinned: Type.Optional(Type.Boolean()),
     covers: Type.Optional(
       Type.Object(
         {
@@ -210,6 +215,56 @@ export const COMPACTION_REFUSALS = [
 ] as const;
 export type CompactionRefusalName = (typeof COMPACTION_REFUSALS)[number];
 
+/** `POST /sessions/{id}/pin`'s body. A turn **or a range**, because the owner's answer was exactly that: pinning
+ *  one turn is the common case and a range is the same fact written twice, so one body carries both and the route
+ *  turns `from === through` into a single turn rather than making the caller know which spelling it wants.
+ *  Ordinals, not ids: ordinals are what `GET /sessions/{id}/messages` prints, and a pin a person cannot check
+ *  against the transcript is a pin nobody will trust (D-119). */
+export const PinMessagesBody = Type.Object(
+  {
+    from: Type.Integer({ minimum: 1 }),
+    through: Type.Integer({ minimum: 1 }),
+  },
+  { additionalProperties: false },
+);
+export type PinMessagesBody = Static<typeof PinMessagesBody>;
+
+/** `GET /sessions/{id}/context`'s body: the three things C11-03's `session show` asks for and §8.1's hybrid asks
+ *  a user to be able to see — what is in budget, what has been compacted, and what is pinned — in that order,
+ *  because that is the order a reader asks in. Every number is an estimate or says so, per §3.4. */
+export interface SessionContextBody {
+  readonly sessionId: string;
+  /** The conversation's own cost against the window of the model that would carry it. `source` is `estimated`
+   *  whenever the count came from §3.4's heuristic, which is every time no adapter shipped a counter. */
+  readonly projected: { readonly tokens: number; readonly source: "measured" | "estimated" };
+  /** The window, the budget and the threshold, so a client renders "3,200 of 5,734" without knowing the formula.
+   *  Absent when the conversation's model cannot describe itself (§3.2), which is a fact about the install rather
+   *  than about the conversation — and an absent `budget` says that, where a zero would say the window is empty. */
+  readonly budget?: {
+    readonly window: number;
+    readonly reserveForOutput: number;
+    readonly tokens: number;
+    readonly compactAtTokens: number;
+    /** The configured fraction, because a threshold a client cannot explain is a threshold it cannot show. */
+    readonly compactAt: number;
+  };
+  readonly turns: number;
+  readonly model?: string | undefined;
+  /** Every compaction this conversation has had: the summary row and the range it stands in for. Present rather
+   *  than absent-when-empty, so a client can draw "nothing compacted yet" without a null check. */
+  readonly compacted: readonly {
+    readonly messageId: string;
+    readonly covers: { readonly from: number; readonly through: number };
+    readonly turns: number;
+    readonly at: string;
+  }[];
+  /** The pinned ranges, collapsed (§8.1's "protect important information", as something a screen can print). */
+  readonly pinned: readonly { readonly from: number; readonly through: number }[];
+  /** §8.1's other half — "review or correct relevant retained memories and summaries" — is not this route's job
+   *  and is named here rather than answered as an empty array, the same rule §2.5's `absent` list follows. */
+  readonly absent: readonly string[];
+}
+
 /** One sentence per refusal, in the contracts rather than in an interface, for the reason every other shared string in
  *  this file is here: four interfaces will render these, and four sentences written four times is four ways for a
  *  refusal to read differently depending on which app asked. Each says what happened and what the user can do, because
@@ -252,6 +307,13 @@ export interface CompactSessionBody {
 export interface SessionActionBody {
   readonly session: SessionRow;
   readonly note: string;
+}
+
+/** D-119's pin action: a session mutation like every other, carrying the pinned ranges beside it so a client can
+ *  render the state without a second read — the same shape `SessionActionBody` has, plus the one field this act
+ *  changed. */
+export interface SessionPinBody extends SessionActionBody {
+  readonly pinned: readonly { readonly from: number; readonly through: number }[];
 }
 
 /** Every way a session write can be refused, mapped to a class in `packages/gateway/errors.ts` — exhaustive over the

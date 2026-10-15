@@ -66,7 +66,7 @@ test("schema version 6 is the session table, and the index is the order the list
   try {
     assert.equal(
       schemaVersion(db),
-      11,
+      12,
       "the file advances past 6 (the task pin, its switch, its origin, D-112's message table and D-116's coverage columns) but v6 is still sessions",
     );
     assert.equal(MIGRATIONS.find((entry) => entry.version === 6)?.name, "sessions");
@@ -147,7 +147,7 @@ test("the backfill gives every conversation a task already referenced, named fro
 
   const applied = migrate(handle.db);
   try {
-    assert.deepEqual(applied.applied, [6, 7, 8, 9, 10, 11]);
+    assert.deepEqual(applied.applied, [6, 7, 8, 9, 10, 11, 12]);
     const rows = listSessions(handle.db);
     assert.deepEqual(
       rows.map((row) => row.id).sort(),
@@ -693,7 +693,7 @@ describe("a conversation's turns", () => {
     }
   });
 
-  it("keeps every turn across the version-11 rebuild, because the migration copies rather than recreates", () => {
+  it("keeps every turn across the version-12 rebuilds, because a migration copies rather than recreates", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "crabby-sessions-v11-"));
     const handle = openDatabase(path.join(dir, "crabby.sqlite3"));
     try {
@@ -712,7 +712,11 @@ describe("a conversation's turns", () => {
       }
       assert.equal(schemaVersion(handle.db), 10);
       migrate(handle.db);
-      assert.equal(schemaVersion(handle.db), 11);
+      assert.equal(
+        schemaVersion(handle.db),
+        12,
+        "two rebuilds run at once: coverage (11) and pins (12)",
+      );
       assert.deepEqual(
         listMessages(handle.db, sessionId.id).items.map((message) => message.content),
         ["one", "two"],

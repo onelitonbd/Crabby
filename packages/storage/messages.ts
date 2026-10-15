@@ -96,7 +96,7 @@ export function listMessages(
 ): { readonly items: readonly MessageRecord[]; readonly count: number } {
   const limit = options.limit ?? 100;
   const columns =
-    "id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at";
+    "id, session_id, task_id, role, content, ordinal, covers_from, covers_through, pinned, created_at";
   const rows = (
     options.after === undefined
       ? db
@@ -126,13 +126,70 @@ export function countMessages(db: SqliteDb, sessionId: string): number {
   ).n;
 }
 
+/** D-119's three pin operations, over ordinals because ordinals are what a reader of
+ *  `GET /sessions/{id}/messages` holds — a turn's id is a machine name, its ordinal is the number the transcript
+ *  prints, and a pin named in the number a person can see is a pin a person can check.
+ *
+ *  Each returns the number of rows it changed, and each says `0` rather than throwing when the range names turns
+ *  this conversation does not have: a pin is a request about turns, and "none of those turns exist here" is an
+ *  answer the route turns into a 404 naming the conversation's real range, rather than a constraint error the
+ *  caller has to decode. */
+export interface PinRange {
+  readonly from: number;
+  readonly through: number;
+}
+
+export function pinMessages(db: SqliteDb, sessionId: string, range: PinRange): number {
+  return db
+    .prepare(
+      "UPDATE message SET pinned = 1 WHERE session_id = ? AND ordinal BETWEEN ? AND ? AND pinned = 0",
+    )
+    .run(sessionId, range.from, range.through).changes;
+}
+
+export function unpinMessage(db: SqliteDb, sessionId: string, messageId: string): number {
+  return db
+    .prepare("UPDATE message SET pinned = 0 WHERE session_id = ? AND id = ? AND pinned = 1")
+    .run(sessionId, messageId).changes;
+}
+
+/** The ranges of pinned turns, collapsed into one entry per unbroken run — because `GET /sessions/{id}/context`
+ *  answers "what is protected" and a list of forty ordinals is not an answer a screen can print. */
+export function pinnedRanges(db: SqliteDb, sessionId: string): readonly PinRange[] {
+  const rows = db
+    .prepare("SELECT ordinal FROM message WHERE session_id = ? AND pinned = 1 ORDER BY ordinal ASC")
+    .all(sessionId) as { ordinal: number }[];
+  const ranges: PinRange[] = [];
+  for (const row of rows) {
+    const last = ranges.at(-1);
+    if (last !== undefined && row.ordinal === last.through + 1) {
+      ranges[ranges.length - 1] = { from: last.from, through: row.ordinal };
+    } else {
+      ranges.push({ from: row.ordinal, through: row.ordinal });
+    }
+  }
+  return ranges;
+}
+
+/** The pinned ordinals as a set a planner can ask about, which is the only thing compaction needs to know about
+ *  a pin: not what it says, but that this turn must not be summarized away. */
+export function pinnedOrdinals(db: SqliteDb, sessionId: string): ReadonlySet<number> {
+  return new Set(
+    (
+      db
+        .prepare("SELECT ordinal FROM message WHERE session_id = ? AND pinned = 1")
+        .all(sessionId) as { ordinal: number }[]
+    ).map((row) => row.ordinal),
+  );
+}
+
 /** One turn by id, for a caller that holds a row's id rather than a page — the route that compacts writes a summary
  *  and is asked to answer with it, and re-reading a page to find the row it just wrote would be a second way of
  *  getting at the same fact. `undefined` is a row that is not there. */
 export function getMessage(db: SqliteDb, messageId: string): MessageRecord | undefined {
   const row = db
     .prepare(
-      "SELECT id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at FROM message WHERE id = ?",
+      "SELECT id, session_id, task_id, role, content, ordinal, covers_from, covers_through, pinned, created_at FROM message WHERE id = ?",
     )
     .get(messageId) as MessageRow | undefined;
   return row === undefined ? undefined : messageFromRow(row);
@@ -161,7 +218,7 @@ export function messageCharCount(
 export function taskMessages(db: SqliteDb, taskId: string): readonly MessageRecord[] {
   const rows = db
     .prepare(
-      "SELECT id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at FROM message WHERE task_id = ? ORDER BY ordinal ASC",
+      "SELECT id, session_id, task_id, role, content, ordinal, covers_from, covers_through, pinned, created_at FROM message WHERE task_id = ? ORDER BY ordinal ASC",
     )
     .all(taskId) as MessageRow[];
   return rows.map(messageFromRow);
@@ -176,6 +233,7 @@ type MessageRow = {
   ordinal: number;
   covers_from: number | null;
   covers_through: number | null;
+  pinned: number;
   created_at: string;
 };
 
@@ -187,6 +245,7 @@ function messageFromRow(row: MessageRow): MessageRecord {
     role: row.role as MessageRole,
     content: row.content,
     ordinal: row.ordinal,
+    ...(row.pinned === 1 ? { pinned: true } : {}),
     ...(row.covers_from === null || row.covers_through === null
       ? {}
       : { covers: { from: row.covers_from, through: row.covers_through } }),

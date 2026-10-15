@@ -90,7 +90,7 @@ describe("migrations", () => {
       "task_event",
     ])
       assert.ok(names.includes(wanted), `missing table ${wanted}`);
-    assert.equal(schemaVersion(db), 11);
+    assert.equal(schemaVersion(db), 12);
     // One row per migration, in order, and never an update to an old one: that is what `docs/DATA_AND_MEMORY.md`
     // §2.6's "configuration migrations must be considered when upgrading" means for this file — a v1 database gains a
     // table on the next start rather than being rebuilt, so an upgrade cannot silently drop a pending approval.
@@ -114,6 +114,7 @@ describe("migrations", () => {
         { version: 9, name: "task-origin" },
         { version: 10, name: "messages" },
         { version: 11, name: "message-coverage" },
+        { version: 12, name: "message-pins" },
       ],
       "one row per migration and never an update to an old one, so a file can say which version it is on",
     );
@@ -124,7 +125,7 @@ describe("migrations", () => {
     const { db, close } = tempDb();
     const second = migrate(db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 11);
+    assert.equal(second.version, 12);
     close();
   });
 

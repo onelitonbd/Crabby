@@ -418,6 +418,48 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // §8.1's "users SHOULD be able to protect important information", as one column on the row it protects
+    // (D-119). The alternative — a `pin` table — would answer "is turn 7 pinned?" with a second read and make a
+    // pin a row that can outlive the turn it names; a flag on the turn cannot disagree with it, cannot survive
+    // its turn, and is deleted with it by the same cascade §2.5's deletion half already relies on.
+    //
+    // A default of 0 rather than NULL, because "not pinned" is the normal state of every turn in every
+    // conversation and an absent value would make every read answer two questions. The rebuild is the same shape
+    // as version 11's, for the same reason: a CHECK cannot be added to an existing table, and the one that
+    // matters here is that a pin is a turn's own property — nothing can pin a conversation without naming a row.
+    //
+    // Downgrade: a rebuild that copies the flag aside, so a version-11 build reads a pinned turn as an ordinary
+    // one — which is what it is, minus the flag. No row is lost, and the only thing lost is the protection, which
+    // is the honest cost of running older code on newer data: a compaction under version 11 does not know about
+    // pins, so it may summarize a turn this version would have kept verbatim.
+    version: 12,
+    name: "message-pins",
+    up(db) {
+      db.exec(`
+        CREATE TABLE message_v12 (
+          id            TEXT PRIMARY KEY,
+          session_id    TEXT NOT NULL REFERENCES session (id) ON DELETE CASCADE,
+          task_id       TEXT REFERENCES task (id) ON DELETE CASCADE,
+          role          TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant', 'tool')),
+          content       TEXT NOT NULL,
+          ordinal       INTEGER NOT NULL,
+          covers_from   INTEGER,
+          covers_through INTEGER,
+          pinned        INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+          created_at    TEXT NOT NULL,
+          CHECK ((covers_from IS NULL) = (covers_through IS NULL)),
+          CHECK (covers_through IS NULL OR covers_through >= covers_from),
+          CHECK (covers_from IS NULL OR role = 'system')
+        );
+        INSERT INTO message_v12 (id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at)
+          SELECT id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at FROM message;
+        DROP TABLE message;
+        ALTER TABLE message_v12 RENAME TO message;
+        CREATE INDEX message_session ON message (session_id, ordinal, id);
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

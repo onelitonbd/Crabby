@@ -1,4 +1,4 @@
-// `crabby session ls|new|rename|compact` — `docs/review/CLI.md` region C11 over the conversation routes
+// `crabby session ls|new|rename|compact|pin|unpin|context` — `docs/review/CLI.md` region C11 over the conversation routes
 // `docs/INTERFACES_AND_API.md` §4.3 has that this build answers. Every verb is HTTP and none of them opens SQLite, for the
 // reason `commands/job.ts` gives: §19's rule is that an interface may request, display and relay, and a second reader of
 // the session table would be a second opinion about what a conversation's state word means.
@@ -22,8 +22,10 @@ import {
   EXIT,
   type ExitCode,
   type SessionActionBody,
+  type SessionContextBody,
   type SessionDetailBody,
   type SessionListBody,
+  type SessionPinBody,
   UNNAMED_TITLE,
 } from "@crabby/api-contracts";
 import type { DataLayout } from "@crabby/platform";
@@ -32,7 +34,15 @@ import { connect, reportFailure, reportNoGateway } from "../connect.ts";
 import { clip, type Renderer, shortId } from "../output.ts";
 import { findCommand } from "../registry.ts";
 
-export type SessionVerb = "ls" | "new" | "show" | "rename" | "compact";
+export type SessionVerb =
+  | "ls"
+  | "new"
+  | "show"
+  | "rename"
+  | "compact"
+  | "pin"
+  | "unpin"
+  | "context";
 
 const ORIGINS = ["cli", "tui", "web", "telegram"] as const;
 
@@ -175,6 +185,84 @@ export async function runSession(
       return EXIT.success;
     }
 
+    if (verb === "context") {
+      const id = tail.positionals[0];
+      if (id === undefined) {
+        renderer.line("session context", "which session? `crabby session ls` prints the ids");
+        return EXIT.usage;
+      }
+      const body = (await client.sessionContext(id)).body as SessionContextBody;
+      if (renderer.json) return renderer.done({ ...body });
+      const window_ =
+        body.budget === undefined
+          ? "no window is known for this conversation's model"
+          : `${body.projected.tokens.toLocaleString("en-US")} of ${body.budget.compactAtTokens.toLocaleString("en-US")} tokens before compaction (${body.budget.compactAt} of ${body.budget.tokens.toLocaleString("en-US")}, estimated)`;
+      renderer.line("context", `${body.turns} turns · ${window_}`);
+      renderer.line(
+        "compacted",
+        body.compacted.length === 0
+          ? "nothing compacted yet"
+          : body.compacted
+              .map((entry) => `turns ${entry.covers.from}-${entry.covers.through}`)
+              .join(", "),
+      );
+      renderer.line(
+        "pinned",
+        body.pinned.length === 0
+          ? "nothing protected"
+          : body.pinned.map((range) => `turns ${range.from}-${range.through}`).join(", "),
+      );
+      return EXIT.success;
+    }
+
+    if (verb === "pin" || verb === "unpin") {
+      const id = tail.positionals[0];
+      const what = tail.positionals[1];
+      if (id === undefined || what === undefined) {
+        renderer.line(
+          `session ${verb}`,
+          verb === "pin"
+            ? "which session, and which turn? `crabby session pin <id> <turn>` or `<first>..<last>`"
+            : "which session, and which turn? `crabby session unpin <id> <turn>`",
+        );
+        renderer.fix(
+          "`crabby session messages <id>` prints the turns with the ordinals these names are taken from (D-119)",
+        );
+        return EXIT.usage;
+      }
+      const [first, last] = what.split("..");
+      const from = Number.parseInt(first ?? "", 10);
+      const through = last === undefined ? from : Number.parseInt(last, 10);
+      if (!Number.isInteger(from) || !Number.isInteger(through) || from < 1 || through < from) {
+        renderer.line(
+          `session ${verb}`,
+          `"${what}" is not a turn, or is a range that ends before it starts`,
+        );
+        renderer.fix("`crabby session messages <id>` prints the ordinals");
+        return EXIT.usage;
+      }
+      if (verb === "pin") {
+        const body = (await client.pinMessages(id, { from, through })).body as SessionPinBody;
+        if (renderer.json) return renderer.done({ ...body });
+        renderer.line("pinned", body.note);
+        return EXIT.success;
+      }
+      const page = (await client.sessionMessages(id, { limit: 200 })).body as {
+        items: { id: string; ordinal: number }[];
+      };
+      // Named by ordinal because that is what the user typed; resolved to an id because that is what the route
+      // takes, and re-reading the turn list here is cheaper than a route that guesses which turn "7" meant.
+      const turn = page.items.find((item) => item.ordinal === from);
+      if (turn === undefined) {
+        renderer.line("session unpin", `turn ${from} is not in this conversation`);
+        return EXIT.failure;
+      }
+      const body = (await client.unpinMessage(id, turn.id)).body as SessionPinBody;
+      if (renderer.json) return renderer.done({ ...body });
+      renderer.line("unpinned", body.note);
+      return EXIT.success;
+    }
+
     if (verb === "compact") {
       const id = tail.positionals[0];
       if (id === undefined) {
@@ -193,7 +281,10 @@ export async function runSession(
       return EXIT.success;
     }
 
-    renderer.line("session", "which verb? `ls`, `new`, `rename` or `compact`");
+    renderer.line(
+      "session",
+      "which verb? `ls`, `new`, `rename`, `compact`, `pin`, `unpin` or `context`",
+    );
     renderer.fix(
       "`show` is planned and there is deliberately no `delete`: destroying a conversation is " +
         "`crabby history delete-session`, so there is one command that does it and one place to look (C11-05)",

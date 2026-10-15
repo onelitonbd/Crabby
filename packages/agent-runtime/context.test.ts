@@ -3,7 +3,7 @@
 // is derived from the descriptor rather than stored, D-115's threshold fires at four fifths, and a
 // plan that cannot help says so instead of spending a model call to fail.
 
-import { deepStrictEqual, ok, strictEqual } from "node:assert/strict";
+import assert, { deepStrictEqual, ok, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import { LIMITS_DEFAULTS } from "@crabby/core";
 import type { ProviderMessage } from "@crabby/providers";
@@ -243,6 +243,46 @@ describe("planCompaction — D-027's hybrid, decided in arithmetic", () => {
       units: units(...Array.from({ length: 9 }, () => 1000)),
       budget,
       verbatimTurns: 8,
+    });
+    strictEqual(plan.kind, "refused");
+    if (plan.kind !== "refused") return;
+    strictEqual(plan.reason, "verbatim-exceeds-budget");
+  });
+
+  it("never summarizes a pinned turn, and never summarizes *about* it either (D-119)", () => {
+    // Twelve 500-token turns, six verbatim, the third pinned. The plan covers everything else; the pinned turn is
+    // neither summarized nor dropped — it is in the verbatim set, which is the whole of §8.1's promise.
+    const twelve = units(...Array.from({ length: 12 }, () => 500));
+    const withPin = twelve.map((u, index) => (index === 2 ? { ...u, pinned: true } : u));
+    const plan = planCompaction({
+      units: withPin,
+      budget: contextBudget({ contextWindow: 8192, maxOutputTokens: 1024 }),
+      verbatimTurns: 6,
+    });
+    if (plan.kind !== "planned") throw new Error(`expected a plan, got ${plan.kind}`);
+    assert.equal(
+      plan.summary.some((u) => u.id === "t3"),
+      false,
+      "the summary does not cover a pinned turn",
+    );
+    assert.equal(
+      plan.verbatim.some((u) => u.id === "t3"),
+      true,
+      "and it is not dropped either: a pin means the original text, not nothing",
+    );
+    assert.equal(
+      plan.summary.length + plan.verbatim.length,
+      12,
+      "every turn is either summarized or verbatim, never both",
+    );
+  });
+
+  it("refuses when pins crowd the budget, because trimming a protected turn is not compaction", () => {
+    const nine = units(...Array.from({ length: 9 }, () => 1000));
+    const plan = planCompaction({
+      units: nine.map((u, index) => (index === 0 ? { ...u, pinned: true } : u)),
+      budget: contextBudget({ contextWindow: 8192, maxOutputTokens: 1024 }),
+      verbatimTurns: 6,
     });
     strictEqual(plan.kind, "refused");
     if (plan.kind !== "refused") return;

@@ -332,7 +332,10 @@ function documentedPaths(body: string): string[] {
       );
       if (!match) continue;
       const withoutQuery = (match[1] ?? "").split("?")[0] ?? "";
-      found.add(withoutQuery.replace(/\/:id\b/g, "/{id}").replace(/\/$/, ""));
+      // Every path parameter is a `{name}` in the document, not just `:id`: `/sessions/{id}/pin/{messageId}`
+      // is documented in those braces, and a normalizer that only knew `:id` would compare them as two
+      // different routes and report a documented one as missing.
+      found.add(withoutQuery.replace(/:([A-Za-z]+)\b/g, "{$1}").replace(/\/$/, ""));
     }
   }
   return [...found].sort();
@@ -407,7 +410,10 @@ export async function check(quiet = false): Promise<ParityProblem[]> {
   }
   for (const route of routes) {
     const bare = route.replace(/^\/api\/v1/, "").replace(/\/$/, "") || "/";
-    const normalized = bare.replace(/\/:id\b/g, "/{id}");
+    // Every path parameter is a `{name}` in the document, not just the id every session route happens
+    // to carry: a route with a second parameter (`/sessions/{id}/pin/{messageId}`) is otherwise
+    // reported as undocumented no matter how its row is written.
+    const normalized = bare.replace(/:([A-Za-z]+)\b/g, "{$1}");
     if (!documented.includes(normalized)) {
       problems.push({
         file: IFACE,

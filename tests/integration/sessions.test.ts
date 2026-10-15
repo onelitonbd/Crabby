@@ -23,8 +23,10 @@ import {
   type CompactSessionBody,
   newId,
   type SessionActionBody,
+  type SessionContextBody,
   type SessionDetailBody,
   type SessionListBody,
+  type SessionPinBody,
   type TaskRecord,
   UNNAMED_TITLE,
 } from "@crabby/api-contracts";
@@ -692,6 +694,110 @@ describe("`POST /sessions/{id}/compact` — the same act, asked for by hand (D-1
         assert.equal(error.status, 404);
         return true;
       });
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+describe("pins and the context view (D-119)", () => {
+  const long = "z".repeat(4300);
+
+  it("protects a turn from compaction, and the compaction then says it cannot cover it", async () => {
+    const h = await boot({
+      rounds: [
+        [
+          { kind: "text", text: long },
+          { kind: "tool-call", name: "session.list", arguments: {} },
+        ],
+        [{ kind: "text", text: "listed them" }],
+      ],
+      context: { verbatimTurns: 1 },
+    });
+    try {
+      const created = (await h.cli.createTask({ objective: "pin something first" }, "idem-pin-1"))
+        .body as TaskRecord;
+      await untilTerminal(h, created.id);
+      // Turn 1 is the oversized one — the only turn worth protecting, and the only one a summary would cover.
+      const pinned = (await h.cli.pinMessages(created.sessionId, { from: 1, through: 1 }))
+        .body as SessionPinBody;
+      assert.deepEqual(pinned.pinned, [{ from: 1, through: 1 }]);
+      assert.match(
+        pinned.note,
+        /protected/,
+        "the note says what a pin does, in the contracts' own words",
+      );
+
+      const body = (await h.cli.compactSession(created.sessionId)).body as CompactSessionBody;
+      // The owner's trade, made visible: turn 1 is the oversized one and a pin means it is sent as it is, so the
+      // verbatim set no longer fits under the threshold and the planner refuses by name. Nothing is summarized and
+      // nothing is dropped — the alternative would be trimming a turn the user asked to protect.
+      assert.equal(body.outcome, "refused", JSON.stringify(body));
+      assert.equal(body.reason, "verbatim-exceeds-budget");
+      assert.equal(
+        body.summary,
+        undefined,
+        "a refusal writes no summary row, so the conversation is unchanged",
+      );
+
+      const context = (await h.cli.sessionContext(created.sessionId)).body as SessionContextBody;
+      assert.deepEqual(context.pinned, [{ from: 1, through: 1 }], "and the context view shows it");
+      assert.equal(context.turns, 3);
+      assert.equal(
+        context.budget?.compactAt,
+        0.8,
+        "the configured fraction rides along, so a client can explain the threshold",
+      );
+      assert.equal(context.projected.source, "estimated");
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("unpins by turn id, and 409s a turn that is not pinned", async () => {
+    const h = await boot({ rounds: [[{ kind: "text", text: "short" }]] });
+    try {
+      const created = (await h.cli.createTask({ objective: "pin and unpin" }, "idem-pin-2"))
+        .body as TaskRecord;
+      await untilTerminal(h, created.id);
+      const page = (await h.cli.sessionMessages(created.sessionId)).body as {
+        items: { id: string; ordinal: number }[];
+      };
+      const turn = page.items[0];
+      assert.ok(turn !== undefined, "the run recorded its answer as a turn (D-117)");
+
+      await assert.rejects(h.cli.unpinMessage(created.sessionId, turn.id), (error: unknown) => {
+        assert.ok(error instanceof GatewayFailure);
+        assert.equal(
+          error.status,
+          409,
+          "nothing to undo is a disagreement with the world, not a missing thing",
+        );
+        return true;
+      });
+      await h.cli.pinMessages(created.sessionId, { from: turn.ordinal, through: turn.ordinal });
+      const cleared = (await h.cli.unpinMessage(created.sessionId, turn.id)).body as SessionPinBody;
+      assert.deepEqual(cleared.pinned, [], "and after a pin the unpin is a real write");
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("refuses a range this conversation does not have, naming the range that exists", async () => {
+    const h = await boot({ rounds: [[{ kind: "text", text: "short" }]] });
+    try {
+      const created = (await h.cli.createTask({ objective: "pin out of range" }, "idem-pin-3"))
+        .body as TaskRecord;
+      await untilTerminal(h, created.id);
+      await assert.rejects(
+        h.cli.pinMessages(created.sessionId, { from: 900, through: 901 }),
+        (error: unknown) => {
+          assert.ok(error instanceof GatewayFailure);
+          assert.equal(error.status, 400);
+          assert.match(error.envelope.error.message, /turns 1\u2013\d+/);
+          return true;
+        },
+      );
     } finally {
       await h.close();
     }

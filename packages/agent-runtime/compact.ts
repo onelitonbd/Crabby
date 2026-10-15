@@ -55,6 +55,9 @@ export interface ConversationTurn {
   readonly ordinal: number;
   readonly role: "system" | "user" | "assistant" | "tool";
   readonly content: string;
+  /** D-119: carried so the planner's split can exclude it, and so the transcript the summarizer is handed can be
+   *  checked against the pins — a pinned turn in that transcript would mean the act ignored the user's choice. */
+  readonly pinned?: boolean | undefined;
 }
 
 export interface CompactionRequest {
@@ -64,6 +67,9 @@ export interface CompactionRequest {
   readonly taskId?: string | undefined;
   /** Oldest first, with their ordinals. A caller that reverses this summarizes the wrong end. */
   readonly turns: readonly ConversationTurn[];
+  /** D-119: the ordinals §8.1's user control protects. A pinned turn is never summarized and never summarized
+   *  *about* — the original text or nothing, which is the answer the owner gave. Absent means nothing is pinned. */
+  readonly pinnedOrdinals?: ReadonlySet<number> | undefined;
   /** The descriptor of the model the **run** is on — the conversation's budget, which is the one that
    *  overflows. The summarizer's own descriptor is `summarizer`, because it has its own window. */
   readonly descriptor: BudgetDescriptor;
@@ -155,6 +161,7 @@ export async function compactConversation(
     kind: "turn",
     id: turn.id,
     measure: measureText(turn.content, request.countTokens),
+    ...(request.pinnedOrdinals?.has(turn.ordinal) === true ? { pinned: true } : {}),
   }));
   const plan: CompactionPlan = planCompaction({
     units,
@@ -292,6 +299,8 @@ export interface ContextRequest {
   readonly taskId?: string | undefined;
   readonly messages: readonly ProviderMessage[];
   readonly ordinalOf: (message: ProviderMessage) => number | undefined;
+  /** D-119: the ordinals the user protected, which the manager hands straight to the planner. */
+  readonly pinnedOrdinals?: ReadonlySet<number> | undefined;
   /** §3.4's measurement preference, when the run's adapter ships a counter. */
   readonly countTokens?: ((text: string) => number) | undefined;
 }
@@ -352,6 +361,11 @@ export function createContextManager(parts: {
   readonly messages: MessageWriter;
   readonly limits?: ContextLimits | undefined;
   readonly wait?: ((ms: number) => Promise<void>) | undefined;
+  /** D-119: the conversation's pinned ordinals, read from wherever they live. A resolver rather than a value
+   *  because a pin can be set between one compaction and the next — and because the runtime has no store of its
+   *  own, so the Gateway (the only party that does) supplies it, which is what lets an *in-run* compaction honour
+   *  a pin the user set minutes ago without the loop ever knowing what a pin is. */
+  readonly resolvePins?: ((sessionId: string) => ReadonlySet<number>) | undefined;
 }): ContextManager {
   return {
     async compact(request: ContextRequest): Promise<ContextResult> {
@@ -372,6 +386,10 @@ export function createContextManager(parts: {
         };
       }
 
+      const pinned = new Set<number>([
+        ...(request.pinnedOrdinals ?? []),
+        ...(parts.resolvePins === undefined ? [] : parts.resolvePins(request.sessionId)),
+      ]);
       const turns = request.messages
         .map((message) => {
           const ordinal = request.ordinalOf(message);
@@ -382,6 +400,7 @@ export function createContextManager(parts: {
                 ordinal,
                 role: message.role,
                 content: message.content,
+                ...(pinned.has(ordinal) ? { pinned: true } : {}),
               } as ConversationTurn);
         })
         .filter((turn): turn is ConversationTurn => turn !== undefined);
@@ -401,6 +420,7 @@ export function createContextManager(parts: {
           turns,
           descriptor: runDescriptor,
           summarizer: summarizer.descriptor,
+          ...(pinned.size === 0 ? {} : { pinnedOrdinals: pinned }),
           ...(parts.limits === undefined ? {} : { limits: parts.limits }),
           ...(request.countTokens === undefined ? {} : { countTokens: request.countTokens }),
           now: () => Date.now(),

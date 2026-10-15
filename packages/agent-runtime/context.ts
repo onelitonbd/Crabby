@@ -176,6 +176,11 @@ export interface ContextUnit {
   readonly kind: "turn" | "prefix";
   readonly id: string;
   readonly measure: TokenMeasure;
+  /** D-119: §8.1's user control, carried on the unit rather than read from a store, so the planner stays pure
+   *  and the same rule holds for a route and a run. A pinned unit is never summarized and never summarized
+   *  *about* — the owner's answer was the original text or nothing, because a pin whose content only survives as
+   *  somebody else's summary of it is not protection. */
+  readonly pinned?: boolean | undefined;
 }
 
 /** §3.4's budget, derived. `budget` is what a request may carry; `compactAtTokens` is when the
@@ -231,7 +236,8 @@ export type CompactionPlan =
   | {
       readonly kind: "planned";
       readonly projectedBefore: number;
-      /** Oldest first. These become the summarizer's input, in this order. */
+      /** Oldest first, and **without** the pinned units (D-119): the summary never speaks for a turn the user
+       *  protected, so a summarizer that summarizes one is summarizing something it was never sent. */
       readonly summary: readonly ContextUnit[];
       /** The tail, in the same oldest-first order the caller passed in — the order a provider sees a
        *  conversation in, and the order a summary and the turns it stands in for have to be read
@@ -258,17 +264,21 @@ export function planCompaction(input: {
   const threshold = input.budget.compactAtTokens;
   if (projected <= threshold) return { kind: "not-needed", projected, threshold };
 
-  // The verbatim tail is the *last* `verbatimTurns` turns. Units that are not turns (a system prompt,
-  // tool specs) are kept verbatim by definition — they are not history and summarizing them would
-  // invent a conversation that never happened — so the tail is the last N units and the split is
-  // positional rather than filtered.
+  // The verbatim tail is the *last* `verbatimTurns` turns, and — D-119 — every pinned turn wherever it sits, which
+  // is the whole of §8.1's "user control over important context". Units that are not turns (a system prompt, tool
+  // specs) are kept verbatim by definition: they are not history, and summarizing them would invent a
+  // conversation that never happened.
   const verbatimCount = Math.max(0, input.verbatimTurns);
-  const splitAt = Math.max(0, input.units.length - verbatimCount);
-  const summary = input.units.slice(0, splitAt);
+  const tailStart = Math.max(0, input.units.length - verbatimCount);
+  const tail = input.units.slice(tailStart);
+  const verbatim = [
+    ...input.units.filter((unit, index) => index < tailStart && unit.pinned === true),
+    ...tail,
+  ];
+  const summary = input.units.filter((unit, index) => index < tailStart && unit.pinned !== true);
   if (summary.length === 0) {
     return { kind: "refused", reason: "nothing-to-summarize", projected };
   }
-  const verbatim = input.units.slice(splitAt);
   const verbatimTokens = verbatim.reduce((total, unit) => total + unit.measure.tokens, 0);
   const allowance = threshold - verbatimTokens;
   if (allowance <= 0) {

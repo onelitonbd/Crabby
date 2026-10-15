@@ -109,6 +109,7 @@ import {
   PairRequestBody,
   PatchJobBody,
   PatchSessionBody,
+  PinMessagesBody,
   PutConfigBody,
   parseConfigIfMatch,
   parseIfMatch,
@@ -117,8 +118,10 @@ import {
   SESSION_ORIGINS,
   type SessionActionBody,
   type SessionActionCode,
+  type SessionContextBody,
   type SessionDetailBody,
   type SessionListBody,
+  type SessionPinBody,
   type SessionTaskFacts,
   sessionETag,
   sessionRow,
@@ -183,6 +186,9 @@ import {
   messageCharCount,
   mintPairingCode,
   patchSession,
+  pinMessages,
+  pinnedOrdinals,
+  pinnedRanges,
   pruneEvents,
   REPLAY_WINDOW_EVENTS,
   readEvents,
@@ -200,6 +206,7 @@ import {
   stateCounts,
   taskScratch,
   transact,
+  unpinMessage,
 } from "@crabby/storage";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { createEventBus } from "./bus.ts";
@@ -436,6 +443,9 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
             },
             messages: conversationWriter(deps.db),
             limits: contextLimits(deps.context),
+            // D-119: pins are read per compaction rather than passed in by the caller, so a run and a route
+            // honour the same set and neither has to know where a pin lives.
+            resolvePins: (sessionId) => pinnedOrdinals(deps.db, sessionId),
           }),
           limits: deps.drive.limits,
           log,
@@ -2053,6 +2063,175 @@ function registerSessionRoutes(app: FastifyInstance, deps: GatewayDeps): void {
    *  `PATCH /sessions/{id}` is; F-52 records that no route enforces a capability by name yet, and a route that
    *  invented its own check would be one enforcement path the rest of this file does not have.
    */
+  /** D-119's pins: §8.1's "users SHOULD be able to protect important information", over ordinals, because
+   *  ordinals are what the transcript prints and a protection a person cannot check against it is a protection
+   *  nobody will trust. The body is a range and `from === through` is a single turn, so a client never has to know
+   *  which spelling this route wants.
+   *
+   *  The capability is `session.write` with no prompt, the same answer as compaction (D-118): the user pressed a
+   *  button that says what it does, and the alternative — asking again — is what §3 rule 04 forbids for anything
+   *  the user has already said. No `If-Match`: pinning changes which turns a future compaction may cover, never a
+   *  turn's content, so two interfaces pinning at once lose nothing (the flag is idempotent per turn).
+   *
+   *  A range that names no turn of this conversation is a **404** naming the range that exists, because "you asked
+   *  for turn 900 of a conversation with nine turns" is an answer a person can act on and a bare 404 is not.
+   */
+  app.post<{ Params: { id: string }; Body: PinMessagesBody }>(
+    "/api/v1/sessions/:id/pin",
+    { schema: { body: PinMessagesBody } },
+    async (request, reply) => {
+      const session = getSession(deps.db, request.params.id);
+      if (session === undefined)
+        throw new GatewayError({
+          code: "session_not_found",
+          message: `no conversation ${request.params.id} is in this data directory`,
+          class: "not-found",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      const size = messageCharCount(deps.db, session.id);
+      const range = { from: request.body.from, through: request.body.through };
+      if (range.from > range.through || range.through > size.rows)
+        throw new GatewayError({
+          code: "session_pin_range",
+          message:
+            `this conversation holds turns 1–${size.rows}, so ${range.from}–${range.through} names none of them ` +
+            "(§2.5's ordering: `GET /api/v1/sessions/" +
+            session.id +
+            "/messages` prints the ordinals a pin is named in)",
+          class: "validation",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      const changed = pinMessages(deps.db, session.id, range);
+      deps.log.info("session pinned", {
+        session: session.id,
+        ...range,
+        changed,
+        ...(request.crabbyClient === undefined
+          ? {}
+          : { by: request.crabbyClient.id, via: request.crabbyClient.interface }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      return reply.send({
+        session: sessionRow(session, sessionTaskFactsFor(deps.db, session.id)),
+        pinned: pinnedRanges(deps.db, session.id),
+        // 0 changed is a real answer and not a failure: pinning a pinned turn is how a client retries safely.
+        note:
+          changed === 0
+            ? `turns ${range.from}–${range.through} were already protected`
+            : `turns ${range.from}–${range.through} are now protected: a compaction will not summarize them, ` +
+              "and will send them as they are",
+      } satisfies SessionPinBody);
+    },
+  );
+
+  /** Unpinning, because a pin with no way off is a permanent exclusion a user cannot undo — and §8.1 pairs
+   *  "protect" with "review or correct". It is a `DELETE` on the pinned turn's own id, not on a range, because
+   *  removing a *range* would have to guess whether the range means "everything in it" or "what I added". */
+  app.delete<{ Params: { id: string; messageId: string } }>(
+    "/api/v1/sessions/:id/pin/:messageId",
+    async (request, reply) => {
+      const session = getSession(deps.db, request.params.id);
+      if (session === undefined)
+        throw new GatewayError({
+          code: "session_not_found",
+          message: `no conversation ${request.params.id} is in this data directory`,
+          class: "not-found",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      const changed = unpinMessage(deps.db, session.id, request.params.messageId);
+      if (changed === 0) {
+        const row = getMessage(deps.db, request.params.messageId);
+        throw new GatewayError({
+          code: row === undefined ? "session_pin_not_found" : "session_pin_not_set",
+          message:
+            row === undefined
+              ? `no turn ${request.params.messageId} is in this conversation`
+              : `turn ${row.ordinal} is not protected, so there is nothing to remove`,
+          class: row === undefined ? "not-found" : "conflict",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      deps.log.info("session unpinned", {
+        session: session.id,
+        message: request.params.messageId,
+        ...(request.crabbyClient === undefined
+          ? {}
+          : { by: request.crabbyClient.id, via: request.crabbyClient.interface }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      return reply.send({
+        session: sessionRow(session, sessionTaskFactsFor(deps.db, session.id)),
+        pinned: pinnedRanges(deps.db, session.id),
+        note: `turn ${getMessage(deps.db, request.params.messageId)?.ordinal ?? "?"} is no longer protected`,
+      } satisfies SessionPinBody);
+    },
+  );
+
+  /** §8.1's read half, and C11-03's `session show`'s missing third: what is in budget, what has been compacted,
+   *  and what is pinned — the three questions a user asks before trusting a long conversation. It is a read, so
+   *  it costs the cheap aggregate (§3.4: every number it prints is an estimate unless an adapter counted) and
+   *  never a model call.
+   *
+   *  `absent` names what this route does not answer — §8.1's "review or correct retained memories and summaries"
+   *  and the `context show` element's own ideas — rather than returning an empty array for them, which is §2.5's
+   *  rule about a client rendering `0` for something that is merely unbuilt. */
+  app.get<{ Params: { id: string } }>("/api/v1/sessions/:id/context", async (request, reply) => {
+    const session = getSession(deps.db, request.params.id);
+    if (session === undefined)
+      throw new GatewayError({
+        code: "session_not_found",
+        message: `no conversation ${request.params.id} is in this data directory`,
+        class: "not-found",
+        retryable: false,
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+    const limits = contextLimits(deps.context);
+    const modelId = session.model ?? deps.drive?.modelId;
+    const descriptor = await describedModel(deps.drive?.provider, modelId);
+    const size = messageCharCount(deps.db, session.id);
+    const budget =
+      descriptor === undefined ? undefined : contextBudget(budgetDescriptorOf(descriptor), limits);
+    const summaries = listMessages(deps.db, session.id, { limit: 200 }).items.filter(
+      (row) => row.covers !== undefined,
+    );
+    const body = {
+      sessionId: session.id,
+      projected: {
+        tokens: estimateFromChars(size.chars),
+        source: "estimated" as const,
+      },
+      ...(budget === undefined
+        ? {}
+        : {
+            budget: {
+              window: budget.window,
+              reserveForOutput: budget.reserveForOutput,
+              tokens: budget.budget,
+              compactAtTokens: budget.compactAtTokens,
+              compactAt: limits.compactAt,
+            },
+          }),
+      turns: size.rows,
+      ...(modelId === undefined ? {} : { model: modelId }),
+      compacted: summaries.map((row) => ({
+        messageId: row.id,
+        covers: row.covers as { from: number; through: number },
+        turns:
+          (row.covers as { from: number; through: number }).through -
+          (row.covers as { from: number; through: number }).from +
+          1,
+        at: row.createdAt,
+      })),
+      pinned: pinnedRanges(deps.db, session.id),
+      absent: ["memories", "summary-editing"],
+    } satisfies SessionContextBody;
+    return reply.send(body);
+  });
+
   app.post<{ Params: { id: string } }>("/api/v1/sessions/:id/compact", async (request, reply) => {
     const session = getSession(deps.db, request.params.id);
     if (session === undefined)
@@ -2128,6 +2307,9 @@ function registerSessionRoutes(app: FastifyInstance, deps: GatewayDeps): void {
       },
       messages: conversationWriter(deps.db),
       limits,
+      // D-119: pins are read per compaction rather than passed in by the caller, so a run and a route honour the
+      // same set and neither has to know where a pin lives.
+      resolvePins: (sessionId) => pinnedOrdinals(deps.db, sessionId),
     });
     const ordinals = new Map<{ role: string; content: string }, number>();
     const messages = rows.map((row) => {

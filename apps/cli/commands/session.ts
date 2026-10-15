@@ -22,10 +22,8 @@ import {
   EXIT,
   type ExitCode,
   type SessionActionBody,
-  type SessionContextBody,
   type SessionDetailBody,
   type SessionListBody,
-  type SessionPinBody,
   UNNAMED_TITLE,
 } from "@crabby/api-contracts";
 import type { DataLayout } from "@crabby/platform";

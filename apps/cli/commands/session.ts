@@ -1,4 +1,4 @@
-// `crabby session ls|new|rename` — `docs/review/CLI.md` region C11 over the four conversation routes
+// `crabby session ls|new|rename|compact` — `docs/review/CLI.md` region C11 over the conversation routes
 // `docs/INTERFACES_AND_API.md` §4.3 has that this build answers. Every verb is HTTP and none of them opens SQLite, for the
 // reason `commands/job.ts` gives: §19's rule is that an interface may request, display and relay, and a second reader of
 // the session table would be a second opinion about what a conversation's state word means.
@@ -18,6 +18,7 @@
 //     exist; `GET /api/v1/sessions/{id}` names the absence in its `absent` list rather than answering `0 turns` for a
 //     conversation that has forty, and a verb that printed the same zeroes would be printing them at a person.
 import {
+  type CompactSessionBody,
   EXIT,
   type ExitCode,
   type SessionActionBody,
@@ -31,7 +32,7 @@ import { connect, reportFailure, reportNoGateway } from "../connect.ts";
 import { clip, type Renderer, shortId } from "../output.ts";
 import { findCommand } from "../registry.ts";
 
-export type SessionVerb = "ls" | "new" | "show" | "rename";
+export type SessionVerb = "ls" | "new" | "show" | "rename" | "compact";
 
 const ORIGINS = ["cli", "tui", "web", "telegram"] as const;
 
@@ -174,7 +175,25 @@ export async function runSession(
       return EXIT.success;
     }
 
-    renderer.line("session", "which verb? `ls`, `new` or `rename`");
+    if (verb === "compact") {
+      const id = tail.positionals[0];
+      if (id === undefined) {
+        renderer.line("session compact", "which session? `crabby session ls` prints the ids");
+        renderer.fix(
+          "compaction folds a conversation's older turns into one summary; the turns stay readable",
+        );
+        return EXIT.usage;
+      }
+      const body = (await client.compactSession(id)).body as CompactSessionBody;
+      if (renderer.json) return renderer.done({ ...body });
+      // Three answers, three sentences, and the sentence comes from the contracts — the same refusal wording the
+      // Web and Telegram screens read, because four interfaces writing four explanations of one refusal is four
+      // chances to say something different about the same conversation.
+      renderer.line(`compact ${body.outcome}`, body.note);
+      return EXIT.success;
+    }
+
+    renderer.line("session", "which verb? `ls`, `new`, `rename` or `compact`");
     renderer.fix(
       "`show` is planned and there is deliberately no `delete`: destroying a conversation is " +
         "`crabby history delete-session`, so there is one command that does it and one place to look (C11-05)",

@@ -961,12 +961,12 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
     const frames = harness.eventsOfType("message.added");
     assert.equal(frames.length, 3, "each one is announced, because each one is retrievable");
     assert.equal(
-      (frames[0]?.payload as { toolCalls?: unknown }).toolCalls !== undefined,
+      (frames[0]?.payload as { toolCalls?: unknown } | undefined)?.toolCalls !== undefined,
       true,
       "the proposal's frame names the calls it proposed — the association §2.5 asks for is not in the row",
     );
-    assert.equal((frames[1]?.payload as { role: string }).role, "tool");
-    assert.equal((frames[2]?.payload as { role: string }).role, "assistant");
+    assert.equal((frames[1]?.payload as { role: string } | undefined)?.role, "tool");
+    assert.equal((frames[2]?.payload as { role: string } | undefined)?.role, "assistant");
   });
 
   it("compacts before the request is built, so the covered turns are not sent twice (D-113, D-117)", async () => {
@@ -991,6 +991,7 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
             covers: { from: 1, through: 2 },
             turns: 2,
             tokensBefore: { tokens: 9000, source: "estimated" },
+            stored: { id: "msg_summary", ordinal: 2 },
           };
         },
       },

@@ -286,7 +286,10 @@ export async function compactConversation(
  *  and has no row, and a summary may not claim coverage of an ordinal nobody has named. */
 export interface ContextRequest {
   readonly sessionId: string;
-  readonly taskId: string;
+  /** Absent when the caller is a conversation and not a run — `POST /sessions/{id}/compact` (D-118). The summary
+   *  row's `task_id` is nullable for exactly this conversation, and passing an empty string instead would be a
+   *  row claiming a task that does not exist, which the store's foreign key refuses for the right reason. */
+  readonly taskId?: string | undefined;
   readonly messages: readonly ProviderMessage[];
   readonly ordinalOf: (message: ProviderMessage) => number | undefined;
   /** §3.4's measurement preference, when the run's adapter ships a counter. */
@@ -307,6 +310,9 @@ export type ContextResult =
       readonly covers: { readonly from: number; readonly through: number };
       readonly turns: number;
       readonly tokensBefore: { readonly tokens: number; readonly source: "measured" | "estimated" };
+      /** The row as it was written — id and ordinal — so a caller that answers over HTTP can name the summary
+       *  it just caused without reading the conversation back to find it (D-118). */
+      readonly stored: RecordedMessage;
     }
   | {
       readonly kind: "refused";
@@ -372,7 +378,7 @@ export function createContextManager(parts: {
           return ordinal === undefined
             ? undefined
             : ({
-                id: `${request.taskId}:${ordinal}`,
+                id: `${request.taskId ?? `session:${request.sessionId}`}:${ordinal}`,
                 ordinal,
                 role: message.role,
                 content: message.content,
@@ -391,7 +397,7 @@ export function createContextManager(parts: {
       const outcome = await compactConversation(
         {
           sessionId: request.sessionId,
-          taskId: request.taskId,
+          ...(request.taskId === undefined ? {} : { taskId: request.taskId }),
           turns,
           descriptor: runDescriptor,
           summarizer: summarizer.descriptor,
@@ -434,6 +440,7 @@ export function createContextManager(parts: {
         covers: outcome.covers,
         turns: outcome.turns,
         tokensBefore: outcome.tokensBefore,
+        stored: outcome.stored,
       };
     },
   };

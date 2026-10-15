@@ -126,6 +126,36 @@ export function countMessages(db: SqliteDb, sessionId: string): number {
   ).n;
 }
 
+/** One turn by id, for a caller that holds a row's id rather than a page — the route that compacts writes a summary
+ *  and is asked to answer with it, and re-reading a page to find the row it just wrote would be a second way of
+ *  getting at the same fact. `undefined` is a row that is not there. */
+export function getMessage(db: SqliteDb, messageId: string): MessageRecord | undefined {
+  const row = db
+    .prepare(
+      "SELECT id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at FROM message WHERE id = ?",
+    )
+    .get(messageId) as MessageRow | undefined;
+  return row === undefined ? undefined : messageFromRow(row);
+}
+
+/** How many characters a conversation holds, without reading one of them. D-118's route asks this first, because a
+ *  phone that has to load forty turns to discover it had twelve is a phone that did the wrong work: the decision
+ *  "does this need compacting?" can be made on a length, and only a conversation that needs it pays for the read.
+ *  The count is in *characters*, not tokens, because that is the cheapest thing SQLite can count without loading
+ *  the rows — `packages/agent-runtime`'s estimator turns it into tokens, and the turn it takes is the upper bound
+ *  of the heuristic (one cluster is never more than one character). */
+export function messageCharCount(
+  db: SqliteDb,
+  sessionId: string,
+): { readonly chars: number; readonly rows: number } {
+  const row = db
+    .prepare(
+      "SELECT COALESCE(SUM(LENGTH(content)), 0) AS chars, COUNT(*) AS rows FROM message WHERE session_id = ?",
+    )
+    .get(sessionId) as { chars: number; rows: number };
+  return { chars: row.chars, rows: row.rows };
+}
+
 /** Every turn a task produced, for the surfaces that show one task's conversation (`GET /tasks/{id}`'s siblings, C6-06's
  *  transcript) without reading a whole conversation. */
 export function taskMessages(db: SqliteDb, taskId: string): readonly MessageRecord[] {

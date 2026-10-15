@@ -1598,7 +1598,6 @@ export function createLoop(deps: LoopDeps): Loop {
         // needs, and §2.5's "role" bullet is about who spoke rather than whether it said anything. This is
         // not a second record of the same turn — the proposal above is only recorded when the model asked for
         // tools, and a completion is a turn that ends the run.
-        const task = currentTask(taskId);
         const stored = storeTurn(state, proposal, turn.text, at);
         if (stored !== undefined) {
           emit(

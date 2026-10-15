@@ -192,6 +192,62 @@ export interface SessionDetailBody {
   readonly absent: readonly string[];
 }
 
+/** `POST /sessions/{id}/compact`'s three answers, as a union of words rather than three routes or three status
+ *  codes for what is one question: *did this conversation need compacting, and what happened?* A client that has
+ *  to branch on a 200/204/409 triple has been handed three ways to be wrong about the same fact. */
+export const COMPACTION_OUTCOMES = ["compacted", "not-needed", "refused"] as const;
+export type CompactionOutcomeName = (typeof COMPACTION_OUTCOMES)[number];
+
+/** Why a conversation was not compacted. `summarizer-unavailable` is not among the answers a 200 carries: it means
+ *  this process resolved no model to write a summary with, which is a Gateway that cannot serve the request at
+ *  all, and it answers as an error. The rest are facts about the conversation — "it fits", "there is nothing older
+ *  than the tail", "the tail alone is over the budget", "the model you configured is too small for these turns" —
+ *  and a user pressing a button deserves to be told which of them applies, not a 409. */
+export const COMPACTION_REFUSALS = [
+  "nothing-to-summarize",
+  "verbatim-exceeds-budget",
+  "summarizer-window-too-small",
+] as const;
+export type CompactionRefusalName = (typeof COMPACTION_REFUSALS)[number];
+
+/** One sentence per refusal, in the contracts rather than in an interface, for the reason every other shared string in
+ *  this file is here: four interfaces will render these, and four sentences written four times is four ways for a
+ *  refusal to read differently depending on which app asked. Each says what happened and what the user can do, because
+ *  a refusal nobody can act on is a dead end with a status code attached. */
+export const COMPACTION_REFUSAL_NOTES: Record<CompactionRefusalName, string> = {
+  "nothing-to-summarize":
+    "this conversation has no turns older than the ones kept verbatim, so there is nothing to summarize",
+  "verbatim-exceeds-budget":
+    "the most recent turns alone are over the compaction threshold; summarizing the older ones would not make room, " +
+    "and dropping the recent ones is not something compaction does",
+  "summarizer-window-too-small":
+    "the model configured to write summaries cannot hold these turns in one request; point " +
+    "`limits.context.summaryModel` at a larger one, or clear it to use the conversation's own model",
+};
+
+/** The body. `summary` and `covers` ride together or not at all, because a range with no row is a claim about a
+ *  summary nobody can fetch (§5.2's retrievability read on this route), and a row with no range is a turn pretending
+ *  to be a summary (D-116). */
+export interface CompactSessionBody {
+  /** The conversation's own id, typed as the string it is rather than as the `TypeBox` schema every record above
+   *  embeds — this body has no schema of its own (a body is built by the route, not validated from a request body),
+   *  and a `SessionId` value is not a type anyone can write. */
+  readonly sessionId: string;
+  readonly outcome: CompactionOutcomeName;
+  readonly summary?: MessageRecord;
+  readonly covers?: { readonly from: number; readonly through: number };
+  /** How many turns the summary stands in for — a count beside the range, for the same reason every other list in
+   *  this file puts one beside a page. */
+  readonly turns?: number;
+  /** §3.4's number with its label, because a client that renders "saved 4,000 tokens" without the label would be
+   *  stating a measurement this build did not make (D-115). */
+  readonly projected?: { readonly tokens: number; readonly source: "measured" | "estimated" };
+  readonly threshold?: number;
+  readonly reason?: CompactionRefusalName;
+  /** The sentence a CLI prints and a TUI shows, so no interface has to write its own explanation of a refusal. */
+  readonly note: string;
+}
+
 /** What a session mutation answers with: the row as it now stands, and the token the next mutation has to carry. */
 export interface SessionActionBody {
   readonly session: SessionRow;

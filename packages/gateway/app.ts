@@ -50,7 +50,7 @@ import {
   type BudgetDescriptor,
   type Cancellation,
   type Checkpoints,
-  type ContextLimits,
+  contextBudget,
   contextLimits,
   createApprovals,
   createCancellation,
@@ -60,6 +60,7 @@ import {
   createRunner,
   createScheduler,
   DEFAULT_RUN_HISTORY,
+  estimateFromChars,
   type JobActionCode,
   type JobStore,
   type LoopLimits,
@@ -74,14 +75,17 @@ import {
   type StartResult,
   type ToolSurface,
 } from "@crabby/agent-runtime";
-import type { ApprovalState, ToolDeclaration } from "@crabby/api-contracts";
+import type { ApprovalState, MessageRecord, ToolDeclaration } from "@crabby/api-contracts";
 import {
   APPROVAL_STATES,
   ApprovalDecisionBody,
   ApprovalListQuery,
   CancelTaskBody,
   type ClientInterface,
+  COMPACTION_REFUSAL_NOTES,
   CONFIG_REFUSAL_CLASS,
+  type CompactionRefusalName,
+  type CompactSessionBody,
   type ConfigReadBody,
   type ConfigWriteBody,
   CreateSessionBody,
@@ -168,6 +172,7 @@ import {
   createTask,
   ensureSession,
   getIdentity,
+  getMessage,
   getSession,
   getTask,
   type Identity,
@@ -175,6 +180,7 @@ import {
   listMessages,
   listSessions,
   listTasks,
+  messageCharCount,
   mintPairingCode,
   patchSession,
   pruneEvents,
@@ -2030,6 +2036,176 @@ function registerSessionRoutes(app: FastifyInstance, deps: GatewayDeps): void {
       return reply.send(body);
     },
   );
+
+  /** D-027's route: compact a conversation now rather than at the budget, and §4.2's "the same act asked by
+   *  hand" made literal — this calls `createContextManager`, the same function the loop calls before every
+   *  provider request, so "compact now" and "compact at 0.8" cannot drift into two opinions about what a summary
+   *  contains (D-113, D-117).
+   *
+   *  Three decisions the owner made in conversation, and none of them is this file's: **`session.write`, with no
+   *  extra prompt** (SECURITY §6.1 already grants it, and a user pressing "compact" has already asked for it —
+   *  the model call it costs is the price of that button), **a direct session mutation rather than a task** (a
+   *  compaction has no steps to watch, nothing to cancel and no result to read, and making it a task would spend
+   *  a T2 to create a record of an act that takes seconds), and **one writer, this loop's** — the same
+   *  `conversationWriter(db)` the runtime records turns through.
+   *
+   *  The capability that would decide this is `session.write`, and the route is gated by the token exactly as
+   *  `PATCH /sessions/{id}` is; F-52 records that no route enforces a capability by name yet, and a route that
+   *  invented its own check would be one enforcement path the rest of this file does not have.
+   */
+  app.post<{ Params: { id: string } }>("/api/v1/sessions/:id/compact", async (request, reply) => {
+    const session = getSession(deps.db, request.params.id);
+    if (session === undefined)
+      throw new GatewayError({
+        code: "session_not_found",
+        message: `no conversation ${request.params.id} is in this data directory`,
+        class: "not-found",
+        retryable: false,
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+
+    // §3.4's threshold needs the run's model: a conversation's own override if it has one, because a budget is a
+    // fact about the model that has to carry the conversation, and the install's default otherwise.
+    const modelId = session.model ?? deps.drive?.modelId;
+    const descriptor = await describedModel(deps.drive?.provider, modelId);
+    const limits = contextLimits(deps.context);
+    if (descriptor === undefined)
+      // §3.2 again: a model nobody can describe is disabled, so there is no window to compact against and a 503
+      // that says so beats a 200 that claimed nothing needed doing.
+      throw new GatewayError({
+        code: "context_unavailable",
+        message:
+          `no descriptor for ${modelId ?? "the default model"}, so there is no context window to compact against ` +
+          "(PROVIDERS_AND_TOOLS.md §3.2 disables a model that cannot describe itself)",
+        class: "provider",
+        retryable: true,
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+    const budget = contextBudget(budgetDescriptorOf(descriptor), limits);
+
+    // The cheap read first (D-118): a length decides most conversations without loading a turn.
+    const size = messageCharCount(deps.db, session.id);
+    const projected = { tokens: estimateFromChars(size.chars), source: "estimated" as const };
+    if (projected.tokens <= budget.compactAtTokens)
+      return reply.send({
+        sessionId: session.id,
+        outcome: "not-needed",
+        projected,
+        threshold: budget.compactAtTokens,
+        note:
+          `this conversation holds ${size.rows} turn${size.rows === 1 ? "" : "s"} and costs about ` +
+          `${projected.tokens.toLocaleString("en-US")} of an estimated ${budget.budget.toLocaleString("en-US")} ` +
+          `tokens, under the ${limits.compactAt} threshold — nothing to summarize`,
+      } satisfies CompactSessionBody);
+
+    // The expensive read, page by page, because a conversation kept for a month can hold more turns than a phone
+    // should hold in one array (§2's bounded-page rule, applied to a route that reads rather than renders).
+    const rows: MessageRecord[] = [];
+    let cursor: number | undefined;
+    for (let page = 0; page < 50; page += 1) {
+      const read = listMessages(deps.db, session.id, {
+        limit: 200,
+        ...(cursor === undefined ? {} : { after: cursor }),
+      });
+      rows.push(...read.items);
+      if (read.items.length < 200) break;
+      cursor = read.items.at(-1)?.ordinal;
+    }
+    const manager = createContextManager({
+      resolveRun: async () => budgetDescriptorOf(descriptor),
+      resolveSummarizer: async () => {
+        const configured = deps.context?.summaryModel;
+        const [providerId, ...rest] = (
+          configured ?? `${deps.drive?.provider.id ?? ""}/${modelId ?? ""}`
+        ).split("/");
+        const wanted = configured === undefined ? modelId : rest.join("/");
+        const provider = composedPool(deps).find((candidate) => candidate.id === providerId);
+        if (provider === undefined || wanted === undefined) return undefined;
+        const described = await describedModel(provider, wanted);
+        return described === undefined
+          ? undefined
+          : { provider, descriptor: { ...budgetDescriptorOf(described), modelId: wanted } };
+      },
+      messages: conversationWriter(deps.db),
+      limits,
+    });
+    const ordinals = new Map<{ role: string; content: string }, number>();
+    const messages = rows.map((row) => {
+      const message = { role: row.role, content: row.content } as { role: string; content: string };
+      ordinals.set(message, row.ordinal);
+      return message;
+    });
+    const result = await manager.compact({
+      sessionId: session.id,
+      // No `taskId`: a conversation can outgrow its budget with nothing running, and §2.5's rows have a nullable
+      // `task_id` for exactly this conversation.
+      messages: messages as never,
+      ordinalOf: (message) => ordinals.get(message as { role: string; content: string }),
+    });
+    const client = request.crabbyClient;
+    deps.log.info("session compacted", {
+      session: session.id,
+      outcome: result.kind,
+      ...(result.kind === "compacted" ? { covers: result.covers, turns: result.turns } : {}),
+      ...(result.kind === "refused" ? { reason: result.reason } : {}),
+      ...(client === undefined ? {} : { by: client.id, via: client.interface }),
+      ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+    });
+    if (result.kind === "failed")
+      // §3.5's class for "the thing you asked for did not happen because a model call did not work", and retryable
+      // because a summarizer that was rate-limited a minute ago may not be now.
+      throw new GatewayError({
+        code: "context_compaction_failed",
+        message: result.reason,
+        class: "provider",
+        retryable: true,
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+    if (result.kind === "refused" && result.reason === "summarizer-unavailable")
+      throw new GatewayError({
+        code: "context_unavailable",
+        message:
+          "no model is configured to write a summary with; set one with " +
+          "`crabby config set limits.context.summaryModel <provider>/<model>`, or configure a provider at all",
+        class: "provider",
+        retryable: false,
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+    if (result.kind === "unchanged")
+      return reply.send({
+        sessionId: session.id,
+        outcome: "not-needed",
+        projected,
+        threshold: budget.compactAtTokens,
+        note: "the turns this conversation holds do not reach the compaction threshold",
+      } satisfies CompactSessionBody);
+    if (result.kind === "refused") {
+      // The fourth refusal (`summarizer-unavailable`) was answered above as an error, so what reaches here is
+      // one of the three conversation-shaped names the contracts define — which is what makes the lookup total.
+      const reason = result.reason as CompactionRefusalName;
+      return reply.send({
+        sessionId: session.id,
+        outcome: "refused",
+        reason,
+        projected,
+        threshold: budget.compactAtTokens,
+        note: COMPACTION_REFUSAL_NOTES[reason],
+      } satisfies CompactSessionBody);
+    }
+    const summary = getMessage(deps.db, result.stored.id);
+    return reply.send({
+      sessionId: session.id,
+      outcome: "compacted",
+      ...(summary === undefined ? {} : { summary }),
+      covers: result.covers,
+      turns: result.turns,
+      projected,
+      threshold: budget.compactAtTokens,
+      note:
+        `summarized turns ${result.covers.from}–${result.covers.through} into one summary; the ` +
+        `${result.turns} turns they name are still readable at GET /api/v1/sessions/${session.id}/messages`,
+    } satisfies CompactSessionBody);
+  });
 
   app.patch<{ Params: { id: string }; Body: PatchSessionBody }>(
     "/api/v1/sessions/:id",

@@ -20,6 +20,7 @@ import path from "node:path";
 import { after, describe, it } from "node:test";
 import { createScriptedProvider } from "@crabby/agent-runtime/loop-harness";
 import {
+  type CompactSessionBody,
   newId,
   type SessionActionBody,
   type SessionDetailBody,
@@ -28,7 +29,7 @@ import {
   UNNAMED_TITLE,
 } from "@crabby/api-contracts";
 import { createLogger } from "@crabby/core";
-import { buildApp, createClient, type GatewayClient } from "@crabby/gateway";
+import { buildApp, createClient, type GatewayClient, GatewayFailure } from "@crabby/gateway";
 import { dataLayout, homeDirectory } from "@crabby/platform";
 import { capabilitiesFor } from "@crabby/policy";
 import { composeProviders, FAKE_TOOL_MODEL_ID, type FakeStep } from "@crabby/providers";
@@ -65,6 +66,9 @@ interface Harness {
 async function boot(options: {
   rounds?: readonly (readonly FakeStep[])[];
   noRunner?: boolean;
+  /** D-115's `limits.context`, handed to the Gateway the way the composition root hands it. A test that needs a
+   *  different verbatim tail says so here rather than waiting for a conversation long enough to need the default. */
+  context?: { compactAt?: number; verbatimTurns?: number; summaryModel?: string };
 }): Promise<Harness> {
   const dir = mkdtempSync(path.join(tmpdir(), "crabby-sessions-"));
   const layout = dataLayout(dir);
@@ -165,6 +169,7 @@ async function boot(options: {
     listenerMode: "local",
     declares: composed === undefined ? files.declares : composed.declares,
     ...(drive === undefined ? {} : { drive }),
+    ...(options.context === undefined ? {} : { context: options.context }),
   });
   await built.app.listen({ host: "127.0.0.1", port: 0 });
   const address = built.app.server.address();
@@ -559,6 +564,134 @@ describe("the session routes", () => {
         1,
         "and activity is not an edit, so the token a phone holds survives it",
       );
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+describe("`POST /sessions/{id}/compact` — the same act, asked for by hand (D-118)", () => {
+  /** One turn of enough text to be over the budget and still inside the summarizer's window: §3.4's heuristic
+   *  prices 4,300 characters at about 5,805 tokens, which is past this install's threshold (an 8,192-token window
+   *  minus output reserve, times D-115's 0.8 = 5,734) and inside the same model's 7,168. A conversation that needed
+   *  *more* than any model could read would be refused with `summarizer-window-too-small` — its own sentence, its
+   *  own test. */
+  const long = "z".repeat(4300);
+
+  it("answers `not-needed` for a conversation that fits, without reading a turn", async () => {
+    const h = await boot({ rounds: [[{ kind: "text", text: "one short answer" }]] });
+    try {
+      const created = (
+        await h.cli.createTask({ objective: "say something small" }, "idem-compact-1")
+      ).body as TaskRecord;
+      await untilTerminal(h, created.id);
+      const body = (await h.cli.compactSession(created.sessionId)).body as CompactSessionBody;
+      assert.equal(body.outcome, "not-needed");
+      assert.equal(
+        body.reason,
+        undefined,
+        "a conversation that fits is not refused, it is simply not compacted",
+      );
+      assert.equal(
+        body.projected?.source,
+        "estimated",
+        "§3.4: a count this build did not measure is labelled",
+      );
+      assert.ok(
+        (body.projected?.tokens ?? Infinity) <= (body.threshold ?? 0),
+        "and the cheap read is enough to say so — no turn was loaded to find that out",
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("summarizes an over-budget conversation, and the turns it names stay readable (D-116, D-118)", async () => {
+    // Three turns: a proposal, its result, and an enormous answer. The verbatim tail is configured to one turn
+    // (D-115's `limits.context.verbatimTurns`) because with the default six a three-turn conversation has nothing
+    // older to summarize — and refusing that is the planner being right, not the route failing.
+    const h = await boot({
+      // The long turn is not the last one: the verbatim tail is what has to fit under the threshold, so a
+      // conversation whose *final* turn is enormous is `verbatim-exceeds-budget` — correctly, and a different test.
+      rounds: [
+        [
+          { kind: "text", text: long },
+          { kind: "tool-call", name: "session.list", arguments: {} },
+        ],
+        [{ kind: "text", text: "listed them" }],
+      ],
+      context: { verbatimTurns: 1 },
+    });
+    try {
+      const created = (
+        await h.cli.createTask({ objective: "say something enormous" }, "idem-compact-2")
+      ).body as TaskRecord;
+      await untilTerminal(h, created.id);
+      const before = (await h.cli.sessionMessages(created.sessionId)).body as {
+        items: { id: string; ordinal: number }[];
+        count: number;
+      };
+      assert.ok(before.count > 1, "the run wrote its turns as it went (D-117)");
+
+      const body = (await h.cli.compactSession(created.sessionId)).body as CompactSessionBody;
+      assert.equal(body.outcome, "compacted", JSON.stringify(body));
+      assert.ok(body.summary !== undefined, "and the answer names the summary row it wrote");
+      assert.equal(body.summary?.role, "system");
+      assert.deepEqual(body.summary?.covers, {
+        from: body.covers?.from,
+        through: body.covers?.through,
+      });
+      assert.ok(
+        (body.turns ?? 0) > 0,
+        "with a count beside the range, like every other list in this build",
+      );
+      assert.match(
+        body.note,
+        /still readable/,
+        "the note says where the originals are, not just that something happened",
+      );
+
+      const after = (await h.cli.sessionMessages(created.sessionId)).body as {
+        items: {
+          id: string;
+          ordinal: number;
+          role: string;
+          covers?: { from: number; through: number };
+        }[];
+        count: number;
+      };
+      assert.equal(
+        after.count,
+        before.count + 1,
+        "§2.5: a summary is a row beside the turns, not a replacement of them",
+      );
+      for (const item of before.items)
+        assert.ok(
+          after.items.some((kept) => kept.id === item.id),
+          `turn ${item.ordinal} is still in the conversation after compaction`,
+        );
+      const summaryRow = after.items.find((item) => item.id === body.summary?.id);
+      assert.deepEqual(
+        summaryRow?.covers,
+        body.covers,
+        "and the row carries the range the body reported",
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("404s a conversation nobody made, because 'no such thing' and 'nothing to do' are different answers", async () => {
+    const h = await boot({ rounds: [[{ kind: "text", text: "unrelated" }]] });
+    try {
+      await assert.rejects(h.cli.compactSession("ses_nobody_made"), (error: unknown) => {
+        assert.ok(
+          error instanceof GatewayFailure,
+          `expected a gateway failure, got ${String(error)}`,
+        );
+        assert.equal(error.status, 404);
+        return true;
+      });
     } finally {
       await h.close();
     }

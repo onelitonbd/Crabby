@@ -210,6 +210,10 @@ export interface GatewayClient {
     id: string,
     options?: { cursor?: number; limit?: number },
   ): Promise<Response<unknown>>;
+  /** D-027's manual compaction: the same act the runtime performs at the budget, asked for by hand (D-113,
+   *  D-118). No body — there is nothing to say beyond "now", and a body field would be a second way to ask for
+   *  the same thing with different words. */
+  compactSession(id: string): Promise<Response<unknown>>;
   /** C11-01's list: conversations in last-activity order, each with the state word and title a list line prints. */
   sessions(options?: { origin?: string }): Promise<Response<unknown>>;
   /** One conversation with the tasks in it, and the `etag` that a rename has to send back as `If-Match`. */
@@ -373,6 +377,8 @@ export function createClient(input: {
         `/api/v1/sessions/${encodeURIComponent(id)}/messages${query.length > 0 ? `?${query}` : ""}`,
       );
     },
+    compactSession: (id) =>
+      request(`/api/v1/sessions/${encodeURIComponent(id)}/compact`, { method: "POST" }),
     authList: () => request("/api/v1/auth/clients"),
     authRevoke: (id) =>
       request(`/api/v1/auth/clients/${encodeURIComponent(id)}`, { method: "DELETE" }),

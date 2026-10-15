@@ -115,6 +115,16 @@ export function estimateTokens(text: string): number {
   return Math.max(1, byChars, byClusters);
 }
 
+/** The heuristic's upper bound, from a character count alone — the answer a store can give without reading a row.
+ *  `max(chars / 4, clusters × 1.35)`'s first term is never the larger one (one cluster is never fewer than a quarter
+ *  of a character), so `chars × 1.35` bounds the whole heuristic from above. A caller deciding whether a
+ *  conversation *needs* compacting may use this: if the upper bound is under the threshold, the exact count is too,
+ *  and a conversation that needs compacting is the one that pays for being read exactly. */
+export function estimateFromChars(chars: number): number {
+  if (chars <= 0) return 0;
+  return Math.ceil(chars * 1.35);
+}
+
 /** §3.4's first rule of preference: an adapter that ships `countTokens` is asked, and the heuristic is
  *  only the fallback. The label travels with the number so nothing downstream can quietly promote an
  *  estimate into a measurement. */

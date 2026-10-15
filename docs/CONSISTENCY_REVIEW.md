@@ -1408,7 +1408,32 @@ that provider; a pin no entry answers is refused 400 with the pool's ids before 
 exactly what the thirty-ninth slice named minus the pin: per-task capability narrowing still has no carrier in
 `CreateTaskBody`.
 
-### F-59 — The forty-sixth slice built the context verbs under the wrong noun, and a row's empties clause went unread
+### F-61 — C5-01 says a chat has "no task", and every run in this build is one
+
+**Severity: low in behaviour, high in wording, and left open for the owner rather than resolved by an agent.** The
+element row says: "chat: one-shot question — `crabby chat "…"` — plain question, **no task, no plan**; the answer
+streams to stdout". Three of those four clauses build and one cannot, because the runtime has no path that is not a
+task: §9's one-writer rule, the approval arbiter (D-084) and the checkpoint (D-095) all hang off one task row, and the
+alternative reading — a route that appended a conversation turn without a task — is precisely the second writer D-112
+forbids, which is also why `POST /sessions/{id}/messages` stays unbuilt. A chat here creates a task, follows it, and
+keeps it out of the user's view: the answer streams, no event vocabulary prints, and the conversation id is printed
+when the run opened one (C11-06's rule, and the reason a script cannot append to a conversation it never opened).
+
+**Why this is a finding and not a note.** "No task" was written by a reviewer describing a surface, not about a
+runtime, and the difference matters in exactly one place: what a caller may assume about the record behind the answer.
+C11-06 says "a fresh conversation each time, with its id printed on the last line", so the record is reachable — but a
+client that reads the row and concludes "chat answers without a task record" would be wrong about where the
+conversation came from, and a document that says so is better than a surface that implies it. D-123 therefore states
+the reading this slice implements (the clause is about the *output*) and names the other one (the clause is about the
+*record*), with what the other would cost: a second writer of conversation history, and a decision about §9 this
+repository does not get to make quietly.
+
+**Closing condition:** the owner says which reading the row meant. If the output reading stands, this finding closes
+with D-123 and the row's wording stays as a reviewer's shorthand. If the record reading is meant, it is a schema and
+architecture change — a turn that belongs to a conversation and no task — and it belongs in its own slice with its own
+decision row, not inside a CLI verb.
+
+### F-60 — The forty-sixth slice built the context verbs under the wrong noun, and a row's empties clause went unread
 
 **Severity: low, closed by the forty-seventh slice one commit after it was opened, and kept because the shape of it is
 the lesson: an element inventory is a specification, and building a feature from the architecture instead of from the

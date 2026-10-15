@@ -163,10 +163,13 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     noun: "chat",
-    summary: "one-shot prompt; `--session <id>` continues a conversation",
+    summary: "one-shot prompt; `--session <id>` continues a conversation (C5-01)",
     flags: ["--session ID", "--json"],
-    status: "planned",
-    milestone: "M2 (the runtime that answers a prompt)",
+    // C5-01/C5-02/C5-03/C11-06, built. A bare `crabby chat` gets a fresh conversation and prints its id on the last
+    // line (C11-06), `-` or a pipe reads the question from stdin (C5-02), and `--session` continues the one the Web and
+    // TUI see (C5-03). The answer streams and nothing else prints: "plain question, no task, no plan" is about the
+    // *output*, because §9's one-writer rule and the approval arbiter both hang off a task row — see F-60 and D-123.
+    status: "ready",
   },
   {
     // `ready` for the reason `task cancel` is: the rule is whether a route stands behind the verb, and `GET /events` has

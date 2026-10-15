@@ -32,6 +32,7 @@ function isPipeError(error: unknown): boolean {
 
 import { type ApprovalVerb, runApproval } from "./commands/approval.ts";
 import { type AuthVerb, runAuth } from "./commands/auth.ts";
+import { runChat } from "./commands/chat.ts";
 import { type ConfigVerb, runConfig } from "./commands/config.ts";
 import { type ContextVerb, runContext } from "./commands/context.ts";
 import { runDiagnostics } from "./commands/diagnostics.ts";
@@ -260,6 +261,12 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     case "context": {
       return runContext(verb as ContextVerb | undefined, rest, layout, renderer);
+    }
+    case "chat": {
+      // The one verb that takes no sub-verb: C5-01 writes `crabby chat "…"`, and a bare `crabby chat` is C11-06's
+      // "a fresh conversation each time". Everything after the noun is the question, which is why the whole rest of the
+      // line is handed over rather than a verb and its arguments.
+      return runChat(rest, layout, renderer);
     }
     case "diagnostics": {
       return runDiagnostics(rest, layout, renderer);

@@ -14,6 +14,7 @@
 // secret is not, and the difference is the whole reason D-031 exists.
 
 import { readFileSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
 import { EXIT, type ExitCode } from "@crabby/api-contracts";
 import {
   type ConfigFile,
@@ -23,11 +24,25 @@ import {
   writeConfig,
 } from "@crabby/core";
 import type { DataLayout } from "@crabby/platform";
-import { composeProviders } from "@crabby/providers";
+import {
+  type ApplyResult,
+  applyOverride,
+  composeProviders,
+  type ModelOverride,
+  parseDescriptor,
+  parseOverride,
+  SUPPORTED_FEATURES,
+} from "@crabby/providers";
 import { parseTail } from "../args.ts";
 import { connect, reportFailure, reportNoGateway } from "../connect.ts";
 import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
+import {
+  describeOverride,
+  nextOverride,
+  type OverrideAnswers,
+  parseSupports,
+} from "./model-edit.ts";
 
 export type ProviderVerb = "add" | "list" | "remove";
 export type ModelVerb = "list" | "edit" | "probe";
@@ -501,6 +516,352 @@ export async function runProvider(
   return EXIT.success;
 }
 
+/** C7-08 and §3.8's single entry point: `crabby model edit <provider>/<model>`. Two interaction shapes, one stored
+ *  value — flags for a script, per-field prompts for a person, and both through `nextOverride` in `model-edit.ts`, which
+ *  is what makes D-064's "both paths must reach the same stored value" a fact about the code rather than a promise
+ *  about it.
+ *
+ *  **What it prints is what the next run will use.** After the write it composes in-process (the same
+ *  `composeProviders` a Gateway calls at startup) and prints the *provenance* — which values actually moved — rather than
+ *  the values the user typed. That distinction is the whole reason §3.8 asks a screen to say which entries are
+ *  overridden: a record that restates what the endpoint already said is not an override, and a success line that implied
+ *  otherwise would be a claim about the effective descriptor rather than about the file.
+ *
+ *  **A prompt is only offered where there is a person.** With no flags and a TTY, each field is asked with its current
+ *  effective value as the default, and an empty answer leaves that field alone. With no flags and no TTY — a pipe, a cron
+ *  job, an editor calling this — the command prints what is in force and the flags to change it, because a command that
+ *  waits for input nobody can type is the one failure mode that looks like a working terminal (C5-02's rule, applied
+ *  here). */
+async function editModel(
+  tail: ReturnType<typeof parseTail>,
+  layout: DataLayout,
+  renderer: Renderer,
+): Promise<ExitCode> {
+  const target = tail.positionals[0];
+  if (target === undefined) {
+    renderer.line(
+      "model edit",
+      "which model? `crabby model list` prints them as `<provider>/<model>`",
+    );
+    return EXIT.usage;
+  }
+  const slash = target.indexOf("/");
+  if (slash <= 0 || slash === target.length - 1) {
+    renderer.line("model edit", `'${target}' is not a <provider>/<model> pair`);
+    renderer.fix(
+      "§3.8's overrides are per endpoint as well as per model, so the provider is part of the name",
+    );
+    return EXIT.usage;
+  }
+  const providerId = target.slice(0, slash);
+  const modelId = target.slice(slash + 1);
+
+  const loaded = loadConfig(layout);
+  const entry = loaded.config.provider?.[providerId];
+  if (entry === undefined) {
+    renderer.line("model edit", `no provider '${providerId}' is configured`);
+    renderer.fix(
+      Object.keys(loaded.config.provider ?? {}).length === 0
+        ? "§3.3's path is `crabby provider add <id> --base-url <url> --model <id> --context N --max-output N`"
+        : `configured: ${Object.keys(loaded.config.provider ?? {}).join(", ")}`,
+    );
+    return EXIT.usage;
+  }
+  if (entry.models?.[modelId] === undefined) {
+    renderer.line("model edit", `'${providerId}' has no model '${modelId}'`);
+    renderer.fix(
+      `it declares ${Object.keys(entry.models ?? {}).join(", ") || "no models at all (§3.2 refuses that)"}`,
+    );
+    return EXIT.usage;
+  }
+
+  const stored = entry.overrides?.[modelId];
+  // One shape for both cases, because the two-shape union made the `current` read below a narrowing exercise: an absent
+  // record is not a different kind of answer, it is no answer.
+  const parsedStored: ReturnType<typeof parseOverride> | { ok: true; override: undefined } =
+    stored === undefined ? { ok: true, override: undefined } : parseOverride(stored);
+  if (!parsedStored.ok) {
+    // The document holds something composition will refuse, so this verb must not build on top of it: the fix is the
+    // user's, and `--clear` is offered because for one model that is almost always the right first move.
+    renderer.line(
+      "model edit",
+      `the stored override for '${target}' does not parse: ${parsedStored.reason}`,
+    );
+    renderer.fix(
+      `crabby model edit ${target} --clear removes it, and then set only what you meant`,
+    );
+    return EXIT.failure;
+  }
+  const current: ModelOverride | undefined = parsedStored.ok ? parsedStored.override : undefined;
+
+  const flagAnswers = parseSupports(tail.values.supports);
+  if (!flagAnswers.ok) {
+    renderer.line("model edit", flagAnswers.reason ?? "");
+    return EXIT.usage;
+  }
+  const context = positiveInt(tail.values.context);
+  const maxOutput = positiveInt(tail.values["max-output"]);
+  if (tail.values.context !== undefined && context === undefined) {
+    renderer.line("model edit", "--context takes a positive whole number");
+    return EXIT.usage;
+  }
+  if (tail.values["max-output"] !== undefined && maxOutput === undefined) {
+    renderer.line("model edit", "--max-output takes a positive whole number");
+    return EXIT.usage;
+  }
+  const askedSomething =
+    context !== undefined ||
+    maxOutput !== undefined ||
+    flagAnswers.supports !== undefined ||
+    tail.values.notes !== undefined ||
+    tail.booleans.has("--clear");
+
+  const effective = effectiveOf(loaded.config.provider, providerId, modelId);
+  let answers: OverrideAnswers | undefined = {
+    ...(context === undefined ? {} : { context }),
+    ...(maxOutput === undefined ? {} : { maxOutput }),
+    ...(flagAnswers.supports === undefined ? {} : { supports: flagAnswers.supports }),
+    ...(tail.values.notes === undefined ? {} : { notes: tail.values.notes }),
+    ...(tail.booleans.has("--clear") ? { clear: true } : {}),
+  };
+  if (!askedSomething && tail.positionals.length === 1) {
+    if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
+      answers = await promptForOverride(answers, current, effective, renderer);
+      if (answers === undefined) {
+        renderer.line("model edit", "nothing answered, nothing written");
+        return EXIT.success;
+      }
+    } else {
+      // Not a person. Print what is in force and how to change it, rather than waiting for a keypress that will never
+      // come — C5-02's "an error, not a hang", applied to a command that has flags for exactly this case.
+      renderer.line("model edit", `'${target}' has no override; flags change it:`);
+      renderer.line(
+        "  capabilities",
+        `--supports toolCalling=true,streaming=false (or auto for "whatever the endpoint reported"; the model has ${SUPPORTED_FEATURES.join(", ")})`,
+      );
+      renderer.line(
+        "  limits",
+        "--context 8192 --max-output 1024 — budgeting (D-064) sizes compaction against these",
+      );
+      renderer.line(
+        "  clear",
+        `--clear removes the record; --notes "why" records the reason beside it`,
+      );
+      return EXIT.success;
+    }
+  }
+
+  const next = nextOverride(current, answers ?? {});
+  if (!next.ok) {
+    renderer.line("model edit", next.reason);
+    return EXIT.usage;
+  }
+  const file = structuredClone(loaded.file) as Record<string, unknown>;
+  const providers = { ...((file.provider ?? {}) as Record<string, unknown>) };
+  const entry0 = { ...((providers[providerId] ?? {}) as Record<string, unknown>) };
+  const overrides = { ...((entry0.overrides ?? {}) as Record<string, unknown>) };
+  if (next.override === undefined) delete overrides[modelId];
+  else overrides[modelId] = next.override;
+  if (Object.keys(overrides).length === 0) delete entry0.overrides;
+  else entry0.overrides = overrides;
+  providers[providerId] = entry0;
+  file.provider = providers;
+
+  const written = writeConfig(layout, file as ConfigFile, undefined, { token: loaded.token });
+  if (!written.ok) {
+    renderer.line("refused", written.message);
+    renderer.fix(
+      written.code === "stale"
+        ? "the file changed since this command read it — run it again"
+        : "nothing was written",
+    );
+    return EXIT.usage;
+  }
+
+  // Composed here rather than after a Gateway restart, and the reason is the same one `provider add` gives: this is the
+  // same pure function on the same document, so what this prints is what the next process will compose rather than a
+  // second opinion about it.
+  const composed = composeProviders((file as ConfigFile).provider);
+  const entry1 = composed.find((row) => row.id === providerId);
+  const provenance = entry1?.ok === true ? entry1.overrides[modelId] : undefined;
+  const changes = describeOverride(provenance);
+  if (renderer.json) {
+    renderer.done({
+      model: target,
+      ...(next.override === undefined
+        ? { override: null, cleared: true }
+        : { override: next.override }),
+      ...(provenance === undefined ? {} : { effective: provenance }),
+      ...(entry1 === undefined || !entry1.ok
+        ? { composed: false, reason: entry1?.reason ?? "unknown" }
+        : { composed: true }),
+      changes,
+    });
+    return EXIT.success;
+  }
+  renderer.line(
+    next.override === undefined ? "cleared" : "wrote",
+    next.override === undefined
+      ? `the override for ${target} — the reported descriptor is in force`
+      : `provider.${providerId}.overrides.${modelId}`,
+  );
+  if (changes.length === 0) {
+    // The honest version of a success line: nothing moved. §3.8's drift report needs this distinction, and a screen that
+    // printed "ok" for a restated value would make a user believe they had widened a capability they had not.
+    renderer.line(
+      "effective",
+      "unchanged — every value you set is what the endpoint already reported",
+    );
+  } else {
+    for (const change of changes) renderer.line("  changed", change);
+  }
+  if (entry1 === undefined || !entry1.ok) {
+    renderer.line(
+      "composed",
+      `no — ${entry1?.reason ?? "unknown"}, so this override is not in force until that is fixed`,
+    );
+  }
+  if (current?.notes !== undefined && next.override !== undefined) {
+    renderer.line("notes", next.override.notes ?? "(none)");
+  }
+  renderer.fix(
+    "restart the Gateway to pick it up; `crabby model list` shows it as overridden. \u00a73.8's failure sentence " +
+      "(\u201cdeclared by override and failed\u201d) arrives with the slice that wires provenance into the loop",
+  );
+  return EXIT.success;
+}
+
+/** The per-field prompts, answered as `OverrideAnswers` and no further — the boundary D-064 needs is that nothing below
+ *  this knows which shape produced the answer. An empty answer leaves the field as it is, because a prompt with a
+ *  default that overwrites the default when you press return is a prompt that quietly discards an edit. `undefined` comes
+ *  back only when the person quit, which is not an answer and must not write anything. */
+async function promptForOverride(
+  seed: OverrideAnswers,
+  current: ModelOverride | undefined,
+  effective:
+    | { contextWindow?: number; maxOutputTokens?: number; supports: Record<string, boolean> }
+    | undefined,
+  renderer: Renderer,
+): Promise<OverrideAnswers | undefined> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = async (label: string, fallback: string): Promise<string | undefined> => {
+    try {
+      const answer = (await rl.question(`${label} [${fallback}]: `)).trim();
+      return answer.length === 0 ? undefined : answer;
+    } catch {
+      // Ctrl-D, or a closed stdin. Neither is an answer, and writing what was gathered so far would be a partial edit
+      // presented as a complete one.
+      return undefined;
+    }
+  };
+  try {
+    renderer.line(
+      "model edit",
+      "answer with a value, or press return to keep what is in force; 'quit' writes nothing",
+    );
+    const supports: Record<string, "true" | "false" | "auto"> = {};
+    for (const feature of SUPPORTED_FEATURES) {
+      const now =
+        current?.supports?.[feature] === undefined ? "auto" : String(current.supports[feature]);
+      const answer = await ask(
+        `  ${feature} (now ${now}, endpoint says ${String(effective?.supports[feature] ?? false)})`,
+        now,
+      );
+      if (answer === undefined) continue;
+      if (answer === "quit") return undefined;
+      const value = parseSupports(`${feature}=${answer}`);
+      if (!value.ok || value.supports === undefined) {
+        renderer.line("  refused", value.reason ?? "that is not a value");
+        continue;
+      }
+      Object.assign(supports, value.supports);
+    }
+    const contextAnswer = await ask(
+      `  contextWindow (now ${String(effective?.contextWindow ?? "unknown")})`,
+      String(current?.limits?.contextWindow ?? effective?.contextWindow ?? ""),
+    );
+    if (contextAnswer === "quit") return undefined;
+    const maxAnswer = await ask(
+      `  maxOutputTokens (now ${String(effective?.maxOutputTokens ?? "unknown")})`,
+      String(current?.limits?.maxOutputTokens ?? effective?.maxOutputTokens ?? ""),
+    );
+    if (maxAnswer === "quit") return undefined;
+    const notes = await ask("  notes (optional)", current?.notes ?? "");
+    if (notes === "quit") return undefined;
+    const context = contextAnswer === undefined ? undefined : positiveInt(contextAnswer);
+    const maxOutput = maxAnswer === undefined ? undefined : positiveInt(maxAnswer);
+    return {
+      ...seed,
+      ...(context === undefined ? {} : { context }),
+      ...(maxOutput === undefined ? {} : { maxOutput }),
+      ...(Object.keys(supports).length === 0 ? {} : { supports }),
+      ...(notes === undefined ? {} : { notes }),
+      ...(Object.keys(supports).length === 0 &&
+      context === undefined &&
+      maxOutput === undefined &&
+      notes === undefined
+        ? { clear: true }
+        : {}),
+    };
+  } finally {
+    rl.close();
+  }
+}
+
+/** Which fields an override record touches, in the screen's own words. This is the **record** (what the user set), not the
+ *  provenance (what actually moved): a list answers "what did I change here", and `model edit` answers "what did it do",
+ *  because a screen that answered both with one word would have to choose between restating a value and widening one. */
+function overrideLabels(entry: { readonly overrides?: unknown }, modelId: string): string[] {
+  const record = (entry.overrides as Record<string, unknown> | undefined)?.[modelId];
+  if (record === undefined) return [];
+  const parsed = parseOverride(record);
+  if (!parsed.ok) return ["an override that does not parse — `crabby model edit` says why"];
+  const labels = Object.keys(parsed.override.supports ?? {});
+  const limits = parsed.override.limits ?? {};
+  if (limits.contextWindow !== undefined) labels.push("contextWindow");
+  if (limits.maxOutputTokens !== undefined) labels.push("maxOutputTokens");
+  if (labels.length === 0 && parsed.override.notes !== undefined) labels.push("notes only");
+  return labels;
+}
+
+/** The effective values of one model, from the same composition the write is judged by. Read before the write so the
+ *  prompts can show the truth rather than the file. */
+function effectiveOf(
+  providers: Record<string, Record<string, unknown>> | undefined,
+  providerId: string,
+  modelId: string,
+):
+  | { contextWindow?: number; maxOutputTokens?: number; supports: Record<string, boolean> }
+  | undefined {
+  if (providers === undefined) return undefined;
+  // Composition is asked whether the entry composes at all, so a screen never shows effective values for a provider the
+  // runtime would refuse — a "current" value for a model nothing can call is a fiction.
+  const composed = composeProviders(providers as ConfigFile["provider"]).find(
+    (row) => row.id === providerId,
+  );
+  if (composed === undefined || !composed.ok) return undefined;
+  // The reported descriptor comes from the document rather than from `provider.describe()`: `describe()` is async, and a
+  // synchronous screen path should not make the whole verb async to read one number — §3.2's parser plus
+  // `applyOverride` is exactly the composition does internally, applied here to the stored pair.
+  const models = (providers[providerId]?.models ?? {}) as Record<string, Record<string, unknown>>;
+  const stored = models[modelId];
+  if (stored === undefined) return undefined;
+  const parsed = parseDescriptor(stored);
+  if (!parsed.ok) return undefined;
+  const overrides = (providers[providerId]?.overrides ?? {}) as Record<string, ModelOverride>;
+  const record = overrides[modelId];
+  const applied: ApplyResult =
+    record === undefined
+      ? { ok: true, descriptor: parsed.descriptor, provenance: { source: "manual" } }
+      : applyOverride(parsed.descriptor, record);
+  if (!applied.ok) return undefined;
+  return {
+    contextWindow: applied.descriptor.contextWindow,
+    maxOutputTokens: applied.descriptor.maxOutputTokens,
+    supports: applied.descriptor.supports,
+  };
+}
+
 export async function runModel(
   verb: ModelVerb | undefined,
   argv: readonly string[],
@@ -514,14 +875,13 @@ export async function runModel(
     renderer.fix(`${(spec?.flags ?? []).join(" ")} are what this verb accepts`);
     return EXIT.usage;
   }
+  if (verb === "edit") return editModel(tail, layout, renderer);
   if (verb !== "list") {
     renderer.line(`crabby model ${verb}`, "not in this version yet");
     renderer.fix(
-      verb === "edit"
-        ? "D-064 prices this verb's shape — per-field prompts, flags, or both, reaching the same stored value — and the " +
-            "stored value is a `config.json` descriptor today"
-        : "a probe calls a provider and reports latency and the §3.5 error class; the composition it needs arrives with " +
-            "M4's provider adapters",
+      "a probe calls a live endpoint and reports latency and the §3.5 error class per capability; the credential it " +
+        "needs belongs to a Gateway rather than to a terminal, and no route holds one — `crabby model edit` is the " +
+        "verb that works without a call, because §3.8's override is a document",
     );
     return EXIT.usage;
   }
@@ -535,22 +895,57 @@ export async function runModel(
     readonly cost?: string;
     readonly batch?: unknown;
     readonly baseUrl?: string;
+    readonly overriddenBy?: string[];
+    readonly reported?: { readonly contextWindow?: number; readonly maxOutputTokens?: number };
   }[] = [];
   for (const [providerId, entry] of Object.entries(config.config.provider ?? {})) {
     const models = (entry.models ?? {}) as Record<string, Record<string, unknown>>;
     for (const [modelId, descriptor] of Object.entries(models)) {
+      // §3.8's last rule: this screen shows the **effective** capability set and which entries are overridden. Effective,
+      // not stored — an override that raised the window is what budgeting (D-064) sizes compaction against, and a list
+      // that printed the reported number would be a second opinion about the value the next run uses.
+      const effective = effectiveOf(
+        config.config.provider as Record<string, Record<string, unknown>>,
+        providerId,
+        modelId,
+      );
+      const labels = overrideLabels(entry, modelId);
       rows.push({
         provider: providerId,
         model: modelId,
-        ...(typeof descriptor.contextWindow === "number"
-          ? { contextWindow: descriptor.contextWindow }
-          : {}),
-        ...(typeof descriptor.maxOutputTokens === "number"
-          ? { maxOutputTokens: descriptor.maxOutputTokens }
-          : {}),
+        ...(effective?.contextWindow === undefined
+          ? typeof descriptor.contextWindow === "number"
+            ? { contextWindow: descriptor.contextWindow }
+            : {}
+          : { contextWindow: effective.contextWindow }),
+        ...(effective?.maxOutputTokens === undefined
+          ? typeof descriptor.maxOutputTokens === "number"
+            ? { maxOutputTokens: descriptor.maxOutputTokens }
+            : {}
+          : { maxOutputTokens: effective.maxOutputTokens }),
         ...(descriptor.cost === undefined ? {} : { cost: costClass(descriptor.cost) }),
         ...(descriptor.batching === undefined ? {} : { batching: descriptor.batching }),
         ...(typeof entry.baseUrl === "string" ? { baseUrl: entry.baseUrl } : {}),
+        ...(labels.length === 0 ? {} : { overriddenBy: labels }),
+        // The reported numbers, kept beside the effective ones when they differ, because the difference *is* the drift a
+        // user needs to see — and because a screen that showed only the override would make it impossible to tell
+        // whether the endpoint moved or the user did.
+        ...(effective === undefined ||
+        (typeof descriptor.contextWindow === "number" &&
+          descriptor.contextWindow === effective.contextWindow &&
+          typeof descriptor.maxOutputTokens === "number" &&
+          descriptor.maxOutputTokens === effective.maxOutputTokens)
+          ? {}
+          : {
+              reported: {
+                ...(typeof descriptor.contextWindow === "number"
+                  ? { contextWindow: descriptor.contextWindow }
+                  : {}),
+                ...(typeof descriptor.maxOutputTokens === "number"
+                  ? { maxOutputTokens: descriptor.maxOutputTokens }
+                  : {}),
+              },
+            }),
       });
     }
   }
@@ -584,7 +979,11 @@ export async function runModel(
           ? "output cap unknown"
           : `output ${row.maxOutputTokens.toLocaleString("en-US")}`) +
         " · " +
-        (row.cost ?? "cost class unstated"),
+        (row.cost ?? "cost class unstated") +
+        (row.overriddenBy === undefined ? "" : ` · overridden: ${row.overriddenBy.join(", ")}`) +
+        (row.reported === undefined
+          ? ""
+          : ` · the endpoint reported context ${String(row.reported.contextWindow ?? "?")} / output ${String(row.reported.maxOutputTokens ?? "?")}`),
     );
   }
   if (config.problems.length > 0) {

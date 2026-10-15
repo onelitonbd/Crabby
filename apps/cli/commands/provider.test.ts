@@ -28,10 +28,12 @@ import { EXIT } from "@crabby/api-contracts";
 import type { ConfigFile } from "@crabby/core";
 import { type DataLayout, dataLayout } from "@crabby/platform";
 import { createRenderer, type Renderer } from "../output.ts";
-import { runProvider } from "./provider.ts";
+import { runModel, runProvider } from "./provider.ts";
 
 interface Captured {
-  readonly out: string;
+  /** Everything written so far, as one string. A snapshot field would have been the obvious shape and the useless one:
+   *  every assertion here is about a *line*, and a renderer writes as it goes. */
+  captured(): string;
   readonly renderer: Renderer;
   readonly layout: DataLayout;
 }
@@ -42,7 +44,7 @@ function harness(): Captured {
   mkdirSync(layout.stateDir, { recursive: true, mode: 0o700 });
   const out: string[] = [];
   return {
-    out: "",
+    captured: () => out.join(""),
     renderer: createRenderer({ write: (s) => out.push(s), err: () => undefined }, false),
     layout,
   };
@@ -62,8 +64,7 @@ const BASE = [
 
 describe("crabby provider add", () => {
   it("writes the entry and composes it, and says so", async () => {
-    const { renderer, layout, ...rest } = harness();
-    void rest;
+    const { renderer, layout } = harness();
     const code = await runProvider("add", [...BASE], layout, renderer);
     assert.equal(code, EXIT.success);
     const file = JSON.parse(readFileSync(layout.configPath, "utf8")) as ConfigFile;
@@ -195,5 +196,136 @@ describe("crabby provider add: the key path", () => {
     );
     assert.equal(code, EXIT.usage);
     assert.throws(() => readFileSync(layout.configPath, "utf8"));
+  });
+});
+
+describe("crabby model edit", () => {
+  const ADD = [
+    "local",
+    "--base-url",
+    "http://127.0.0.1:8080/v1",
+    "--model",
+    "qwen2.5:3b",
+    "--context",
+    "4096",
+    "--max-output",
+    "1024",
+  ] as const;
+
+  it("refuses a target that is not `<provider>/<model>`", async () => {
+    const { captured, renderer, layout } = harness();
+    assert.equal(await runModel("edit", ["qwen2.5:3b"], layout, renderer), EXIT.usage);
+    // §3.8's overrides are per endpoint as well as per model, so a bare model id names two things at once and the
+    // command says which part is missing rather than guessing a provider.
+    assert.match(captured(), /<provider>\/<model>/);
+  });
+
+  it("refuses a provider that is not configured, naming what is", async () => {
+    const { captured, renderer, layout } = harness();
+    assert.equal(await runModel("edit", ["nope/qwen2.5:3b"], layout, renderer), EXIT.usage);
+    assert.match(captured(), /no provider 'nope' is configured/);
+  });
+
+  it("refuses a model the entry does not declare", async () => {
+    const { captured, renderer, layout } = harness();
+    await runProvider("add", [...ADD], layout, renderer);
+    assert.equal(await runModel("edit", ["local/other"], layout, renderer), EXIT.usage);
+    assert.match(captured(), /has no model 'other'/);
+  });
+
+  it("writes an override and reports what actually moved", async () => {
+    const { captured, renderer, layout } = harness();
+    await runProvider("add", [...ADD], layout, renderer);
+    assert.equal(
+      await runModel(
+        "edit",
+        ["local/qwen2.5:3b", "--supports", "streaming=true"],
+        layout,
+        renderer,
+      ),
+      EXIT.success,
+    );
+    const file = JSON.parse(readFileSync(layout.configPath, "utf8")) as ConfigFile;
+    assert.deepEqual(file.provider?.local?.overrides?.["qwen2.5:3b"], {
+      source: "manual",
+      supports: { streaming: true },
+    });
+    // The line that matters: §3.8's drift story needs "from what, to what", and a success line with no direction is a
+    // claim that something changed without saying what.
+    assert.match(captured(), /streaming: false → true/);
+    assert.match(captured(), /declared by you/);
+  });
+
+  it("reports an unchanged override as unchanged rather than as a change", async () => {
+    const { captured, renderer, layout } = harness();
+    await runProvider("add", [...ADD], layout, renderer);
+    await runModel("edit", ["local/qwen2.5:3b", "--supports", "systemRole=true"], layout, renderer);
+    // `systemRole` is already true in the reported descriptor, so nothing moved — and a screen that said "wrote" here
+    // would make a user believe they had declared something.
+    assert.match(captured(), /unchanged/);
+  });
+
+  it("removes the record with --clear, and says the reported descriptor is in force", async () => {
+    const { captured, renderer, layout } = harness();
+    await runProvider("add", [...ADD], layout, renderer);
+    await runModel("edit", ["local/qwen2.5:3b", "--context", "32768"], layout, renderer);
+    assert.equal(
+      await runModel("edit", ["local/qwen2.5:3b", "--clear"], layout, renderer),
+      EXIT.success,
+    );
+    const file = JSON.parse(readFileSync(layout.configPath, "utf8")) as ConfigFile;
+    // The key is gone rather than `{}`: an empty record is a claim that the user changed nothing, which an absent record
+    // already says (D-126).
+    assert.equal(file.provider?.local?.overrides, undefined);
+    assert.match(captured(), /the reported descriptor is in force/);
+  });
+
+  it("writes the record and prints the composition refusal when the limits make the descriptor illegal", async () => {
+    const { captured, renderer, layout } = harness();
+    await runProvider("add", [...ADD], layout, renderer);
+    // §3.2 refuses an output cap that does not fit inside the window. The record is written (composition is that gate,
+    // D-126) and the refusal is printed — the two facts together are the honest answer, and a verb that quietly
+    // dropped the write would leave the user with a flag that appears set and is not.
+    assert.equal(
+      await runModel("edit", ["local/qwen2.5:3b", "--context", "512"], layout, renderer),
+      EXIT.success,
+    );
+    assert.match(captured(), /composed/);
+    assert.match(captured(), /not in force/);
+  });
+
+  it("refuses a stored override it cannot parse, and offers --clear rather than building on it", async () => {
+    const { captured, renderer, layout } = harness();
+    await runProvider("add", [...ADD], layout, renderer);
+    const file = JSON.parse(readFileSync(layout.configPath, "utf8")) as ConfigFile;
+    const broken = {
+      ...file,
+      provider: {
+        ...file.provider,
+        local: {
+          ...file.provider?.local,
+          overrides: { "qwen2.5:3b": { supports: { nope: true } } },
+        },
+      },
+    } as ConfigFile;
+    writeFileSync(layout.configPath, JSON.stringify(broken, null, 2));
+    assert.equal(
+      await runModel("edit", ["local/qwen2.5:3b", "--context", "8192"], layout, renderer),
+      EXIT.failure,
+    );
+    assert.match(captured(), /does not parse/);
+    assert.match(captured(), /--clear/);
+  });
+
+  it("with no flags and no TTY it prints how to change the model instead of waiting for input", async () => {
+    const { captured, renderer, layout } = harness();
+    await runProvider("add", [...ADD], layout, renderer);
+    assert.equal(await runModel("edit", ["local/qwen2.5:3b"], layout, renderer), EXIT.success);
+    const out = captured();
+    assert.match(out, /--supports/);
+    assert.match(out, /--context/);
+    // C5-02's rule applied to a flag that already has a non-interactive path: a command that blocks on input nobody can
+    // type is the one failure that looks like a working terminal.
+    assert.ok(!out.includes("answer with a value"), "no prompt in a pipe");
   });
 });

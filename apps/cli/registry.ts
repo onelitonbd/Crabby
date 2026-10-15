@@ -295,10 +295,22 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "model",
     verb: "edit",
-    summary: "set or clear a model override",
-    flags: [],
-    status: "planned",
-    milestone: "M4 (provider configuration)",
+    summary: "set or clear what the user changed about one model (C7-08, §3.8)",
+    flags: [
+      "--context N",
+      "--max-output N",
+      "--supports F=BOOL[,F=BOOL]",
+      "--notes TEXT",
+      "--clear",
+      "--json",
+    ],
+    // Ready because §3.8's override record exists and is applied (D-126): the verb writes
+    // `provider.<id>.overrides.<modelId>` and reports the *effective* descriptor composition produced, so what it prints
+    // is what the next run will use rather than what the user typed. D-064's shape is honoured literally — flags for
+    // scripting, per-field prompts for a person, and one builder both go through, because "both paths must reach the same
+    // stored value" is a claim only a shared function can make. `--supports F=auto` clears one flag and `--clear` removes
+    // the record, which is §3.8's `auto` rule rather than a second way to spell it.
+    status: "ready",
   },
   {
     noun: "model",

@@ -41,7 +41,8 @@ function parseRef(text: string): { from: number; through: number } | undefined {
   const [first, last] = text.split("..");
   const from = Number.parseInt(first ?? "", 10);
   const through = last === undefined || last === "" ? from : Number.parseInt(last, 10);
-  if (!Number.isInteger(from) || !Number.isInteger(through) || from < 1 || through < from) return undefined;
+  if (!Number.isInteger(from) || !Number.isInteger(through) || from < 1 || through < from)
+    return undefined;
   return { from, through };
 }
 
@@ -66,7 +67,9 @@ export async function runContext(
         ? "which conversation? `crabby context show <id>`"
         : "which conversation? `crabby context pin <id> [turn|range]`",
     );
-    renderer.fix("`crabby session ls` prints the ids, and `crabby session messages <id>` prints the turns");
+    renderer.fix(
+      "`crabby session ls` prints the ids, and `crabby session messages <id>` prints the turns",
+    );
     return EXIT.usage;
   }
 
@@ -104,10 +107,11 @@ export async function runContext(
       );
       renderer.line(
         "pinned ranges",
-        body.pinned.length === 0 ? "none" : body.pinned.map((r) => `turns ${r.from}-${r.through}`).join(", "),
+        body.pinned.length === 0
+          ? "none"
+          : body.pinned.map((r) => `turns ${r.from}-${r.through}`).join(", "),
       );
-      if (body.absent.length > 0)
-        renderer.line("not answered here", body.absent.join(", "));
+      if (body.absent.length > 0) renderer.line("not answered here", body.absent.join(", "));
       return EXIT.success;
     }
 
@@ -126,7 +130,10 @@ export async function runContext(
     }
     const range = parseRef(ref);
     if (range === undefined) {
-      renderer.line("context pin", `"${ref}" is not a turn, or is a range that ends before it starts`);
+      renderer.line(
+        "context pin",
+        `"${ref}" is not a turn, or is a range that ends before it starts`,
+      );
       renderer.fix("`crabby session messages <id>` prints the ordinals a ref is named in");
       return EXIT.usage;
     }
@@ -136,9 +143,14 @@ export async function runContext(
       const page = (await client.sessionMessages(id, { limit: 200 })).body as {
         items: { id: string; ordinal: number }[];
       };
-      const inRange = page.items.filter((item) => item.ordinal >= range.from && item.ordinal <= range.through);
+      const inRange = page.items.filter(
+        (item) => item.ordinal >= range.from && item.ordinal <= range.through,
+      );
       if (inRange.length === 0) {
-        renderer.line("context pin", `turns ${range.from}-${range.through} are not in this conversation`);
+        renderer.line(
+          "context pin",
+          `turns ${range.from}-${range.through} are not in this conversation`,
+        );
         return EXIT.failure;
       }
       for (const turn of inRange) await client.unpinMessage(id, turn.id);

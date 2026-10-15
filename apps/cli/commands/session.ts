@@ -207,7 +207,11 @@ export async function runSession(
         );
       else if (body.outcome === "refused")
         renderer.line("originals", "nothing was changed: the turns stay exactly as they are");
-      else renderer.line("originals", "nothing was changed: the conversation is below its compaction threshold");
+      else
+        renderer.line(
+          "originals",
+          "nothing was changed: the conversation is below its compaction threshold",
+        );
       return EXIT.success;
     }
 

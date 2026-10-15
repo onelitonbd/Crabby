@@ -320,7 +320,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "context",
     verb: "show",
-    summary: "what is in budget, what was compacted, what is pinned — each section with its cost (C10-01)",
+    summary:
+      "what is in budget, what was compacted, what is pinned — each section with its cost (C10-01)",
     flags: ["--json"],
     // C10-01 and C10-05, built on `GET /sessions/{id}/context` (D-119). The row's load-bearing clause is the one about
     // empties: "a section costing 0 prints `0` rather than being hidden", because a drawer that hides an empty section

@@ -33,11 +33,11 @@ function isPipeError(error: unknown): boolean {
 import { type ApprovalVerb, runApproval } from "./commands/approval.ts";
 import { type AuthVerb, runAuth } from "./commands/auth.ts";
 import { type ConfigVerb, runConfig } from "./commands/config.ts";
+import { type ContextVerb, runContext } from "./commands/context.ts";
 import { runDiagnostics } from "./commands/diagnostics.ts";
 import { runDoctor } from "./commands/doctor.ts";
 import { type GatewayVerb, runGateway } from "./commands/gateway.ts";
 import { runInit } from "./commands/init.ts";
-import { type ContextVerb, runContext } from "./commands/context.ts";
 import { type JobVerb, runJob } from "./commands/job.ts";
 import { runSession, type SessionVerb } from "./commands/session.ts";
 import { runStatus } from "./commands/status.ts";

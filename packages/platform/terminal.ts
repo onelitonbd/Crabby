@@ -25,10 +25,20 @@ export function terminalFacts(
   return {
     term: env.TERM ?? "",
     color: colorDepth(env),
-    columns: typeof size.columns === "number" ? size.columns : 80,
-    rows: typeof size.rows === "number" ? size.rows : 24,
+    // **A measurement of zero is an absent measurement, not a terminal of no width.** A pty with no window size set — which
+    // is what `script`, a CI harness and a freshly-resized Termux window can hand you — reports `columns: 0`, and a caller
+    // that trusted it drew a frame of nothing. Found on this platform by running the TUI inside a pty, which is the whole
+    // argument for running the thing once rather than only testing its functions.
+    columns: positive(size.columns) ?? 80,
+    rows: positive(size.rows) ?? 24,
     isTTY,
   };
+}
+
+function positive(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : undefined;
 }
 
 /** Clipped for a narrow screen, which §7.2 makes the design case (Termux is 40–60 columns) and `docs/UI_UX_SPEC.md` §4

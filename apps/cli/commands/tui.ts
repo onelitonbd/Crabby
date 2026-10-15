@@ -25,14 +25,29 @@ export async function runTuiCommand(
   // narrower than the design case and the TUI should be told so rather than measuring a window it does not have.
   const plain = argv.includes("--plain");
   const columnsFlag = argv.indexOf("--columns");
-  const columns =
-    columnsFlag >= 0 ? Number(argv[columnsFlag + 1]) : Number(process.stdout.columns ?? 80);
-  const rows = Number(process.stdout.rows ?? 24);
-  if (!Number.isFinite(columns) || columns <= 0) {
+  const asked = columnsFlag >= 0 ? Number(argv[columnsFlag + 1]) : undefined;
+  if (columnsFlag >= 0 && (!Number.isFinite(asked) || (asked ?? 0) <= 0)) {
     stdout.write("tui --columns takes a positive number of columns\n");
     return EXIT.usage;
   }
-  const facts = terminalFacts(process.env, { columns, rows }, process.stdin.isTTY === true);
+  // The measurement goes through `terminalFacts`, which is where "a pty that reports 0 columns is an absent measurement"
+  // is decided (one place, for the CLI, the TUI and `crabby doctor`). Reading `process.stdout.columns` here instead would
+  // be a second rule — and the first version of this file did exactly that, which is how a frame of zero columns reached a
+  // real pty on this device.
+  const facts = terminalFacts(
+    process.env,
+    {
+      ...(asked === undefined ? {} : { columns: asked }),
+      ...(typeof process.stdout.rows === "number" ? { rows: process.stdout.rows } : {}),
+    },
+    process.stdin.isTTY === true,
+  );
+  const columns = facts.columns;
+  const rows = facts.rows;
+  if (facts.columns !== asked) {
+    // Said once, in words: a frame drawn at the fallback width when the terminal reported none is at least honest about it.
+    stdout.write(`tui: the terminal reported no width, drawing at ${columns} columns\n`);
+  }
   if (facts.isTTY === false) {
     // T3-05: a terminal that cannot report keys is told so, with the list, rather than being given a frame nobody can act on.
     stdout.write(

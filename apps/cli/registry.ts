@@ -636,13 +636,13 @@ export const COMMANDS: readonly CommandSpec[] = [
     status: "planned",
     milestone: "M3 (the Telegram interface)",
   },
-  {
-    noun: "tui",
-    summary: "the interactive terminal client",
-    flags: [],
-    status: "planned",
-    milestone: "M3 (the TUI, after P-011 resolves Ink)",
-  },
+  // `tui` is **not a row here**, and its absence is the decision D-129 records. This row used to exist and said "planned
+  // for M3 (the TUI, after P-011 resolves Ink)" — two wrong things at once: the TUI does not wait for P-011 (the control
+  // M0 P5 names is built, and P-010's *measurement* is what is owed), and a row in this table is a promise about a
+  // **command**, while the TUI is an application with its own event loop, terminal handling and renderer. Worse, the
+  // dispatcher's planned-verb branch answered `crabby tui` from this row *before* reaching the branch that starts the app —
+  // so a built TUI was unreachable by name. The row is gone rather than marked ready: a verb table is not where an
+  // application belongs, and `apps/cli/commands/tui.ts` says so at the top.
 ];
 
 // The planned half of §7.1's table, in one block, generated from the same array the help text reads. Every command the

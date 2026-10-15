@@ -75,13 +75,12 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
 
   // T1-09: the first line is never blank, and when the Gateway is not running it names the command rather than showing a
   // spinner that pretends something is happening.
+  // T1-09's first line, and it is about the Gateway rather than the keyboard. An earlier version folded T3-05's dumb
+  // terminal notice in here too, so a connected-less TUI printed "keys are not reported" beside "no paired gateway" — two
+  // unrelated facts in one screen, one of which was wrong.
   const first =
     client === undefined
-      ? [
-          `no paired gateway (${connection.state}) — start one with: crabby gateway start`,
-          "",
-          ...dumbTerminalNotice(PANE_ORDER, ["Tab panes", "? help", "q quit"]),
-        ]
+      ? [`no paired gateway (${connection.state}) — start one with: crabby gateway start`, ""]
       : ["connecting to the gateway…", ""];
   stdout.write(`${first.join("\n")}\n`);
 

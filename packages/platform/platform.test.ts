@@ -96,4 +96,15 @@ test("terminal facts report inputs without deciding anything", () => {
   assert.equal(facts.columns, 40);
   assert.equal(facts.rows, 24, "a missing size falls back to the ANSI default, not to 0");
   assert.equal(facts.isTTY, true);
+  // A pty with no window size set reports **0**, not `undefined` — measured on this device by running the TUI inside one,
+  // where a frame of zero columns is what a truthy check would have drawn. Zero is an absent measurement.
+  const unsized = terminalFacts({ TERM: "xterm" }, { columns: 0, rows: 0 }, true);
+  assert.equal(unsized.columns, 80);
+  assert.equal(unsized.rows, 24);
+  assert.equal(terminalFacts({ TERM: "xterm" }, { columns: Number.NaN }, true).columns, 80);
+  assert.equal(
+    terminalFacts({ TERM: "xterm" }, { columns: 120.7 }, true).columns,
+    120,
+    "a fraction is truncated, not refused",
+  );
 });

@@ -1275,6 +1275,31 @@ on purpose, so a continuation re-plans and asks again rather than spending a row
 refused with the task untouched. Gates: `loop.test.ts` 43/43, `runner.test.ts` 16/16, `tasks.test.ts` 15/15 (including the
 three above), `journal.test.ts`, `contracts.test.ts`, `storage` 68/68, `agent-runtime.test.ts`, `typecheck`, `parity`,
 `docs:check`; CI is the release proof as before.
+**Forty-first slice — a conversation's turns become records (D-112, closing O-074).** The owner chose O-074's option (a) — a
+`message` table before compaction — and the slice is the table, the one writer, and the read. The table (schema version 10)
+is §2.5's four bullets as columns: `role`, `ordinal`, `created_at`, and the two associations (a conversation always, a task
+where there was one — nullable, because a `/ask` turn has no task and a NOT NULL column would have made the honest row
+illegal). Both cascades are the deletion half: deleting a conversation deletes its history (C11-05's one T3 command), and
+deleting one task takes that task's turns with it while the conversation and its other turns survive. Ordering is the
+conversation's own counter rather than the id, because `ids.ts` says in words that its sortability is a convenience and two
+turns written in one millisecond are ordered by nothing. The writer is a seam (`MessageWriter`, beside `Checkpoints`) and the
+**loop is the only one**: it writes the turn inside the phase that completes the task and emits `message.added` in the same
+transaction, carrying the row's `messageId` and `ordinal` so the record and the log are checkable against each other. Two
+consequences worth arguing about, and both are in D-112: a loop with **no** writer emits no `message.added` at all, because
+§5.2's "anything a client must act on is also retrievable" is a rule about the announcement — a transcript built from the
+stream would otherwise show a turn nobody can fetch — and the frame still carries the text, because a live transcript (C4-05)
+is a shipped surface and a truncated preview is a worse answer than the bytes it already had. What is deliberately *not*
+duplicated is anything later derives: a summary is a row, never an event, and never a replacement (§2.5's fourth bullet, and
+the reason the event is worth keeping beside the row). The read is `GET /sessions/{id}/messages?cursor=&limit=` — ordinal
+cursors so a turn appended mid-read cannot shift a held page, the route's own bound, a `404` for a conversation nobody made
+and an *empty page* for a quiet one — and `messages` has left `GET /sessions/{id}`'s `absent` list, which is the line C11-03's
+sidebar was being protected from. Still not built, and named rather than omitted: `POST /sessions/{id}/messages` (a route that
+wrote a turn would be a second writer, §9's rule), `session compact`, `context` and `pins` — D-027's compaction is the next
+slice, and the records it will summarize now exist. Gates: storage `sessions.test.ts` 13/13 (four bullets as four assertions,
+redaction on write, both cascades), `loop.test.ts` 44/44 (row and frame in one phase, and silence without a writer),
+`tasks.test.ts` 17/17 (the route over a real run, the frame/row agreement, the ordinal page, the two refusals), integration
+`sessions.test.ts` 7/7 (`absent` is two names now), `typecheck`, `parity` (28 routes), `docs:check`; CI is the release proof
+as before.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

@@ -42,8 +42,10 @@ function task(over: Record<string, unknown> = {}): Record<string, unknown> {
 }
 
 describe("identifiers", () => {
-  it("mints the five documented prefixes and nothing else", () => {
-    assert.deepEqual([...ID_PREFIXES], ["evt", "ses", "apr", "req", "tsk"]);
+  it("mints exactly the prefixes §6 lists, and nothing else", () => {
+    // Five until D-112 added `msg_` for a conversation turn; the assertion is the list rather than a count, so the next
+    // decision that adds a prefix has to touch this line on purpose rather than by accident.
+    assert.deepEqual([...ID_PREFIXES], ["evt", "ses", "apr", "req", "tsk", "msg"]);
     for (const prefix of ID_PREFIXES) {
       const id = newId(prefix);
       assert.ok(isId(prefix, id), `${id} must match ${idPattern(prefix)}`);

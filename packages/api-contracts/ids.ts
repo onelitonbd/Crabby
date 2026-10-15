@@ -1,10 +1,12 @@
 // Identifiers, as the documents name them. `docs/INTERFACES_AND_API.md` §5.2 and §6 use five prefixes — `evt_`,
-// `ses_`, `apr_`, `req_`, `tsk_` — and no others, so this module exports exactly those five and `ids.test.ts` holds it
-// to that: an id scheme is a wire contract, and a sixth prefix invented here would be a format nobody approved.
+// `ses_`, `apr_`, `req_`, `tsk_` — and no others, so this module exports exactly those and `ids.test.ts` holds it to
+// that: an id scheme is a wire contract, and a prefix invented here would be a format nobody approved. D-112 added the
+// sixth (`msg_`) the way the documents allow one to be added — the decision first, §6's list beside it, and the test's
+// assertion moved with them, so the test still says "exactly what §6 lists" rather than a number.
 import { randomBytes as cryptoBytes } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 
-export const ID_PREFIXES = ["evt", "ses", "apr", "req", "tsk"] as const;
+export const ID_PREFIXES = ["evt", "ses", "apr", "req", "tsk", "msg"] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 
 /** The documents show `evt_01H…`, which is time-sortable, so ids are generated that way: a lowercase base32 encoding
@@ -40,6 +42,9 @@ export const SessionId = Type.String({ pattern: idPattern("ses") });
 export const ApprovalId = Type.String({ pattern: idPattern("apr") });
 export const RequestId = Type.String({ pattern: idPattern("req") });
 export const TaskId = Type.String({ pattern: idPattern("tsk") });
+/** D-112's sixth prefix: one turn of a conversation. Time-sortable like the rest, which is a convenience and **not** its
+ *  place in the conversation — `messages.ordinal` is, because ids minted in one millisecond are ordered by nothing. */
+export const MessageId = Type.String({ pattern: idPattern("msg") });
 
 function base32Time(ms: number): string {
   let n = Math.max(0, Math.floor(ms));

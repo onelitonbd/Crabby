@@ -68,6 +68,7 @@ import {
   type StepFacts,
 } from "./checkpoint.ts";
 import type { TaskJournal } from "./journal.ts";
+import type { MessageWriter, RecordedMessage } from "./messages.ts";
 import {
   type AskCandidates,
   createLoop,
@@ -120,6 +121,10 @@ export interface HarnessOptions {
    *  own alternatives, and a test that wants the ask to carry candidates says what they are rather than letting the
    *  loop invent them. Absent means the ask with no options, which is also what a single-model install gets. */
   readonly askCandidates?: AskCandidates;
+  /** D-112's conversation store. Absent (the default) is the loop-with-no-writer case: no row and no `message.added`,
+   *  which is the rule D-112 records and the loop test below asserts. Present composes the memory writer, so a test that
+   *  wants to read a transcript gets one. */
+  readonly messages?: boolean;
   /** D-064's jitter source and the backoff wait, both injected so a ladder test asserts the *schedule* instead of
    *  sleeping through it: five rungs cost 31 real seconds, and a test that slow is a test nobody runs twice. */
   readonly random?: () => number;
@@ -174,6 +179,9 @@ export interface Harness {
   /** Every boundary the loop committed, in order. The count is the assertion: one write per committed step, and none for
    *  a round that only produced text. */
   readonly checkpointWrites: CheckpointRecord[];
+  /** D-112: every turn the run wrote, as the loop was told about it. A harness run has one conversation, so the turns are
+   *  the conversation — the storage layer's own rows are asserted where the storage layer is the subject. */
+  readonly turns: readonly RecordedMessage[];
   readonly executions: Execution[];
   readonly provider: Provider & { readonly calls: FakeCall[] };
   /** The §6 manager, wired to the same journal and subscriber as the loop, so a test can request a cancellation from
@@ -216,6 +224,33 @@ export interface Harness {
   /** Answers through the arbiter the way `POST /api/v1/approvals/{id}/decision` does, and writes the event that route
    *  writes in the same transaction — so a trace from this harness has the same shape as one from the Gateway. */
   answer(approvalId: string, decision: ApprovalDecision, input?: AnswerInput): ApprovalResult;
+}
+
+/** D-112's message writer, over one array — the same trick as the checkpoint store below: a harness run is one
+ *  conversation with one task, so the turns it wrote are the table. No redaction here (the fake's texts carry no
+ *  credentials and the masking is `packages/storage`'s rule on write), and no ordinal arithmetic beyond the next number,
+ *  because an ordinal the storage layer computes and a harness one computes are the same sentence in two places. */
+function createMemoryMessageStore(sessionId: string): {
+  writer: MessageWriter;
+  turns: RecordedMessage[];
+} {
+  const turns: RecordedMessage[] = [];
+  let counter = 0;
+  return {
+    turns,
+    writer: {
+      record: (input) => {
+        counter += 1;
+        const recorded = { id: `msg_harness_${counter}`, ordinal: counter };
+        turns.push(recorded);
+        // The session id is asserted by the test rather than trusted here: a harness writer that wrote turns into any
+        // conversation would make "the turn belongs to the right conversation" untestable at this level.
+        void sessionId;
+        void input;
+        return recorded;
+      },
+    },
+  };
 }
 
 /** The checkpoint store, over one variable: D-095's first rule is one row per task replaced at each boundary, and a
@@ -592,6 +627,7 @@ export function createHarness(options: HarnessOptions): Harness {
     published.push(event);
   };
   const checkpointStore = createMemoryCheckpointStore();
+  const messageStore = createMemoryMessageStore(sessionId);
   const checkpoints = createCheckpoints({
     // Guarded like the arbiter, so the harness fails a boundary written outside the phase that committed the step.
     store: guardCheckpoints(checkpointStore, memory.insideTransaction),
@@ -629,6 +665,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.limits === undefined ? {} : { limits: options.limits }),
     ...(options.random === undefined ? {} : { random: options.random }),
     ...(options.askCandidates === undefined ? {} : { askCandidates: options.askCandidates }),
+    ...(options.messages === true ? { messages: messageStore.writer } : {}),
     wait: recordWait,
     now: clock.now,
   });
@@ -692,6 +729,7 @@ export function createHarness(options: HarnessOptions): Harness {
     waits,
     checkpoints,
     checkpointWrites: checkpointStore.writes,
+    turns: messageStore.turns,
     states: memory.states,
     executions: tools.executions,
     provider,

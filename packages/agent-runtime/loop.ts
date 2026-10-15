@@ -97,6 +97,7 @@ import {
 import type { ApprovalRecord, Approvals } from "./approvals.ts";
 import type { CancellationEvidence, CancellationGate } from "./cancellation.ts";
 import type { CheckpointGate, CheckpointRecord } from "./checkpoint.ts";
+import type { MessageWriter } from "./messages.ts";
 import { createPhaseWriter, type Emit, type TaskJournal } from "./journal.ts";
 import type { TransitionEvidence } from "./transitions.ts";
 
@@ -443,6 +444,11 @@ export interface LoopDeps {
    *  the reason `cancellation` is: a loop with no checkpoint manager still runs, and what it loses is a resume point, not
    *  a step. A runner wires the same `createCheckpoints` manager here, to `GET /tasks/{id}/checkpoint`, and to recovery. */
   readonly checkpoints?: CheckpointGate | undefined;
+  /** D-112's conversation store. Optional for the reason `checkpoints` is: a loop with no message writer still runs, and
+   *  what it loses is a conversation's history, not a step. What it does *not* do is announce a turn it did not store —
+   *  §5.2's "anything a client must act on is also retrievable" — so with no writer there is no `message.added` either,
+   *  and a transcript built from the stream shows nothing rather than showing something unretrievable. */
+  readonly messages?: MessageWriter | undefined;
   readonly limits?: Partial<LoopLimits> | undefined;
   readonly now?: (() => number) | undefined;
   /** D-064's jitter source, injected for the reason `now` is: a jittered schedule a test cannot pin is a schedule nobody
@@ -1361,16 +1367,35 @@ export function createLoop(deps: LoopDeps): Loop {
     const taskId = state.input.taskId;
     phase(taskId, state.input.correlationId, (emit) => {
       if (turn.text.length > 0) {
-        emit(
-          "message.added",
-          {
-            role: "assistant",
-            content: turn.text,
-            usage: turn.usage,
-            finishReason: turn.finishReason,
-          },
+        // D-112: the turn is written here, inside the phase that completes the task, and the frame that announces it goes
+        // out with it. Two writes, one transaction, one call — so the row and the log cannot disagree, which is the whole
+        // reason the seam is a writer rather than something a route or a tool fills in afterwards. The role is the
+        // assistant's even when the text is empty: an empty completion carries a `finishReason` a reader needs, and §2.5's
+        // "role" bullet is about who spoke rather than whether it said anything.
+        const task = currentTask(taskId);
+        const stored = deps.messages?.record({
+          sessionId: task.sessionId,
+          taskId,
+          role: "assistant",
+          content: turn.text,
           at,
-        );
+        });
+        if (stored !== undefined) {
+          emit(
+            "message.added",
+            {
+              role: "assistant",
+              // The text rides the frame as well as the row: a live transcript (C4-05) is a shipped surface and the bytes
+              // were already here. `messageId` is what makes the pair checkable — D-112's "one fact, announced once".
+              messageId: stored.id,
+              ordinal: stored.ordinal,
+              content: turn.text,
+              usage: turn.usage,
+              finishReason: turn.finishReason,
+            },
+            at,
+          );
+        }
       }
       let task = currentTask(taskId);
       if (task.state === "planning") {

@@ -347,7 +347,7 @@ describe("the session routes", () => {
     }
   });
 
-  it("answers one conversation with its tasks, its token, and the three things this build cannot answer", async () => {
+  it("answers one conversation with its tasks, its token, and what it still cannot answer", async () => {
     const h = await boot({ noRunner: true });
     try {
       const id = (
@@ -374,8 +374,10 @@ describe("the session routes", () => {
       );
       assert.deepEqual(
         [...body.absent],
-        ["messages", "context", "pins"],
-        "C11-03's turns, budget and pinned items are named as absent rather than answered as zero",
+        ["context", "pins"],
+        "C11-03's budget and pinned items are still named as absent rather than answered as zero, and `messages` left " +
+          "this list with D-112: a detail body that omitted it would let a client render `0 turns` for a conversation that " +
+          "has turns, which is what the list exists to prevent",
       );
 
       const missing = await raw(h, "/api/v1/sessions/ses_nobody_made");

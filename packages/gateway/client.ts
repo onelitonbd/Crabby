@@ -203,6 +203,13 @@ export interface GatewayClient {
   /** C12-06's answer to §4.5's backlog. `action` is required on the wire for the reason the CLI asks rather than defaults:
    *  one of the two choices fires work, and §4.5's sixth rule is that a backlog must not run unannounced. */
   jobBacklog(id: string, body: JobBacklogBody): Promise<Response<unknown>>;
+  /** §2.5's turns, one page at a time (D-112). `cursor` is the ordinal of the last turn a page carried, so a caller that
+   *  appends while it reads cannot see a page shift; `limit` is the route's bound rather than this client's, because a bound
+   *  the client could raise is not a bound. */
+  sessionMessages(
+    id: string,
+    options?: { cursor?: number; limit?: number },
+  ): Promise<Response<unknown>>;
   /** C11-01's list: conversations in last-activity order, each with the state word and title a list line prints. */
   sessions(options?: { origin?: string }): Promise<Response<unknown>>;
   /** One conversation with the tasks in it, and the `etag` that a rename has to send back as `If-Match`. */
@@ -357,6 +364,15 @@ export function createClient(input: {
         body,
         headers: { "if-match": `"${ifMatch}"` },
       }),
+    sessionMessages: (id, options = {}) => {
+      const params = new URLSearchParams();
+      if (options.cursor !== undefined) params.set("cursor", String(options.cursor));
+      if (options.limit !== undefined) params.set("limit", String(options.limit));
+      const query = params.toString();
+      return request(
+        `/api/v1/sessions/${encodeURIComponent(id)}/messages${query.length > 0 ? `?${query}` : ""}`,
+      );
+    },
     authList: () => request("/api/v1/auth/clients"),
     authRevoke: (id) =>
       request(`/api/v1/auth/clients/${encodeURIComponent(id)}`, { method: "DELETE" }),

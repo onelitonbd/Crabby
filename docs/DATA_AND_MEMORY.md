@@ -23,8 +23,10 @@ The design must support local-first operation, Android through Termux, safe reco
 - Generated summaries must not silently replace or destroy original conversation records.
 - Data deletion must define how related summaries, indexes, and derived memory are handled.
 
-**Decided (D-104).** The conversation itself is a record from schema version 6, and three of the bullets above are
-answered by it rather than by a message store that does not exist yet. History persists across restarts because a
+**Decided (D-104, then D-112).** The conversation itself is a record from schema version 6, and three of the bullets above are
+answered by it; its **turns** are records from schema version 10, which answers the first three bullets outright — role,
+ordering (`ordinal`), timestamp — and the association with the right conversation, with the task named where there was one
+(`task_id` nullable, because a `/ask` turn has no task and a NOT NULL column would have made the honest row illegal). History persists across restarts because a
 conversation now has a row that survives one, with the title W15-03 describes ("the new session starts empty and un-named,
 and the title becomes the first question asked in it"), the interface that created it (W15-11), and the moment something
 last happened in it — which is a task being created or changing state, the only activity this build records. Users can

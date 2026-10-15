@@ -21,6 +21,7 @@ export * from "./checkpoint.ts";
 export * from "./cron.ts";
 export * from "./journal.ts";
 export * from "./loop.ts";
+export * from "./messages.ts";
 export * from "./recovery.ts";
 export * from "./runner.ts";
 export * from "./scheduler.ts";

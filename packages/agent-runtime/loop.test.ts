@@ -87,7 +87,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §4.4)", () => {
   it("completes a task that needs nothing approved, passing through `running` because §4.1 has no shortcut", async () => {
-    const harness = createHarness({ rounds: [doneRound], tools: [] });
+    const harness = createHarness({ messages: true, rounds: [doneRound], tools: [] });
     const outcome = await harness.start();
 
     assert.equal(
@@ -106,7 +106,9 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
     assert.equal(
       harness.payloadOf("message.added")?.content,
       "read notes.md and deleted build/",
-      "the answer is logged as a message, because §10.1 requires progress to reflect recorded state rather than claims",
+      "the answer is logged as a message, because §10.1 requires progress to reflect recorded state rather than claims. " +
+        "The harness composes a message writer (`messages: true`) because D-112 made the store a seam: without one there is " +
+        "no turn and therefore no frame, which the next test asserts",
     );
   });
 
@@ -938,6 +940,37 @@ describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §
         writtenAt: saved.writtenAt,
       },
       "the coordinates of what was continued ride on it: a resume and a fresh task both move a task, and only one of them is a continuation",
+    );
+  });
+
+  it("writes a turn and announces it in the same phase, or announces nothing at all (D-112)", async () => {
+    // With a writer: the row is written, and the frame that announces it carries the row's id so the pair is checkable.
+    const written = createHarness({ rounds: [doneRound], tools: [], messages: true });
+    const outcome = await written.start();
+    assert.equal(outcome.kind, "completed");
+    assert.equal(written.turns.length, 1, "a completion is a turn, and it is stored");
+    const frame = written.payloadOf("message.added");
+    assert.equal(
+      (frame as { messageId?: string } | undefined)?.messageId,
+      written.turns[0]?.id,
+      "D-112: the frame names the row, so a client that lost the stream can fetch the turn it announced",
+    );
+    assert.equal(
+      (frame as { ordinal?: number } | undefined)?.ordinal,
+      1,
+      "and its place in the conversation",
+    );
+
+    // Without a writer: no row, and no frame either. §5.2's "anything a client must act on is also retrievable" read as a
+    // rule about the announcement — a transcript built from the stream would otherwise show a turn nobody can fetch.
+    const silent = createHarness({ rounds: [doneRound], tools: [] });
+    assert.equal((await silent.start()).kind, "completed");
+    assert.equal(silent.turns.length, 0);
+    assert.equal(
+      silent.payloadOf("message.added"),
+      undefined,
+      "a loop with no conversation store says nothing rather than saying something unretrievable — D-112's rule, and the " +
+        "reason a store is a seam a caller wires rather than a global",
     );
   });
 

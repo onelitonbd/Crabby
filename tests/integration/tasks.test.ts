@@ -217,6 +217,9 @@ function composeWithSecond(
       provider: createScriptedProvider(secondRounds, { id: "second" }),
       modelIds: [FAKE_MODEL_ID, FAKE_TOOL_MODEL_ID],
       warnings: [],
+      // §3.8's provenance, present and empty: a scripted provider has no user override, and the field is required so
+      // that no consumer has to write `?? {}` and forget that an override can exist.
+      overrides: {},
     },
   ];
 }

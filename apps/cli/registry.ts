@@ -417,7 +417,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     noun: "session",
     verb: "compact",
-    summary: "summarize now instead of at the budget limit (D-027, D-118)",
+    summary: "summarize now instead of at the budget limit (C10-03, D-027, D-118)",
     flags: ["--json"],
     // Ready because the route is: one call to `createContextManager` — the same function the loop calls before every
     // provider request — and three words back (`not-needed`, `compacted`, `refused`), with the refusal sentence

@@ -30,12 +30,21 @@
 import { isVaultReference, type LimitsConfig, type ProviderEntryConfig } from "@crabby/core";
 import { validateProviderConfig } from "./config.ts";
 import type { Provider } from "./contract.ts";
-import type { ModelDescriptor, SupportedFeature } from "./descriptor.ts";
+import { type ModelDescriptor, parseDescriptor, type SupportedFeature } from "./descriptor.ts";
 import { createOpenAiCompatibleProvider, OPENAI_DEADLINE_DEFAULTS } from "./openai.ts";
+import { applyOverride, type OverrideProvenance, parseOverride } from "./override.ts";
 
 /** One config entry's fate. `warnings` are §3.3's — "a clear warning if the host is not loopback while the key would be
  *  sent over plain HTTP" — carried through from `validateProviderConfig` so the party that composed the adapter is the
- *  party that shows the warning, instead of it dying inside a constructor that has nowhere to put it. */
+ *  party that shows the warning, instead of it dying inside a constructor that has nowhere to put it.
+ *
+ *  `overrides` is §3.8's provenance, keyed by model id: what the user changed about that model, and what the endpoint
+ *  had said instead. It is on the composition result rather than on the descriptor because §3.2's parser refuses a
+ *  descriptor with an unknown field — and a provenance field inside a descriptor is a field a *document* could set, which
+ *  would let a `config.json` claim "this was declared by override" about a value nobody overrode (D-126). Only
+ *  `applyOverride` can produce it, so it is a system fact rather than an input. §3.8's last rule needs it: an interface
+ *  has to be able to *show* which entries are overridden, and a composition result that could not say would push the
+ *  answer into every consumer separately. */
 export type ProviderComposition =
   | {
       readonly id: string;
@@ -43,6 +52,7 @@ export type ProviderComposition =
       readonly provider: Provider;
       readonly modelIds: readonly string[];
       readonly warnings: readonly string[];
+      readonly overrides: Readonly<Record<string, OverrideProvenance>>;
     }
   | { readonly id: string; readonly ok: false; readonly reason: string };
 
@@ -132,6 +142,36 @@ function composeOne(
     id: modelId,
     descriptor,
   }));
+  // §3.8's overrides are applied here, to the document **before** the adapter is built, so that every later reader sees
+  // one effective descriptor: `describe()`, budgeting (D-064's `contextLimits`), the ask's capability deltas and the
+  // interfaces' screens. Applying them anywhere else would mean a stored override that some readers honour and others do
+  // not, and the first disagreement would be a model that streams in one place and not another.
+  //
+  // An override that does not parse, or that produces a descriptor `parseDescriptor` would refuse, **fails the entry**
+  // closed with the parser's own sentence. Refusing the entry rather than the model is deliberate: a provider whose
+  // adapter is half-configured would answer requests for its *other* models against a mix of two truth sources, and §3.2's
+  // rule is that a provider which cannot describe itself is not offered at all.
+  const overrides: Record<string, OverrideProvenance> = {};
+  for (const model of modelList) {
+    const raw = entry.overrides?.[model.id];
+    if (raw === undefined) continue;
+    const parsed = parseOverride(raw);
+    if (!parsed.ok) {
+      return refused(`'${id}' holds an unparsable override for '${model.id}': ${parsed.reason}`);
+    }
+    // The reported descriptor, parsed by the one parser that owns §3.2, then adjusted. Parsing first is what makes the
+    // two failures separable: a model with a broken descriptor and a broken override names the right one of the two.
+    const reported = parseModelDescriptor(model.descriptor);
+    if (reported === undefined) continue; // The adapter's constructor reports this one, with its own message.
+    const applied = applyOverride(reported, parsed.override);
+    if (!applied.ok) {
+      return refused(
+        `'${id}' holds an override for '${model.id}' that §3.2 refuses: ${applied.reason}`,
+      );
+    }
+    model.descriptor = applied.descriptor;
+    overrides[model.id] = applied.provenance;
+  }
   try {
     const provider = createOpenAiCompatibleProvider({
       id,
@@ -148,6 +188,7 @@ function composeOne(
       provider,
       modelIds: modelList.map((model) => model.id),
       warnings: validation.warnings ?? [],
+      overrides,
     };
   } catch (error) {
     // §3.1's "rejects unusable configuration with an actionable reason" and §3.2's "an unparsable descriptor disables
@@ -155,6 +196,14 @@ function composeOne(
     // into an answer a screen can print, and the message it throws is already the actionable one.
     return refused(error instanceof Error ? error.message : String(error));
   }
+}
+
+/** The descriptor a stored model carries, parsed by §3.2's one parser. `undefined` means the stored value did not parse,
+ *  and the caller deliberately does **not** report it: the adapter's constructor throws with the actionable sentence for
+ *  every one of those cases, and reporting it twice would put two answers to one question in one refusal string. */
+function parseModelDescriptor(input: unknown): ModelDescriptor | undefined {
+  const parsed = parseDescriptor(input);
+  return parsed.ok ? parsed.descriptor : undefined;
 }
 
 /** D-074's three adapter deadlines, read out of the loaded `limits` rather than the defaults, with the defaults behind

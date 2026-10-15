@@ -74,12 +74,13 @@ test("an unknown command is refused with exit 2, and a planned verb names its mi
   const typo = crabby(["tsk", "run", "x"]);
   assert.equal(typo.code, 2);
   assert.match(typo.out, /did you mean `crabby task run`\?/, typo.out);
-  // The verb this half of the test used to pin was `task run`, which answered "not implemented yet — planned for M2"
-  // until the handoff composed a runner into `POST /api/v1/tasks`. What is asserted is the *contract*, not that verb: a
-  // planned verb says it is planned and names the milestone, and the assertion keeps the shape of the sentence rather
-  // than a milestone that will age. `task resume` is still one, because `POST /api/v1/tasks/{id}/resume` has no route
-  // and nothing in this build can be `parked` for it to resume (docs/CONSISTENCY_REVIEW.md F-47).
-  const planned = crabby(["task", "resume", "tsk_1"]);
+  // The verb this half of the test used to pin was `task run` ("planned for M2"), then `task resume` (pinned here on the
+  // belief that `POST /api/v1/tasks/{id}/resume` had no route, F-47). Both were built — D-121 built `task resume` and the
+  // route with it — so the pin moved again rather than the assertion being deleted: what is asserted is the *contract*,
+  // that a planned verb says it is planned and names the milestone, with the shape of the sentence rather than a
+  // milestone that will age. `model edit` is the verb in that state now, and it will be built by the next slices, at
+  // which point this pin moves a third time — that is the test working, not the test being wrong.
+  const planned = crabby(["model", "edit"]);
   assert.equal(planned.code, 2);
   assert.match(planned.out, /not implemented yet — planned for M\d/);
   // `task run` is a real command now, so its two refusals are the two §7.1 keeps apart: no objective is a usage
@@ -1017,11 +1018,15 @@ test("`crabby job edit` names the release that brings it, at the usage exit code
 // forty sessions they cannot tell apart." What is asserted here is the half §7.1 promises about a process — the help rows,
 // the questions answered locally at the usage code, and the verbs this noun deliberately does not have. The rows a list
 // prints and the `If-Match` round trip are asserted against a live Gateway in tests/integration/sessions.test.ts.
-test("`crabby session ls|new|rename` are each listed once and ready, `show` and `compact` once each as planned", () => {
+test("every `crabby session` verb is listed once, ready, and names the element row it implements", () => {
+  // `show` and `compact` were asserted as *planned* here until D-122 and D-118 built them. The assertion below is the
+  // same one with its expectation moved: a verb with a route behind it must not advertise a milestone that delivered it,
+  // and a milestone row is worse than no row at all — a user reading "planned for M4" on a command that answers would
+  // believe the answer is wrong.
   const run = crabby(["--help"]);
   assert.equal(run.code, 0, run.err);
   const lines = run.out.split("\n");
-  for (const verb of ["ls", "new", "rename"]) {
+  for (const verb of ["ls", "new", "show", "rename", "compact"]) {
     const rows = lines.filter((line) => line.includes(`crabby session ${verb}`));
     assert.equal(
       rows.length,
@@ -1034,22 +1039,8 @@ test("`crabby session ls|new|rename` are each listed once and ready, `show` and 
     );
     assert.match(
       rows[0] ?? "",
-      /C11-0\d/,
+      /C1[01]-0\d/,
       "and the summary names the contract element the behaviour comes from",
-    );
-  }
-  for (const verb of ["show", "compact"]) {
-    const rows = lines.filter((line) => line.includes(`crabby session ${verb}`));
-    assert.equal(rows.length, 1);
-    assert.match(
-      rows[0] ?? "",
-      /planned for/,
-      `\`session ${verb}\` is planned rather than missing, and says so`,
-    );
-    assert.match(
-      rows[0] ?? "",
-      /M\d|§/,
-      "and names the phase or the section that defers it: a planned row that says only 'planned' is a row a user cannot plan around",
     );
   }
   assert.ok(
@@ -1059,30 +1050,31 @@ test("`crabby session ls|new|rename` are each listed once and ready, `show` and 
   );
 });
 
-test("`crabby session show` is answered by the registry's milestone, not by a verb that prints zeroes", () => {
+test("`crabby session show` is a real screen, and it refuses rather than inventing a field", () => {
+  // C11-03's screen used to be asserted as a *planned* verb, on the grounds that three of its five fields had nothing
+  // behind them — and the assertion worth keeping is the one that outlived the reason: this verb must never print a
+  // number it cannot read. D-122 built it out of three reads (`sessions/{id}`, `messages`, `context`), so the two answers
+  // it can give without a Gateway are a usage question about the id and a failure that names the command that starts
+  // one. Neither prints "0 turns".
   const root = tempDir();
   const state = path.join(root, ".crabby");
-  const run = crabby(["session", "show", "ses_1"], state);
-  assert.equal(
-    run.code,
-    2,
-    "a planned verb is a usage answer rather than a silent success, and it is answered before any request is made",
-  );
-  assert.match(run.out, /not implemented yet/);
+  const noId = crabby(["session", "show"], state);
+  assert.equal(noId.code, 2, noId.out);
   assert.match(
-    run.out,
-    /stores messages/,
-    "C11-03's content is five fields and three of them need a message store, so the milestone names the release that " +
-      "brings it rather than merely the absence",
+    noId.out,
+    /which session\?/,
+    "a missing id is a usage question answered locally, before any request is made — §7.1's exit-code contract is " +
+      "about the command and not about the process it would have talked to",
   );
-  assert.match(
-    run.out,
-    /§4\.3/,
-    "and cites the section whose `messages` paths are the thing that does not exist",
-  );
+  const noGateway = crabby(["session", "show", "ses_1"], state);
+  assert.equal(noGateway.code, 1, noGateway.out);
+  assert.match(noGateway.out, /crabby gateway start/);
   assert.ok(
-    !run.out.includes("turns") && !run.out.includes("budget"),
-    "the one screen this verb must never print: zeroes for the three fields nothing stores",
+    !noGateway.out.includes("0 turns") &&
+      !noGateway.out.includes("0 pinned") &&
+      !noGateway.out.includes("budget"),
+    "the one screen this verb must never print: zeroes for fields nothing read, which is a claim about a conversation " +
+      "with forty turns in it",
   );
 });
 

@@ -130,6 +130,18 @@ export const ProviderEntryConfig = Type.Object(
      *  Optional for `baseUrl`'s reason; `minProperties` stays, because an explicitly empty list is not an entry under
      *  construction but a claim that a provider has no models, and §3.2 has nothing to route a request to. */
     models: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { minProperties: 1 })),
+    /** §3.8's per-model capability override, keyed by the same model id as `models` and stored as a **sibling** of
+     *  it rather than a field inside a descriptor. That placement is forced, not chosen: `parseDescriptor` refuses a
+     *  descriptor carrying an unknown field (SECURITY.md §2 rule 02, applied to a descriptor's own keys), so an override
+     *  written inside the descriptor would disable the very model it was meant to adjust — §3.2's rule turning a
+     *  convenience into an outage. A sibling map also keeps `reported` in one place: the stored descriptor *is* what the
+     *  endpoint reported, and drift is the difference between it and the override beside it, so a second copy of the
+     *  reported descriptor would be a copy that could disagree with the first (D-126).
+     *
+     *  Values are `Type.Unknown` for `models`' reason: an override is parsed by `packages/providers/override.ts`, which
+     *  is where §3.8's rules live, and a schema here would be a second place to learn them. `minProperties` is absent,
+     *  because an empty override map is a *cleared* state rather than a claim. */
+    overrides: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     /** §3.3's custom-provider requirement that an endpoint declares "whether it is treated as local". Absent means the
      *  base URL decides, which is what `packages/providers`' loopback test already does. */
     local: Type.Optional(Type.Boolean()),

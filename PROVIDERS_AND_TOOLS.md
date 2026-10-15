@@ -320,16 +320,34 @@ same shape as F-52's: a column and a sentence exist, and the writer that would f
 Provider-reported capabilities are a **starting point, and the user may override any of them for any model**
 (D-045) — bundled or custom, discovered or static.
 
-Override record (stored per model id in user configuration, not inside the adapter):
+Two things in user configuration, **per provider id and per model id**, and the split is forced rather than chosen
+(D-126):
+
+| Where | What |
+| --- | --- |
+| `provider.<id>.models.<modelId>` | The **reported** descriptor — what the provider/adapter supplied. The adapter's own record, kept for reference and drift reports, and the only copy of it. |
+| `provider.<id>.overrides.<modelId>` | The override record: only what the user changed. |
+
+The override record is a **sibling** of the descriptor rather than a field inside it, because §3.2's parser refuses a
+descriptor carrying an unknown field: an override written inside the descriptor would disable the very model it was meant
+to adjust. Keeping `reported` in its existing place rather than copying it into the override also means drift is the
+difference between two adjacent keys, with no second copy that could disagree with the first.
+
+Override record fields:
 
 | Field | Meaning |
 | --- | --- |
-| `reported` | The descriptor the provider/adapter supplied, kept for reference and drift reports. |
-| `overrides` | Only what the user changed. |
-| `limits` | User-set `contextWindow`, `maxOutputTokens`, `reserveForOutput`. |
-| `supports.<flag>` | Forced `true` / `false` / `auto`. |
-| `source` | `manual` \| `preset` — how it got there. |
+| `limits` | User-set `contextWindow` and `maxOutputTokens`. **`reserveForOutput` is not stored** — D-064 derives the reserve from `maxOutputTokens`, so a second source for the same number would be a number that could disagree with the first; the parser refuses the key with that reason rather than accepting a value nothing reads. |
+| `supports.<flag>` | Forced `true` / `false` / `auto`. `auto` means "no opinion": the reported value stands and nothing is reported as moved. |
+| `source` | `manual` \| `preset` — how it got there. Required, because "I typed it" and "a preset shipped it" are different trust statements. |
 | `notes` | Free text, e.g. "endpoint is a proxy, reports no tool support but works". |
+
+Composition produces the **effective** descriptor (reported + override, highest specificity first) and every later reader
+— `describe()`, budgeting (§3.4), the ask's capability deltas, the interfaces' screens — sees that one value rather than a
+stored opinion beside a reported one. What the user changed travels beside it as provenance on the composition result,
+never *inside* the descriptor: §3.2's parser would reject such a field, and a provenance field inside a descriptor is a
+field a document could set about itself. §3.8's failure sentence below ("declared by override and failed") is the
+runtime's use of that provenance, and it arrives with the slice that wires provenance into the loop.
 
 Rules:
 
@@ -338,12 +356,18 @@ Rules:
   capability set.
 - Forcing a capability **on** is a trust decision with a cost: the runtime still verifies at call time, and when a
   forced-on capability fails, Crabby must report "`toolCalling` was declared by override and failed" rather than
-  fall back silently. That failure feeds §3.5's `unsupported-capability`.
+  fall back silently. That failure feeds §3.5's `unsupported-capability`. **Not built yet** — the provenance is on the
+  composition result, and the sentence is the loop's use of it.
 - Forcing a capability **off** is always allowed and never argued about — that is the user's fastest lever for a
   misbehaving endpoint.
 - Changing a context ceiling affects budgeting (§3.4) immediately and is reflected in the TUI/Web provider screens.
 - Editing overrides is a configuration change: `config.write`, T3 (`SECURITY.md` §6.2) — an agent must not be able
-  to widen its own model capabilities by editing this.
+  to widen its own model capabilities by editing this. A human at a terminal runs as the owner identity (C7-12), so the
+  T3 gate is on the *tool*, not on the verb: the refusal that matters is an agent's `config.write`, which D-107 already
+  prices at T3, and the override it could write is one of the fields that gate covers.
+- An override that does not parse, names a feature the model does not have, or would make the descriptor illegal
+  **fails the provider closed**, with the field named. Applying the parts that were understood would leave a user who
+  typo'd one flag believing they had raised a context window when they had not (SECURITY.md §2 rule 02).
 - `crabby model list` shows model, provider, effective capability set, and which entries are overridden;
   `crabby model edit <provider>/<model>` is the single entry point, mirrored in the Web UI and the TUI.
 

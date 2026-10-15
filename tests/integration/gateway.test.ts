@@ -2329,7 +2329,7 @@ describe("a spawned gateway that drives tasks, and §7.1's exit codes for the ve
     );
   });
 
-  it("exits 3 at D-044's ask and names the route that answers it, rather than failing a task that ran out of ladder", async () => {
+  it("exits 3 at D-044's ask and names the verb that answers it, rather than failing a task that ran out of ladder", async () => {
     // The default model moves to the dead port for this test and back after it, which needs the Gateway to re-read
     // `config.json` — so it restarts. The pairing survives in the data dir (a token is a row, not a process), and §7.1's
     // recovery marks the earlier failed task terminal rather than resuming it, which is why test 3 above still finds a
@@ -2353,9 +2353,11 @@ describe("a spawned gateway that drives tasks, and §7.1's exit codes for the ve
     );
     assert.match(
       ran.stdout,
-      /\/resume/,
-      "the fix names the route that answers the ask, because `crabby task resume` (C6-10) is M3's grammar and a printed " +
-        "command that cannot run is worse than a printed route that can",
+      /crabby task resume/,
+      "the fix names the verb that answers the ask. It used to name the HTTP route, and the reason it did is the reason " +
+        "it stopped: `crabby task resume` was M3's unwritten grammar then, and a printed command that cannot run is " +
+        "worse than a printed route that can. D-121 built the verb (C6-10), and a fix line that still printed a route " +
+        "would be a sentence that had become false by age.",
     );
     assert.match(
       runCli(dir, ["task", "ls"]).stdout,

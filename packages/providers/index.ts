@@ -17,3 +17,4 @@ export * from "./descriptor.ts";
 export * from "./errors.ts";
 export * from "./fake.ts";
 export * from "./openai.ts";
+export * from "./override.ts";

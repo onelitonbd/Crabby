@@ -1408,6 +1408,24 @@ that provider; a pin no entry answers is refused 400 with the pool's ids before 
 exactly what the thirty-ninth slice named minus the pin: per-task capability narrowing still has no carrier in
 `CreateTaskBody`.
 
+### F-62 — §3.8's override table lists a field the runtime derives rather than stores
+
+**Severity: low, and closed by D-126 in the same change — recorded because the gap was real, not because it still
+is.** `PROVIDERS_AND_TOOLS.md` §3.8 listed `limits.reserveForOutput` as a user-settable field of a per-model override,
+while `packages/agent-runtime/context.ts` (D-064) computes the output reserve as `descriptor.maxOutputTokens`. Two
+sources for one number, one of them user-writable, is a number that will eventually disagree — and the disagreement
+would surface as a context window that compacts earlier than the screen says it will, which is the class of bug
+`docs/UI_UX_SPEC.md` §4's rule about showing a number you cannot back is written for.
+
+Storing it was also the reading that would have been implemented by copying the table. The builder instead refuses the
+key and says why: `reserveForOutput` is derived, raise `maxOutputTokens` instead, and budgeting reads that. A field that
+is accepted, stored, and read by nothing is worse than a field that is refused with a sentence.
+
+**Closing condition, met:** §3.8's table now states the derivation, `packages/providers/override.ts` refuses the key with
+that reason, and D-126 records both. What stays open is the neighbouring question §3.8 also implies — whether a future
+model with a *variable* output ceiling needs the reserve as its own field — and that belongs to whoever builds such a
+model rather than to a document written before one existed.
+
 ### F-61 — C5-01 says a chat has "no task", and every run in this build is one
 
 **Severity: low in behaviour, high in wording, and left open for the owner rather than resolved by an agent.** The

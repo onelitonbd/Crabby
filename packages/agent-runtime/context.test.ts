@@ -3,16 +3,16 @@
 // is derived from the descriptor rather than stored, D-115's threshold fires at four fifths, and a
 // plan that cannot help says so instead of spending a model call to fail.
 
-import { LIMITS_DEFAULTS } from "@crabby/core";
-import type { ProviderMessage } from "@crabby/providers";
 import { deepStrictEqual, ok, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
+import { LIMITS_DEFAULTS } from "@crabby/core";
+import type { ProviderMessage } from "@crabby/providers";
 import {
+  type ContextUnit,
   contextBudget,
   contextLimits,
   DEFAULT_CONTEXT_LIMITS,
   estimateTokens,
-  type ContextUnit,
   measureMessage,
   measureText,
   planCompaction,
@@ -66,7 +66,10 @@ describe("estimateTokens — §3.4's heuristic, and D-064's Bengali case", () =>
 
 describe("measureText — §3.4's preference order, and its labelling rule", () => {
   it("asks the adapter's counter when there is one, and says it was measured", () => {
-    deepStrictEqual(measureText("abcd", () => 99), { tokens: 99, source: "measured" });
+    deepStrictEqual(
+      measureText("abcd", () => 99),
+      { tokens: 99, source: "measured" },
+    );
   });
 
   it("estimates when there is no counter, and labels the result `estimated`", () => {
@@ -75,8 +78,14 @@ describe("measureText — §3.4's preference order, and its labelling rule", () 
 
   it("refuses a counter that answers with nonsense — a bad number is not a measurement", () => {
     const estimated = { tokens: Math.ceil(4 * 1.35), source: "estimated" };
-    deepStrictEqual(measureText("abcd", () => Number.NaN), estimated);
-    deepStrictEqual(measureText("abcd", () => -5), estimated);
+    deepStrictEqual(
+      measureText("abcd", () => Number.NaN),
+      estimated,
+    );
+    deepStrictEqual(
+      measureText("abcd", () => -5),
+      estimated,
+    );
   });
 });
 
@@ -84,7 +93,9 @@ describe("measureMessage — a request carries more than its text", () => {
   const call: ProviderMessage = {
     role: "assistant",
     content: "",
-    toolCalls: [{ id: "call_1", name: "file.write", arguments: { path: "a.txt", content: "x".repeat(400) } }],
+    toolCalls: [
+      { id: "call_1", name: "file.write", arguments: { path: "a.txt", content: "x".repeat(400) } },
+    ],
   };
 
   it("counts a proposed call's arguments, so a step's payload cannot pass the budget unmeasured", () => {
@@ -130,10 +141,13 @@ describe("contextBudget — §3.4 derives it from the descriptor", () => {
   });
 
   it("never produces a threshold of zero on a tiny window", () => {
-    const budget = contextBudget({ contextWindow: 64, maxOutputTokens: 63 }, {
-      ...DEFAULT_CONTEXT_LIMITS,
-      compactAt: 0.01,
-    });
+    const budget = contextBudget(
+      { contextWindow: 64, maxOutputTokens: 63 },
+      {
+        ...DEFAULT_CONTEXT_LIMITS,
+        compactAt: 0.01,
+      },
+    );
     strictEqual(budget.budget, 1);
     strictEqual(budget.compactAtTokens, 1);
   });
@@ -141,7 +155,11 @@ describe("contextBudget — §3.4 derives it from the descriptor", () => {
 
 describe("contextLimits — configuration with defaults, and the one key without a default", () => {
   it("defaults to D-115's numbers with no configuration at all", () => {
-    deepStrictEqual(contextLimits(undefined), { compactAt: 0.8, verbatimTurns: 6, summaryModel: undefined });
+    deepStrictEqual(contextLimits(undefined), {
+      compactAt: 0.8,
+      verbatimTurns: 6,
+      summaryModel: undefined,
+    });
   });
 
   it("fills only what configuration omits", () => {
@@ -153,13 +171,22 @@ describe("contextLimits — configuration with defaults, and the one key without
   });
 
   it("keeps a configured summarizer model, spelled as an answer spells it", () => {
-    strictEqual(contextLimits({ context: { summaryModel: "groq/llama-3.3-70b" } }).summaryModel, "groq/llama-3.3-70b");
+    strictEqual(
+      contextLimits({ context: { summaryModel: "groq/llama-3.3-70b" } }).summaryModel,
+      "groq/llama-3.3-70b",
+    );
   });
 
   it("agrees with the config file's own defaults, so a number cannot differ between two interfaces", () => {
     deepStrictEqual(
-      { compactAt: LIMITS_DEFAULTS.context.compactAt, verbatimTurns: LIMITS_DEFAULTS.context.verbatimTurns },
-      { compactAt: DEFAULT_CONTEXT_LIMITS.compactAt, verbatimTurns: DEFAULT_CONTEXT_LIMITS.verbatimTurns },
+      {
+        compactAt: LIMITS_DEFAULTS.context.compactAt,
+        verbatimTurns: LIMITS_DEFAULTS.context.verbatimTurns,
+      },
+      {
+        compactAt: DEFAULT_CONTEXT_LIMITS.compactAt,
+        verbatimTurns: DEFAULT_CONTEXT_LIMITS.verbatimTurns,
+      },
     );
   });
 });
@@ -201,14 +228,22 @@ describe("planCompaction — D-027's hybrid, decided in arithmetic", () => {
   });
 
   it("refuses when there is nothing older to summarize, rather than summarizing the recent turns", () => {
-    const plan = planCompaction({ units: units(...Array.from({ length: 6 }, () => 1000)), budget, verbatimTurns: 6 });
+    const plan = planCompaction({
+      units: units(...Array.from({ length: 6 }, () => 1000)),
+      budget,
+      verbatimTurns: 6,
+    });
     strictEqual(plan.kind, "refused");
     if (plan.kind !== "refused") return;
     strictEqual(plan.reason, "nothing-to-summarize");
   });
 
   it("refuses when the verbatim tail alone is over the threshold: dropping the user's recent turns is not compaction", () => {
-    const plan = planCompaction({ units: units(...Array.from({ length: 9 }, () => 1000)), budget, verbatimTurns: 8 });
+    const plan = planCompaction({
+      units: units(...Array.from({ length: 9 }, () => 1000)),
+      budget,
+      verbatimTurns: 8,
+    });
     strictEqual(plan.kind, "refused");
     if (plan.kind !== "refused") return;
     strictEqual(plan.reason, "verbatim-exceeds-budget");
@@ -216,12 +251,7 @@ describe("planCompaction — D-027's hybrid, decided in arithmetic", () => {
 
   it("keeps a non-turn unit verbatim by position, so the system prompt is never summarized away", () => {
     const plan = planCompaction({
-      units: [
-        unit("system", 500, "prefix"),
-        unit("t1", 2000),
-        unit("t2", 2000),
-        unit("t3", 2000),
-      ],
+      units: [unit("system", 500, "prefix"), unit("t1", 2000), unit("t2", 2000), unit("t3", 2000)],
       budget,
       verbatimTurns: 1,
     });

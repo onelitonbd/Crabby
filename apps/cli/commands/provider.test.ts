@@ -20,13 +20,13 @@
 // The CLI has no test harness for its streaming commands and this file does not pretend to be one: it covers the verbs
 // that are a pure function of a configuration document and a temp directory, which is what `add` is.
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { EXIT } from "@crabby/api-contracts";
-import { type ConfigFile } from "@crabby/core";
-import { dataLayout, type DataLayout } from "@crabby/platform";
+import type { ConfigFile } from "@crabby/core";
+import { type DataLayout, dataLayout } from "@crabby/platform";
 import { createRenderer, type Renderer } from "../output.ts";
 import { runProvider } from "./provider.ts";
 
@@ -102,10 +102,8 @@ describe("crabby provider add", () => {
     const { renderer, layout } = harness();
     await runProvider("add", [...BASE], layout, renderer);
     const file = JSON.parse(readFileSync(layout.configPath, "utf8")) as ConfigFile;
-    const descriptor = (file.provider?.local?.models ?? {})["qwen2.5:3b"] as Record<
-      string,
-      unknown
-    >;
+    const models = file.provider?.local?.models ?? {};
+    const descriptor = models["qwen2.5:3b"] as Record<string, unknown>;
     const supports = descriptor.supports as Record<string, boolean>;
     assert.equal(supports.systemRole, true);
     assert.equal(supports.streaming, false);

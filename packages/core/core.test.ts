@@ -53,7 +53,9 @@ test("config: D-115's compaction numbers are settable by dotted key, and the ran
   // budget, which is why it is a number between 0.1 and 0.95 rather than a token count: a token
   // count here would be wrong for every model except the one it was measured on.
   const at = applyConfigKey({}, "limits.context.compactAt", 0.9);
-  assert.deepEqual((at as { limits: { context: { compactAt: number } } }).limits.context, { compactAt: 0.9 });
+  assert.deepEqual((at as { limits: { context: { compactAt: number } } }).limits.context, {
+    compactAt: 0.9,
+  });
   const turns = applyConfigKey(
     applyConfigKey({}, "limits.context.compactAt", 0.9),
     "limits.context.verbatimTurns",

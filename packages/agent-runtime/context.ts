@@ -62,11 +62,13 @@ export const DEFAULT_CONTEXT_LIMITS: ContextLimits = {
 export function contextLimits(
   limits:
     | {
-        readonly context?: {
-          readonly compactAt?: number | undefined;
-          readonly verbatimTurns?: number | undefined;
-          readonly summaryModel?: string | undefined;
-        } | undefined;
+        readonly context?:
+          | {
+              readonly compactAt?: number | undefined;
+              readonly verbatimTurns?: number | undefined;
+              readonly summaryModel?: string | undefined;
+            }
+          | undefined;
       }
     | undefined,
 ): ContextLimits {

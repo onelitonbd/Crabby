@@ -66,7 +66,7 @@ test("schema version 5 is the job tables, and the migration is the one that crea
     // Ten and not five, because §2.1's conversation record (D-104), the task's model pin, its switch, its origin and
     // D-112's message table all landed after this table did. The assertion that matters here is unchanged: the job tables are version 5's work and no later
     // migration touched them.
-    assert.equal(schemaVersion(db), 10);
+    assert.equal(schemaVersion(db), 11);
     assert.equal(
       MIGRATIONS.find((entry) => entry.version === 5)?.name,
       "jobs",

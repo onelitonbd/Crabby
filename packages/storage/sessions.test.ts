@@ -12,7 +12,7 @@ import path from "node:path";
 import { describe, it, test } from "node:test";
 import { newId, UNNAMED_TITLE } from "@crabby/api-contracts";
 import { openDatabase, type SqliteDb } from "./db.ts";
-import { appendMessage, listMessages } from "./messages.ts";
+import { appendMessage, coveredMessageIds, listMessages } from "./messages.ts";
 import { MIGRATIONS, migrate, schemaVersion } from "./migrate.ts";
 // The module's own export list, so the "nothing here deletes" assertion is about the file rather than about a copy of it.
 import * as namespace from "./sessions.ts";
@@ -42,13 +42,32 @@ function fileDb(): { db: SqliteDb; close(): void } {
   return { db: handle.db, close: () => handle.close() };
 }
 
+/** An install stopped at one version, for the tests that assert what a later migration does to rows an
+ *  older one wrote. The ledger table is created by `migrate` rather than by a migration, so a hand-run
+ *  migration has to create it first — the same sentence the backfill test carries. */
+function migrateToVersion(db: SqliteDb, version: number): void {
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS schema_migration (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
+  );
+  for (const migration of MIGRATIONS.filter((entry) => entry.version <= version)) {
+    db.transaction(() => {
+      migration.up(db);
+      db.prepare("INSERT INTO schema_migration (version, name, applied_at) VALUES (?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        new Date().toISOString(),
+      );
+    })();
+  }
+}
+
 test("schema version 6 is the session table, and the index is the order the list is read in", () => {
   const { db, close } = fileDb();
   try {
     assert.equal(
       schemaVersion(db),
-      10,
-      "the file advances past 6 (the task pin, its switch, its origin and D-112's message table) but v6 is still sessions",
+      11,
+      "the file advances past 6 (the task pin, its switch, its origin, D-112's message table and D-116's coverage columns) but v6 is still sessions",
     );
     assert.equal(MIGRATIONS.find((entry) => entry.version === 6)?.name, "sessions");
     const indexes = db
@@ -128,7 +147,7 @@ test("the backfill gives every conversation a task already referenced, named fro
 
   const applied = migrate(handle.db);
   try {
-    assert.deepEqual(applied.applied, [6, 7, 8, 9, 10]);
+    assert.deepEqual(applied.applied, [6, 7, 8, 9, 10, 11]);
     const rows = listSessions(handle.db);
     assert.deepEqual(
       rows.map((row) => row.id).sort(),
@@ -575,6 +594,132 @@ describe("a conversation's turns", () => {
       );
     } finally {
       close();
+    }
+  });
+
+  it("writes a summary's coverage beside it and never over the turns it covers (D-116)", () => {
+    // §2.5's "generated summaries must not silently replace or destroy original conversation records" as
+    // a table: the covered rows stay, the summary points at them, and both are readable afterwards.
+    const { db, close, sessionId, taskId } = conversation();
+    try {
+      for (const content of ["first", "second", "third"]) {
+        appendMessage(db, {
+          sessionId,
+          taskId,
+          role: "user",
+          content,
+          now: "2026-03-04T10:00:00.000Z",
+        });
+      }
+      const summary = appendMessage(db, {
+        sessionId,
+        taskId,
+        role: "system",
+        content: "notes on turns 1-2",
+        covers: { from: 1, through: 2 },
+        now: "2026-03-04T10:00:01.000Z",
+      });
+      assert.deepEqual(summary.covers, { from: 1, through: 2 });
+      assert.equal(
+        summary.ordinal,
+        4,
+        "a summary is a row in the conversation, with its own place",
+      );
+      const page = listMessages(db, sessionId).items;
+      assert.deepEqual(
+        page.map((message) => [
+          message.ordinal,
+          message.covers?.from ?? null,
+          message.covers?.through ?? null,
+        ]),
+        [
+          [1, null, null],
+          [2, null, null],
+          [3, null, null],
+          [4, 1, 2],
+        ],
+        "the three turns are still rows; the fourth names them",
+      );
+      assert.deepEqual(
+        coveredMessageIds(db, summary.id),
+        page.slice(0, 2).map((message) => message.id),
+        "the range is the one the summary named, not everything older than the summary itself",
+      );
+      assert.deepEqual(
+        coveredMessageIds(db, page[2]?.id ?? ""),
+        [],
+        "an ordinary turn stands in for nothing, and says so by covering nothing",
+      );
+    } finally {
+      close();
+    }
+  });
+
+  it("refuses a coverage range the schema cannot mean (D-116)", () => {
+    const { db, close, sessionId, taskId } = conversation();
+    try {
+      appendMessage(db, {
+        sessionId,
+        taskId,
+        role: "user",
+        content: "one",
+        now: "2026-03-04T10:00:00.000Z",
+      });
+      // A user turn cannot stand in for other turns, and a range that ends before it starts skips the
+      // turns in between. Both are refused by the CHECK rather than stored and discovered later.
+      assert.throws(() =>
+        db
+          .prepare(
+            "INSERT INTO message (id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at) VALUES ('msg_x', ?, ?, 'user', 'x', 2, 1, 2, '2026-03-04T10:00:00.000Z')",
+          )
+          .run(sessionId, taskId),
+      );
+      assert.throws(() =>
+        db
+          .prepare(
+            "INSERT INTO message (id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at) VALUES ('msg_y', ?, ?, 'system', 'x', 2, 5, 2, '2026-03-04T10:00:00.000Z')",
+          )
+          .run(sessionId, taskId),
+      );
+      assert.throws(() =>
+        db
+          .prepare(
+            "INSERT INTO message (id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at) VALUES ('msg_z', ?, ?, 'system', 'x', 2, 1, NULL, '2026-03-04T10:00:00.000Z')",
+          )
+          .run(sessionId, taskId),
+      );
+    } finally {
+      close();
+    }
+  });
+
+  it("keeps every turn across the version-11 rebuild, because the migration copies rather than recreates", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "crabby-sessions-v11-"));
+    const handle = openDatabase(path.join(dir, "crabby.sqlite3"));
+    try {
+      migrateToVersion(handle.db, 10);
+      const sessionId = ensureSession(handle.db, { id: newId("ses"), titleFrom: "first question" });
+      // Written by the version-10 build's own statement, which is what an install that has not upgraded
+      // yet would run — the current writer names the version-11 columns and cannot be the one that fills
+      // a version-10 table, which is itself part of what the rebuild is for.
+      for (const [index, content] of ["one", "two"].entries()) {
+        handle.db
+          .prepare(
+            `INSERT INTO message (id, session_id, task_id, role, content, ordinal, created_at)
+             VALUES (?, ?, NULL, 'user', ?, ?, '2026-03-04T10:00:00.000Z')`,
+          )
+          .run(newId("msg"), sessionId.id, content, index + 1);
+      }
+      assert.equal(schemaVersion(handle.db), 10);
+      migrate(handle.db);
+      assert.equal(schemaVersion(handle.db), 11);
+      assert.deepEqual(
+        listMessages(handle.db, sessionId.id).items.map((message) => message.content),
+        ["one", "two"],
+        "a table rebuild that dropped the rows would have deleted a conversation's history on upgrade",
+      );
+    } finally {
+      handle.close();
     }
   });
 

@@ -149,6 +149,21 @@ export const MessageRecord = Type.Object(
     /** The turn's place in the conversation, starting at 1. Not the id: ids minted in the same millisecond are ordered by
      *  nothing, and §2.5's "ordering" has to survive two turns written in one millisecond. */
     ordinal: Type.Integer({ minimum: 1 }),
+    /** D-027's compaction, as a row that says what it stands in for: the range of turn ordinals this summary
+     *  covers. Present **only** on a summary — an ordinary turn has nothing to cover — and never a
+     *  replacement: §2.5's "must not silently replace or destroy original conversation records" is why
+     *  the covered rows stay readable in `GET /sessions/{id}/messages` while the summary sits beside
+     *  them. `through` is inclusive, so the next summary starts one ordinal above it and no turn is
+     *  ever covered twice (D-116). */
+    covers: Type.Optional(
+      Type.Object(
+        {
+          from: Type.Integer({ minimum: 1 }),
+          through: Type.Integer({ minimum: 1 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     createdAt: Type.String({ format: "date-time" }),
   },
   { additionalProperties: false },

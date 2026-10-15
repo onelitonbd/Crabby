@@ -25,8 +25,28 @@ export interface RecordedMessage {
   readonly ordinal: number;
 }
 
+/** D-116's input. `role` is deliberately absent: a summary is a `system` row and always will be, so a
+ *  caller that could pass another role would be able to state coverage for a turn that stands for
+ *  nothing — and the migration's CHECK refuses that at the last possible moment instead of here. */
+export interface SummarizeMessageInput {
+  readonly sessionId: string;
+  readonly taskId?: string | undefined;
+  readonly content: string;
+  /** The turn ordinals this summary stands in for, inclusive at both ends. §2.5's "must not silently
+   *  replace or destroy original conversation records" is why these rows stay and this one points at
+   *  them; D-115's second answer (the verbatim tail) is why the range stops before the recent turns. */
+  readonly covers: { readonly from: number; readonly through: number };
+  readonly at: number;
+}
+
 /** The seam, named as a writer for the same reason `CheckpointGate` is one: the loop writes and nobody else does, and a
- *  reader is a different interface (`GET /sessions/{id}/messages`, over HTTP, with the redaction already applied). */
+ *  reader is a different interface (`GET /sessions/{id}/messages`, over HTTP, with the redaction already applied).
+ *
+ *  `summarize` sits beside `record` rather than replacing it, and for one reason: D-113's "the route is the same
+ *  act asked by hand" only holds if there is one act. Two methods on one seam, one implementation, one
+ *  transaction per write — where a compaction that could *not* have gone through this seam would be a
+ *  second writer of a conversation's history, which is the rule D-112 exists to keep. */
 export interface MessageWriter {
   record(input: RecordMessageInput): RecordedMessage;
+  summarize(input: SummarizeMessageInput): RecordedMessage;
 }

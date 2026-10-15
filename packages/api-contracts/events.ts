@@ -32,6 +32,13 @@ export const EVENT_TYPES = [
   "task.resumed",
   "task.interrupted",
   "message.added",
+  // D-027's compaction, announced once with the row it wrote and the range it stands in for (D-116).
+  // Deliberately **not** a second `message.added`: one write, one announcement, or a client counting
+  // frames would read a summary as a turn and a conversation as longer than it is. Task-scoped, like
+  // every event in this vocabulary — a compaction asked for over `POST /sessions/{id}/compact` has no
+  // task to hang an event on, and §5.2 makes an announcement a duty only for what a client must act on.
+  // A summary is not that: the row is retrievable, and it carries `covers`.
+  "message.compacted",
   "message.stream.started",
   "message.stream.delta",
   "message.stream.completed",

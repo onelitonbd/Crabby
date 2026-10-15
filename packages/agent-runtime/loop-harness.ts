@@ -249,6 +249,17 @@ function createMemoryMessageStore(sessionId: string): {
         void input;
         return recorded;
       },
+      // Present because the seam requires it, and doing nothing is the honest answer for a harness that
+      // never compacts: a loop with no compactor wired must not be able to write a summary, and a
+      // harness that pretended to would let a test pass against a write that never happened.
+      summarize: (input) => {
+        counter += 1;
+        const recorded = { id: `msg_harness_${counter}`, ordinal: counter };
+        turns.push(recorded);
+        void sessionId;
+        void input;
+        return recorded;
+      },
     },
   };
 }

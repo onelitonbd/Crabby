@@ -373,6 +373,51 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // D-027's "which turns does this summary stand in for", as two nullable ordinals on the summary row
+    // itself rather than a second table (D-116). The alternative — a `compaction` table with a row per act —
+    // would answer the same question with one more table to migrate, one more cascade to get right, and
+    // two ways to read "what was compacted"; a summary that carries its own range cannot disagree with
+    // itself, and a turn's coverage is answerable with the index `message_session` already provides.
+    //
+    // The CHECKs are the load-bearing part. Both columns or neither, because a half-stated range is a range
+    // nobody can read: "from 4 to nothing" has no meaning, and SQLite would store it happily. `through` ≥
+    // `from`, because a range that ends before it starts is a bug that would silently skip turns. And
+    // neither is set on a non-`system` role, because coverage is what makes a summary a summary — a user
+    // turn cannot claim to stand in for other turns, and the refusal belongs in the schema because that is
+    // where an invalid row cannot exist.
+    //
+    // Downgrade: nullable additions with a table rebuild (SQLite cannot add a CHECK to an existing table),
+    // so a downgrade copies the old seven columns and leaves coverage behind. A version-10 build then reads
+    // a summary as an ordinary `system` turn — which is exactly what it is, minus the sentence saying what
+    // it replaced. No data is lost and no row is deleted; the only thing lost is the ability to answer
+    // "which turns does this stand in for", which is the honest cost of running older code on newer data.
+    version: 11,
+    name: "message-coverage",
+    up(db) {
+      db.exec(`
+        CREATE TABLE message_v11 (
+          id            TEXT PRIMARY KEY,
+          session_id    TEXT NOT NULL REFERENCES session (id) ON DELETE CASCADE,
+          task_id       TEXT REFERENCES task (id) ON DELETE CASCADE,
+          role          TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant', 'tool')),
+          content       TEXT NOT NULL,
+          ordinal       INTEGER NOT NULL,
+          covers_from   INTEGER,
+          covers_through INTEGER,
+          created_at    TEXT NOT NULL,
+          CHECK ((covers_from IS NULL) = (covers_through IS NULL)),
+          CHECK (covers_through IS NULL OR covers_through >= covers_from),
+          CHECK (covers_from IS NULL OR role = 'system')
+        );
+        INSERT INTO message_v11 (id, session_id, task_id, role, content, ordinal, created_at)
+          SELECT id, session_id, task_id, role, content, ordinal, created_at FROM message;
+        DROP TABLE message;
+        ALTER TABLE message_v11 RENAME TO message;
+        CREATE INDEX message_session ON message (session_id, ordinal, id);
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

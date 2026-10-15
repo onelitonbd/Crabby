@@ -386,6 +386,18 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
                 content,
                 now: new Date(at).toISOString(),
               }),
+            // D-116's second method, and the same function with a range attached: a summary is written
+            // through the same writer, in the same transaction as the frame that announces it, so a
+            // conversation has one history and one opinion about what stands in for what.
+            summarize: ({ sessionId, taskId, content, covers, at }) =>
+              appendMessage(deps.db, {
+                sessionId,
+                ...(taskId === undefined ? {} : { taskId }),
+                role: "system",
+                content,
+                covers,
+                now: new Date(at).toISOString(),
+              }),
           },
           modelId: deps.drive.modelId,
           ctx: deps.drive.ctx,

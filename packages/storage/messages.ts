@@ -31,6 +31,9 @@ export interface AppendMessageInput {
   readonly taskId?: string | undefined;
   readonly role: MessageRole;
   readonly content: string;
+  /** D-116: present only on a summary, and only for a `system` role — the schema's own CHECK refuses the
+   *  other combinations, so an honest caller cannot state a range for a turn that stands for nothing. */
+  readonly covers?: { readonly from: number; readonly through: number } | undefined;
   readonly now?: string;
   readonly id?: string;
 }
@@ -61,12 +64,18 @@ export function appendMessage(db: SqliteDb, input: AppendMessageInput): MessageR
     role: input.role,
     content: redact(input.content),
     ordinal: row.next,
+    ...(input.covers === undefined ? {} : { covers: { ...input.covers } }),
     createdAt: now,
   };
   db.prepare(
-    `INSERT INTO message (id, session_id, task_id, role, content, ordinal, created_at)
-     VALUES (@id, @sessionId, @taskId, @role, @content, @ordinal, @createdAt)`,
-  ).run({ ...record, taskId: record.taskId ?? null });
+    `INSERT INTO message (id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at)
+     VALUES (@id, @sessionId, @taskId, @role, @content, @ordinal, @coversFrom, @coversThrough, @createdAt)`,
+  ).run({
+    ...record,
+    taskId: record.taskId ?? null,
+    coversFrom: record.covers?.from ?? null,
+    coversThrough: record.covers?.through ?? null,
+  });
   return record;
 }
 
@@ -86,16 +95,18 @@ export function listMessages(
   options: ListMessagesOptions = {},
 ): { readonly items: readonly MessageRecord[]; readonly count: number } {
   const limit = options.limit ?? 100;
+  const columns =
+    "id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at";
   const rows = (
     options.after === undefined
       ? db
           .prepare(
-            "SELECT id, session_id, task_id, role, content, ordinal, created_at, created_at FROM message WHERE session_id = ? ORDER BY ordinal ASC LIMIT ?",
+            `SELECT ${columns} FROM message WHERE session_id = ? ORDER BY ordinal ASC LIMIT ?`,
           )
           .all(sessionId, limit)
       : db
           .prepare(
-            "SELECT id, session_id, task_id, role, content, ordinal, created_at FROM message WHERE session_id = ? AND ordinal > ? ORDER BY ordinal ASC LIMIT ?",
+            `SELECT ${columns} FROM message WHERE session_id = ? AND ordinal > ? ORDER BY ordinal ASC LIMIT ?`,
           )
           .all(sessionId, options.after, limit)
   ) as MessageRow[];
@@ -120,7 +131,7 @@ export function countMessages(db: SqliteDb, sessionId: string): number {
 export function taskMessages(db: SqliteDb, taskId: string): readonly MessageRecord[] {
   const rows = db
     .prepare(
-      "SELECT id, session_id, task_id, role, content, ordinal, created_at FROM message WHERE task_id = ? ORDER BY ordinal ASC",
+      "SELECT id, session_id, task_id, role, content, ordinal, covers_from, covers_through, created_at FROM message WHERE task_id = ? ORDER BY ordinal ASC",
     )
     .all(taskId) as MessageRow[];
   return rows.map(messageFromRow);
@@ -133,6 +144,8 @@ type MessageRow = {
   role: string;
   content: string;
   ordinal: number;
+  covers_from: number | null;
+  covers_through: number | null;
   created_at: string;
 };
 
@@ -144,6 +157,32 @@ function messageFromRow(row: MessageRow): MessageRecord {
     role: row.role as MessageRole,
     content: row.content,
     ordinal: row.ordinal,
+    ...(row.covers_from === null || row.covers_through === null
+      ? {}
+      : { covers: { from: row.covers_from, through: row.covers_through } }),
     createdAt: row.created_at,
   };
+}
+
+/** D-116: the turn ids one summary stands in for, in the order they happened. It is a *read* over coverage
+ *  rather than a write over the covered rows: §2.5's "must not silently replace or destroy original
+ *  conversation records" is why the original turns stay rows and the summary points at them. A row with no
+ *  range covers nothing, and answers `[]` rather than refusing — which is the same answer an ordinary turn
+ *  deserves. */
+export function coveredMessageIds(db: SqliteDb, messageId: string): readonly string[] {
+  const summary = db
+    .prepare(
+      "SELECT session_id AS sessionId, covers_from AS first, covers_through AS last FROM message WHERE id = ?",
+    )
+    .get(messageId) as { sessionId: string; first: number | null; last: number | null } | undefined;
+  if (summary === undefined || summary.first === null || summary.last === null) return [];
+  // `ordinal BETWEEN first AND last` rather than "everything older than the summary": a summary that
+  // covers turns 4–9 says so, and a reader that inferred the range from the summary's own ordinal would
+  // report turns 1–3 as covered when they were kept verbatim.
+  const rows = db
+    .prepare(
+      "SELECT id FROM message WHERE session_id = ? AND ordinal BETWEEN ? AND ? ORDER BY ordinal ASC",
+    )
+    .all(summary.sessionId, summary.first, summary.last) as { id: string }[];
+  return rows.map((covered) => covered.id);
 }

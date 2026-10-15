@@ -18,6 +18,7 @@
 export * from "./approvals.ts";
 export * from "./cancellation.ts";
 export * from "./checkpoint.ts";
+export * from "./context.ts";
 export * from "./cron.ts";
 export * from "./journal.ts";
 export * from "./loop.ts";

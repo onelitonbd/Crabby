@@ -164,10 +164,22 @@ server, and is not promised — device capability, storage, and thermal limits d
 where the cluster count comes from `Intl.Segmenter` (O-031 closed by D-064). The second term exists because a
 character ratio calibrated on English over-counts Bengali and other Indic scripts — measured here, `দিয়েছি` is 7 code
 units but 3 clusters. The estimate is reported as an estimate, never as a measurement, and a screen that shows one
-labels it `estimated` rather than dimming it.
+labels it `estimated` rather than dimming it. Implemented as written in `packages/agent-runtime/context.ts`, and
+implemented *as written* rather than repaired on the way: the formula's cluster term is never the smaller one, so
+every estimate in this build is conservative by roughly a factor of five — which errs toward compacting early
+rather than toward an overflow mid-task (D-115; O-075 records that coefficient as a question, not a bug).
 - On approaching the ceiling the runtime compacts (hybrid compaction, D-027); on provider-reported context overflow
   it retries once after compaction, then surfaces the failure rather than silently truncating mid-task.
 - Per-provider limits live in configuration and in the descriptor; the smaller of the two wins.
+- **The compaction threshold and the verbatim tail are configuration, not code**: `limits.context.compactAt` (a
+fraction of the derived budget, default `0.8`, schema-capped below `1` because compacting *after* the ceiling is
+worse than not compacting) and `limits.context.verbatimTurns` (the most recent turns that stay as they are,
+default `6`). A fraction rather than a token count is the only form that is right for every model, since the
+budget it applies to differs by three orders of magnitude between descriptors. `limits.context.summaryModel`
+spells the `<provider>/<modelId>` that writes a summary and has **no default**: absent, the run's own model does
+it, which is a default rather than a switch. A failed summary retries once and then surfaces the failure — the
+same rule this section gives a provider-reported overflow, applied at the budget instead of after it
+(D-113, D-115).
 
 ### 3.5 Error taxonomy (shared, provider-independent)
 

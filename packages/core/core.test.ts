@@ -48,6 +48,31 @@ test("config: a bad key is named, and the good keys still load", () => {
   assert.equal(loaded.limits.providerConnectMs, LIMITS_DEFAULTS.providerConnectMs);
 });
 
+test("config: D-115's compaction numbers are settable by dotted key, and the range is refused", () => {
+  // The keys a user would actually type. `limits.context.compactAt` is a fraction of a *derived*
+  // budget, which is why it is a number between 0.1 and 0.95 rather than a token count: a token
+  // count here would be wrong for every model except the one it was measured on.
+  const at = applyConfigKey({}, "limits.context.compactAt", 0.9);
+  assert.deepEqual((at as { limits: { context: { compactAt: number } } }).limits.context, { compactAt: 0.9 });
+  const turns = applyConfigKey(
+    applyConfigKey({}, "limits.context.compactAt", 0.9),
+    "limits.context.verbatimTurns",
+    3,
+  );
+  assert.deepEqual((turns as { limits: { context: unknown } }).limits.context, {
+    compactAt: 0.9,
+    verbatimTurns: 3,
+  });
+
+  // A threshold at or above 1.0 would compact after the ceiling has already been passed, which is the
+  // one value that makes the setting worse than not having it. The writer refuses it here, which is
+  // why the schema's `maximum` is part of the change and not a comment beside it.
+  const tooLate = applyConfigKey({}, "limits.context.compactAt", 1);
+  const layout = freshLayout();
+  const written = writeConfig(layout, tooLate as never);
+  assert.equal(written.ok, false, "compactAt 1.0 must not be writable");
+});
+
 test("config: an out-of-range limit reaches no consumer, but the file and the problem keep it", () => {
   const layout = freshLayout();
   // D-043 floors `providerAttempts` at 5, so a hand-edited `1` is a config that fails validation. `onlyKnownKeys`

@@ -489,6 +489,8 @@ The context-management design MUST remain independent of a specific model provid
 
 Retrieval strategy is decided (D-065: SQLite FTS5, no vector index before a measured need) and the summary format follows the hybrid compaction design in D-027. Compaction thresholds and budget allocation stay tuning values validated against the acceptance list rather than a benchmark (D-065, closing O-011) — a threshold picked to look right in a plan is how a context system ends up discarding the thing the user pinned.
 
+What D-027 left open, D-113 and D-115 price: compaction fires at a *fraction* of the budget `PROVIDERS_AND_TOOLS.md` §3.4 derives from the descriptor (`limits.context.compactAt`, default `0.8`), the most recent `limits.context.verbatimTurns` turns (default `6`) stay verbatim, the summary is a row that stands in for the turns it covers without replacing them (D-112), and a summary that cannot be written is a failure the user sees rather than a silent trim. The arithmetic lives in `packages/agent-runtime/context.ts` and is pure: a threshold is a decision about tokens, and a decision about tokens that needs a provider call or a row to be made is a decision that cannot be tested on its own.
+
 ## 9. Error Handling
 
 ### 9.1 General requirements

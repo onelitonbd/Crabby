@@ -47,6 +47,25 @@ export const LimitsConfig = Type.Object(
     // `packages/providers`' schedule (6 = one attempt plus the five delays D-064 priced), and a test asserts the two
     // agree rather than letting this file remember the number.
     providerAttempts: Type.Optional(Type.Integer({ minimum: 5, maximum: 32 })),
+    // D-113's shape and D-115's numbers: compaction fires at a *fraction* of the budget §3.4 derives
+    // from the descriptor, and a fraction is the only number that is right for every model — an
+    // absolute token count is correct for exactly the window it was measured on, and §3.4's windows
+    // differ by three orders of magnitude. `compactAt` is capped at 0.95 because a threshold of 1
+    // would mean compacting after the ceiling has already been passed, and floored at 0.1 because a
+    // tenth of a context window summarized on every other turn is a summarizer bill, not a context
+    // manager. `verbatimTurns` is the hybrid half of D-027: the most recent turns stay as they are.
+    // `summaryModel` is the one key here with no default, and "absent" is a decision rather than an
+    // omission — it means the run's own model writes the summary (D-115).
+    context: Type.Optional(
+      Type.Object(
+        {
+          compactAt: Type.Optional(Type.Number({ minimum: 0.1, maximum: 0.95 })),
+          verbatimTurns: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+          summaryModel: Type.Optional(Type.String({ minLength: 3, maxLength: 200 })),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -240,6 +259,9 @@ export const LIMITS_DEFAULTS = {
   stepsPerTask: 25,
   cancellationSettleMs: 5_000,
   providerAttempts: 6,
+  // D-115, chosen by the owner on 2026-10-15: compact at four fifths of the budget, and keep the
+  // most recent six turns verbatim. `summaryModel` has no default on purpose — see the schema above.
+  context: { compactAt: 0.8, verbatimTurns: 6 },
 } as const satisfies LimitsConfig;
 
 export const DEFAULT_CONFIG: ConfigFile = { limits: { ...LIMITS_DEFAULTS } };

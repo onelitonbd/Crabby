@@ -1300,6 +1300,21 @@ redaction on write, both cascades), `loop.test.ts` 44/44 (row and frame in one p
 `tasks.test.ts` 17/17 (the route over a real run, the frame/row agreement, the ordinal page, the two refusals), integration
 `sessions.test.ts` 7/7 (`absent` is two names now), `typecheck`, `parity` (28 routes), `docs:check`; CI is the release proof
 as before.
+**Forty-second slice — the context manager's arithmetic (D-027's four unpriced numbers, D-113, D-115).** The owner was
+asked in conversation what D-027's "hybrid compaction" leaves open and answered four questions in one pass: compact
+at **0.8 of the budget**, keep the most recent **6 turns** verbatim, let the user **configure the summarizer model**,
+and **retry once then surface** when a summary cannot be written. The slice is the arithmetic and nothing else —
+`packages/agent-runtime/context.ts`, pure, because a threshold is a decision about tokens and a decision that needs a
+provider call or a row to be made is a decision that cannot be tested on its own. Three properties carry the answers. **The budget is derived and the threshold is a fraction**: §3.4's budget is `contextWindow` minus `maxOutputTokens`, so one `compactAt` of 0.8 is right for an 8 k window and a 200 k one alike, and the schema caps it below `1` because a threshold of 1 compacts *after* the ceiling — worse than having no setting. **An estimate says it is an estimate**: D-064's `max(chars / 4, clusters × 1.35)` is implemented as written, cluster count from `Intl.Segmenter`, and every
+count carries `measured` or `estimated` so §3.4's "never shown as a count" is a type rather than a habit. Implemented
+literally, that formula never selects its first term and prices Latin text about five times a Western tokenizer's
+cost; it errs toward compacting early rather than toward an overflow mid-run, so it stands as accepted and the
+coefficient is registered as **O-075** rather than repaired in passing. **A plan that cannot help refuses, in two named
+ways**: `nothing-to-summarize`, and `verbatim-exceeds-budget` — the last six turns alone past the threshold is a fact
+about a conversation, and dropping the user's recent turns to make a number look better is the opposite of what D-027
+asks for. The summary's size is arithmetic too: a plan carries `summaryTokenAllowance`, the headroom between the
+threshold and the verbatim tail, so the summarizer is given a number instead of "be brief". Configuration is
+`limits.context.compactAt` / `verbatimTurns` / `summaryModel`, all three printable by `crabby config get limits`; the third has no default on purpose, and "absent" means the run's own model writes the summary. Still not built, and named rather than omitted: the summarizer call, the summary row and the covered range beside it, the automatic trigger inside the loop, `POST /sessions/{id}/compact`, and §8.1's pins — the next slices, in that order. Gates: `context.test.ts` 24/24 (D-064's Bengali case, the labelling rule, a counter that answers with nonsense, a budget that scales with the window, both refusals, the allowance), `core.test.ts` 26/26 (the dotted keys a user types, and `compactAt: 1` refused by the writer), `typecheck`, `lint`, `parity`, `docs:check`; CI is the release proof as before.
 
 ## 5. Phase M3 — Four interfaces in parallel
 

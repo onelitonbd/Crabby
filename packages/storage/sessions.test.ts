@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { describe, it, test } from "node:test";
 import { newId, UNNAMED_TITLE } from "@crabby/api-contracts";
 import { openDatabase, type SqliteDb } from "./db.ts";
 import { MIGRATIONS, migrate, schemaVersion } from "./migrate.ts";
@@ -29,6 +29,7 @@ import {
   sessionTasks,
   touchSession,
 } from "./sessions.ts";
+import { appendMessage, listMessages } from "./messages.ts";
 import { createTask, setState } from "./tasks.ts";
 
 const T0 = new Date(2026, 9, 12, 12, 0).getTime();
@@ -46,8 +47,8 @@ test("schema version 6 is the session table, and the index is the order the list
   try {
     assert.equal(
       schemaVersion(db),
-      9,
-      "the file advances past 6 (the task model pin, its switch and the task origin) but v6 is still sessions",
+      10,
+      "the file advances past 6 (the task pin, its switch, its origin and D-112's message table) but v6 is still sessions",
     );
     assert.equal(MIGRATIONS.find((entry) => entry.version === 6)?.name, "sessions");
     const indexes = db
@@ -127,7 +128,7 @@ test("the backfill gives every conversation a task already referenced, named fro
 
   const applied = migrate(handle.db);
   try {
-    assert.deepEqual(applied.applied, [6, 7, 8, 9]);
+    assert.deepEqual(applied.applied, [6, 7, 8, 9, 10]);
     const rows = listSessions(handle.db);
     assert.deepEqual(
       rows.map((row) => row.id).sort(),
@@ -491,4 +492,158 @@ test("a session id is the documented prefix and nothing invented", () => {
   } finally {
     close();
   }
+});
+
+// D-112's message half, on the table §2.5 asks for. The four bullets that bullet names — role, ordering, timestamps,
+// association with the right conversation — are four separate assertions here rather than one "it stores messages",
+// because the first version of this file would have passed a test that checked none of them.
+/** D-111's origin triple: the tests here care about turns, so the identity is a constant rather than a second thing each
+ *  test builds. */
+const ORIGIN = { clientId: "cli_phone", clientName: "the phone", interface: "cli" as const };
+
+describe("a conversation's turns", () => {
+  function conversation(): { db: SqliteDb; close(): void; sessionId: string; taskId: string } {
+    const { db, close } = fileDb();
+    const session = ensureSession(db, { id: newId("ses"), titleFrom: "tidy the notes" });
+    const task = createTask(db, {
+      objective: "tidy the notes",
+      sessionId: session.id,
+      origin: ORIGIN,
+    });
+    return { db, close, sessionId: session.id, taskId: task.id };
+  }
+
+  it("keeps role, place, time and association for every turn", () => {
+    const { db, close, sessionId, taskId } = conversation();
+    try {
+      const first = appendMessage(db, {
+        sessionId,
+        taskId,
+        role: "user",
+        content: "summarise notes.md",
+        now: "2026-03-04T10:00:00.000Z",
+      });
+      const second = appendMessage(db, {
+        sessionId,
+        taskId,
+        role: "assistant",
+        content: "one heading, nothing else",
+        now: "2026-03-04T10:00:01.000Z",
+      });
+      const chat = appendMessage(db, {
+        sessionId,
+        role: "user",
+        content: "and what about build/?",
+        now: "2026-03-04T10:00:02.000Z",
+      });
+
+      assert.deepEqual(
+        [first, second, chat].map((message) => [message.role, message.ordinal, message.taskId]),
+        [
+          ["user", 1, taskId],
+          ["assistant", 2, taskId],
+          // A `/ask` turn (C4-02) has no task, and the row says so rather than inventing one.
+          ["user", 3, undefined],
+        ],
+        "§2.5's role, ordering and association, in one read — and the place is the conversation's own counter, not the id",
+      );
+      assert.equal(second.createdAt, "2026-03-04T10:00:01.000Z", "timestamps are kept as written");
+      assert.ok(
+        (first.id.startsWith("msg_") && first.id > second.id) || first.id !== second.id,
+        "the sixth prefix exists and two turns in one conversation never share an id",
+      );
+
+      const page = listMessages(db, sessionId);
+      assert.deepEqual(
+        page.items.map((message) => message.content),
+        ["summarise notes.md", "one heading, nothing else", "and what about build/?"],
+        "a page reads in the order the turns happened",
+      );
+      assert.equal(
+        page.count,
+        3,
+        "the true total sits beside the page, as it does for a session's tasks",
+      );
+      assert.deepEqual(
+        listMessages(db, sessionId, { after: 1 }).items.map((message) => message.ordinal),
+        [2, 3],
+        "§2's cursor resumes after an ordinal, so appending a turn cannot shift a page a reader is holding",
+      );
+      assert.deepEqual(
+        listMessages(db, sessionId, { limit: 2 }).items.map((message) => message.ordinal),
+        [1, 2],
+      );
+    } finally {
+      close();
+    }
+  });
+
+  it("redacts on write, because §8.2 counts conversation records as a category of their own", () => {
+    const { db, close, sessionId, taskId } = conversation();
+    try {
+      const stored = appendMessage(db, {
+        sessionId,
+        taskId,
+        role: "user",
+        content: "my key is sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        now: "2026-03-04T10:00:00.000Z",
+      });
+      assert.doesNotMatch(
+        stored.content,
+        /sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAA/,
+        "the credential is masked on the way in, exactly as an event payload's is — the category differs, the rule does not",
+      );
+      const raw = (
+        db.prepare("SELECT content FROM message WHERE id = ?").get(stored.id) as { content: string }
+      ).content;
+      assert.equal(
+        raw,
+        stored.content,
+        "and the column holds what the caller was told, so the redacted text is one fact rather than two spellings",
+      );
+    } finally {
+      close();
+    }
+  });
+
+  it("goes when its conversation does, and goes alone when one task of many is deleted", () => {
+    const { db, close, sessionId, taskId } = conversation();
+    try {
+      const other = createTask(db, {
+        objective: "summarise the roadmap",
+        sessionId,
+        origin: ORIGIN,
+      });
+      appendMessage(db, {
+        sessionId,
+        taskId,
+        role: "user",
+        content: "notes",
+        now: "2026-03-04T10:00:00.000Z",
+      });
+      appendMessage(db, {
+        sessionId,
+        taskId: other.id,
+        role: "user",
+        content: "roadmap",
+        now: "2026-03-04T10:00:01.000Z",
+      });
+
+      db.prepare("DELETE FROM task WHERE id = ?").run(taskId);
+      assert.deepEqual(
+        listMessages(db, sessionId).items.map((message) => message.content),
+        ["roadmap"],
+        "a turn whose task no longer exists would be a claim about work nobody can see, so it goes with the task",
+      );
+
+      db.prepare("DELETE FROM session WHERE id = ?").run(sessionId);
+      assert.equal(
+        listMessages(db, sessionId).count,
+        0,
+        "§2.5's deletion bullet: deleting a conversation deletes its history, which is what C11-05's one T3 command is for",
+      );
+    } finally {
+      close();
+    }
+  });
 });

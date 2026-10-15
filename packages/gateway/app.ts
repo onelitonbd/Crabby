@@ -107,6 +107,7 @@ import {
   SESSION_ORIGINS,
   type SessionActionBody,
   type SessionActionCode,
+  type MessageListBody,
   type SessionDetailBody,
   type SessionListBody,
   type SessionTaskFacts,
@@ -150,6 +151,8 @@ import {
 } from "@crabby/providers";
 import {
   appendEvent,
+  appendMessage,
+  listMessages,
   authenticate,
   createSession,
   createSqliteApprovalStore,
@@ -371,6 +374,19 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
           publish: (event) => bus.publish(event),
           cancellation,
           checkpoints,
+          // D-112's conversation store, composed here because this is where the database is, and handed to the loop
+          // through the same phase that completes a task: the turn and the frame that announces it commit together or not
+          // at all, which is what makes §2.5's record and §5.2's log one fact rather than two that may disagree.
+          messages: {
+            record: ({ sessionId, taskId, role, content, at }) =>
+              appendMessage(deps.db, {
+                sessionId,
+                ...(taskId === undefined ? {} : { taskId }),
+                role,
+                content,
+                now: new Date(at).toISOString(),
+              }),
+          },
           modelId: deps.drive.modelId,
           ctx: deps.drive.ctx,
           // D-044's stage 2, as a seam rather than a pool: the Gateway is the only party that knows which providers
@@ -1767,7 +1783,13 @@ function registerSessionRoutes(app: FastifyInstance, deps: GatewayDeps): void {
   /** C11-03's columns this build cannot answer, named rather than omitted: turns need a message store, budget and pinned
    *  items need D-027's context manager. A detail body that left them out would let a client render a zero for something
    *  it never asked about, and `crabby session show` stays planned for the same reason. */
-  const ABSENT = ["messages", "context", "pins"] as const;
+  /** What this build still cannot answer about a conversation (D-112 took `messages` off this list, and with it the
+   *  "0 turns" render C11-03's `session show` was refused by name). `context` and `pins` need D-027's context manager, which
+   *  is the next slice and not this one. */
+  const ABSENT = ["context", "pins"] as const;
+  /** The page size for a conversation's turns, with the true total beside it — the same reasoning as `TASK_LIMIT`, and the
+   *  same shape: a conversation kept for a month holds more turns than a phone should render in one response. */
+  const MESSAGE_LIMIT = 100;
   /** The bound on the tasks a detail answer carries, with the true total beside it — the same shape a job's run history
    *  uses, because a conversation kept for a month holds more tasks than a phone should render in one response. */
   const TASK_LIMIT = 20;
@@ -1862,6 +1884,67 @@ function registerSessionRoutes(app: FastifyInstance, deps: GatewayDeps): void {
     } satisfies SessionDetailBody;
     return reply.header("etag", sessionETag(record.revision)).send(body);
   });
+
+  /** §2.5's message half, as a route: C11-03's `session show` asks for turns and gets them here, one page at a time.
+   *
+   *  Three things are deliberately absent from the answer. There is no `summary` field, because §2.5's "generated summaries
+   *  must not silently replace or destroy original conversation records" means a summary is *another* record and D-027's
+   *  compaction is what would write one — a route that could show a summary would have to decide which one is authoritative,
+   *  and that is §8.4's question rather than this route's. There is no `content` redaction parameter, because the stored text
+   *  is already redacted on write (SECURITY.md §7) and a second knob over the same bytes is a way for a caller to ask for
+   *  the unredacted one. And an unknown session is a `404` rather than an empty list, for the reason every other route here
+   *  gives: "no such conversation" and "a conversation with nothing said yet" are different answers. */
+  app.get<{ Params: { id: string }; Querystring: { cursor?: string; limit?: string } }>(
+    "/api/v1/sessions/:id/messages",
+    async (request, reply) => {
+      const record = getSession(deps.db, request.params.id);
+      if (record === undefined) {
+        throw notFound(`session ${request.params.id}`, request.crabbyRequestId);
+      }
+      const limit = request.query.limit;
+      if (
+        limit !== undefined &&
+        (!/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > MESSAGE_LIMIT)
+      ) {
+        throw validationError(
+          [
+            {
+              path: "limit",
+              message: `a page is 1..${MESSAGE_LIMIT} turns; the bound is this route's, and a caller asking for more gets pages`,
+              kind: "range",
+            },
+          ],
+          request.crabbyRequestId,
+        );
+      }
+      const cursor = request.query.cursor;
+      if (cursor !== undefined && !/^\d+$/.test(cursor)) {
+        throw validationError(
+          [
+            {
+              path: "cursor",
+              message: "the cursor is the ordinal of the last turn a page carried",
+              kind: "pattern",
+            },
+          ],
+          request.crabbyRequestId,
+        );
+      }
+      const page = listMessages(deps.db, record.id, {
+        limit: limit === undefined ? MESSAGE_LIMIT : Number(limit),
+        ...(cursor === undefined ? {} : { after: Number(cursor) }),
+      });
+      const last = page.items.at(-1);
+      const body: MessageListBody = {
+        items: page.items,
+        count: page.count,
+        ...(last !== undefined && last.ordinal < page.count
+          ? { nextCursor: String(last.ordinal) }
+          : {}),
+      };
+      return reply.send(body);
+    },
+  );
 
   app.patch<{ Params: { id: string }; Body: PatchSessionBody }>(
     "/api/v1/sessions/:id",

@@ -744,6 +744,153 @@ describe("the task handoff over http (M2's Exit criterion)", () => {
   });
 });
 
+describe("a conversation's turns are a record, not a stream nobody can fetch (D-112)", () => {
+  it("stores the answer the loop produced, and serves it in order with the task beside it", async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "crabby-turns-"));
+    writeFileSync(path.join(workspace, "notes.md"), "# notes\n", "utf8");
+    const h = await boot({
+      workspace,
+      rounds: [
+        [{ kind: "tool-call", name: "file.read", arguments: { path: "notes.md" } }],
+        [{ kind: "text", text: "notes.md holds one heading; nothing else is in it" }],
+      ],
+    });
+    try {
+      const created = await h.cli.createTask({ objective: "summarise notes.md" }, "idem-turns-1");
+      const task = created.body as TaskRecord;
+      const final = await untilTerminal(h, task.id);
+      assert.equal(final.state, "completed");
+
+      const frame = readEvents(h.db, task.id).find((event) => event.type === "message.added");
+      assert.ok(frame !== undefined, "the answer is announced as well as stored");
+
+      const page = (await h.cli.sessionMessages(task.sessionId)).body as {
+        items: { id: string; ordinal: number; role: string; content: string; taskId?: string }[];
+        count: number;
+      };
+      assert.equal(page.count, 1, "one turn, and the count is beside the page");
+      const turn = page.items[0];
+      assert.ok(turn !== undefined);
+      assert.equal(turn.role, "assistant");
+      assert.equal(turn.ordinal, 1, "§2.5's ordering, as a number a reader can check");
+      assert.equal(turn.taskId, task.id, "and the association with the task that produced it");
+      assert.equal(turn.content, "notes.md holds one heading; nothing else is in it");
+      assert.equal(
+        turn.id,
+        (frame.payload as { messageId?: string }).messageId,
+        "D-112: the frame names the row, so the stream and the record are one turn rather than two that may disagree",
+      );
+
+      // The conversation's own summary no longer claims turns are absent, and the task's events still carry the text — the
+      // two records overlap on purpose and neither is derived from the other afterwards.
+      const detail = (await h.cli.session(task.sessionId)).body as {
+        absent: string[];
+      };
+      assert.deepEqual(
+        detail.absent,
+        ["context", "pins"],
+        "a client that rendered `0 turns` for this conversation would be wrong, which is why the absence is named at all",
+      );
+
+      await assert.rejects(h.cli.sessionMessages("ses_nobody_made"), (error: unknown) => {
+        assert.ok(error instanceof GatewayFailure);
+        assert.equal(
+          error.status,
+          404,
+          '"no such conversation" and "nothing said yet" are different answers',
+        );
+        return true;
+      });
+      const opened = await h.cli.createSession({ title: "a fresh conversation" });
+      const fresh = (opened.body as { session: { id: string } }).session;
+      const noTurns = await h.cli.sessionMessages(fresh.id);
+      assert.equal(noTurns.status, 200);
+      assert.deepEqual(
+        (noTurns.body as { items: unknown[]; count: number }).items,
+        [],
+        "an empty conversation is an empty page, not a 404 — C11-03's sidebar has to draw both",
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("paginates by ordinal, so a turn appended while a client reads cannot shift its page", async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "crabby-turns-page-"));
+    const h = await boot({
+      workspace,
+      rounds: [[{ kind: "text", text: "first answer" }]],
+    });
+    try {
+      const first = await h.cli.createTask({ objective: "ask one thing" }, "idem-turns-3");
+      const task = first.body as TaskRecord;
+      await untilTerminal(h, task.id);
+      // The same conversation on purpose: `POST /tasks` mints a session per task unless one is named, and a page test
+      // about *one* conversation would be a test about two.
+      const second = await h.cli.createTask(
+        { objective: "ask another", sessionId: task.sessionId },
+        "idem-turns-4",
+      );
+      await untilTerminal(h, (second.body as TaskRecord).id);
+
+      const page = (await h.cli.sessionMessages(task.sessionId, { limit: 1 })).body as {
+        items: { ordinal: number; content: string }[];
+        count: number;
+        nextCursor?: string;
+      };
+      assert.equal(page.count, 2, "both turns exist; one page carries one of them");
+      assert.equal(page.items[0]?.ordinal, 1);
+      assert.equal(
+        page.nextCursor,
+        "1",
+        "§2's cursor is the ordinal, so the next page cannot repeat or skip a turn",
+      );
+
+      const rest = (await h.cli.sessionMessages(task.sessionId, { cursor: 1 })).body as {
+        items: { ordinal: number; content: string }[];
+        nextCursor?: string;
+      };
+      assert.deepEqual(
+        rest.items.map((turn) => turn.ordinal),
+        [2],
+        "and the second page is the second turn",
+      );
+      assert.equal(
+        rest.nextCursor,
+        undefined,
+        "a last page carries no cursor, because there is nothing after it",
+      );
+
+      await assert.rejects(
+        h.cli.sessionMessages(task.sessionId, { cursor: 1, limit: 999 }),
+        (error: unknown) => {
+          assert.ok(error instanceof GatewayFailure);
+          assert.equal(
+            error.status,
+            400,
+            "§5.2's rule for a bounded list: the bound is the route's, and a caller past it is told",
+          );
+          return true;
+        },
+      );
+      await assert.rejects(
+        h.cli.sessionMessages(task.sessionId, { cursor: -3 }),
+        (error: unknown) => {
+          assert.ok(error instanceof GatewayFailure);
+          assert.equal(
+            error.status,
+            400,
+            "a cursor that is not an ordinal is a pattern, not a silent first page",
+          );
+          return true;
+        },
+      );
+    } finally {
+      await h.close();
+    }
+  });
+});
+
 describe("a task interrupted by a restart continues from its checkpoint (F-47, D-111)", () => {
   it("rebuilds the run across two processes, with the step that committed staying committed", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "crabby-resume-"));

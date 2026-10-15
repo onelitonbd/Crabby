@@ -289,7 +289,7 @@ describe("upgrading", () => {
     // and a fixture that left them in place would fail a later migration's CREATE or ALTER for a reason no upgrade would
     // ever meet. `job_run` goes before `job` because it is the one holding the foreign key.
     db.exec(
-      "DELETE FROM schema_migration; DROP TABLE approval; DROP TABLE checkpoint; " +
+      "DELETE FROM schema_migration; DROP TABLE approval; DROP TABLE checkpoint; DROP TABLE message; " +
         "DROP TABLE job_run; DROP TABLE job; DROP TABLE session; " +
         "ALTER TABLE task DROP COLUMN cancellation_json; ALTER TABLE task DROP COLUMN model; " +
         "ALTER TABLE task DROP COLUMN model_switch_json; ALTER TABLE task DROP COLUMN origin_json",
@@ -298,7 +298,7 @@ describe("upgrading", () => {
       MIGRATIONS[0]?.name ?? "v1",
       new Date(0).toISOString(),
     );
-    assert.deepEqual(migrate(db), { applied: [2, 3, 4, 5, 6, 7, 8, 9], version: 9 });
+    assert.deepEqual(migrate(db), { applied: [2, 3, 4, 5, 6, 7, 8, 9, 10], version: 10 });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,
       1,

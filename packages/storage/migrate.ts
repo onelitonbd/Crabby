@@ -336,6 +336,43 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // §2.5's message half, which D-104 explicitly left out and D-112 takes: "messages must retain their role, ordering,
+    // relevant timestamps, and association with the correct conversation", with tool calls and their results kept beside the
+    // turn they belong to. `role` and `content` are the turn; `ordinal` is its place; `created_at` is when; and the two
+    // foreign keys are the association — the conversation always, the task where there was one, because a `/ask` turn
+    // (C4-02) has no task and a NOT NULL column would have made the honest row illegal.
+    //
+    // Both cascades are the deletion half of §2.5, and they differ on purpose. Deleting the conversation deletes its
+    // turns — that is what "users can delete their conversation history" means and C11-05's one T3 command is for. Deleting
+    // a *task* deletes that task's turns with it, because a turn whose task no longer exists would be a claim about work
+    // nobody can see; the conversation survives, and so do the turns its other tasks produced.
+    //
+    // There is deliberately no column naming the event that announced a turn: the link runs one way, from the frame to the
+    // row (`message.added` carries `messageId`), which is the direction a reader needs and the only one that is true at write
+    // time — the row is committed before the frame's `seq` exists, so a second column claiming otherwise would hold an
+    // event's number or a guess, and §2.5's "association" is about the conversation, not about the log.
+    //
+    // Downgrade: nullable additions only, so a version-9 build opens and closes with the table simply unused, and a
+    // version-10 build read by an older one ignores it. Turns written after a downgrade live in a table the older build does
+    // not know about; the event log still carries them, which is the same bargain version 8's column made.
+    version: 10,
+    name: "messages",
+    up(db) {
+      db.exec(`
+        CREATE TABLE message (
+          id          TEXT PRIMARY KEY,
+          session_id  TEXT NOT NULL REFERENCES session (id) ON DELETE CASCADE,
+          task_id     TEXT REFERENCES task (id) ON DELETE CASCADE,
+          role        TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant', 'tool')),
+          content     TEXT NOT NULL,
+          ordinal     INTEGER NOT NULL,
+          created_at  TEXT NOT NULL
+        );
+        CREATE INDEX message_session ON message (session_id, ordinal, id);
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

@@ -26,6 +26,8 @@ import { dataLayout } from "@crabby/platform";
 import type { ToolCall } from "@crabby/policy";
 import { createSqliteApprovalStore } from "./approvals.ts";
 import { createIdentity, getIdentity, revoke } from "./clients.ts";
+import { appendMessage } from "./messages.ts";
+import { ensureSession } from "./sessions.ts";
 import { openDatabase, type SqliteDb } from "./db.ts";
 import { readEvents } from "./events.ts";
 import { createSqliteJournal } from "./journal.ts";
@@ -327,7 +329,7 @@ describe("the SQLite journal", () => {
     // no file can be in. A v2 file has no job pair and no session record either, and a CREATE against tables the fixture
     // left standing is a failure no upgrade would ever meet.
     db.exec(
-      "DELETE FROM schema_migration WHERE version >= 3; DROP TABLE checkpoint; " +
+      "DELETE FROM schema_migration WHERE version >= 3; DROP TABLE checkpoint; DROP TABLE message; " +
         "DROP TABLE job_run; DROP TABLE job; DROP TABLE session; " +
         "ALTER TABLE task DROP COLUMN cancellation_json; ALTER TABLE task DROP COLUMN model; " +
         "ALTER TABLE task DROP COLUMN model_switch_json; ALTER TABLE task DROP COLUMN origin_json",
@@ -335,7 +337,7 @@ describe("the SQLite journal", () => {
     // Nothing is read before `migrate` on purpose: v3's SELECT names the new column, so a v2 file is unreadable by v3
     // code until the migration runs. That is why every process migrates on startup rather than lazily, and why this test
     // asserts the upgrade instead of the state before it.
-    assert.deepEqual(migrate(db), { applied: [3, 4, 5, 6, 7, 8, 9], version: 9 });
+    assert.deepEqual(migrate(db), { applied: [3, 4, 5, 6, 7, 8, 9, 10], version: 10 });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,
       1,
@@ -362,6 +364,10 @@ describe("the SQLite journal", () => {
     const { db, dir, file, close } = tempDb();
     const layout = dataLayout(dir);
     const task = createTask(db, { objective: "delete build/ and report" });
+    // The message table's foreign key asks for the conversation to exist, and the Gateway's handoff is what creates it —
+    // `ensureSession` here is the same call that path makes, so this fixture is not quietly relying on a turn belonging to
+    // a conversation nobody wrote down.
+    ensureSession(db, { id: task.sessionId, titleFrom: task.objective, origin: "cli" });
     const published: Event[] = [];
 
     // The journal, with a flag that says when a transaction is open: the arbiter is wrapped in it so this test proves the
@@ -392,6 +398,18 @@ describe("the SQLite journal", () => {
       provider: createScriptedProvider([deleteRound, doneRound]),
       tools: executor.surface,
       platform: { isTermux: false },
+      // D-112's conversation store, composed here the way the Gateway composes it, so this test's event list includes the
+      // frame that announces a stored turn — and so a loop with no writer's silence would be visible here too.
+      messages: {
+        record: ({ sessionId, taskId, role, content, at: atMs }) =>
+          appendMessage(db, {
+            sessionId,
+            ...(taskId === undefined ? {} : { taskId }),
+            role,
+            content,
+            now: new Date(atMs).toISOString(),
+          }),
+      },
       publish: (event) => {
         assert.equal(inside, false, "publishing happens after the commit, never inside it");
         published.push(event);

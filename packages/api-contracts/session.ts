@@ -22,6 +22,7 @@
 import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import { CLIENT_INTERFACES, type ClientInterface } from "./clients.ts";
+import { MessageId, SessionId, TaskId } from "./ids.ts";
 import type { TaskRecord } from "./task.ts";
 
 /** A conversation, as stored. Every field here is a column; nothing is derived, so a record and a row cannot disagree
@@ -119,12 +120,47 @@ export const PatchSessionBody = Type.Object(
 );
 export type PatchSessionBody = Static<typeof PatchSessionBody>;
 
+/** The roles §4.4's provider messages carry and §2.5's "role" bullet asks a store to keep. Read from the provider
+ *  package's own vocabulary where it exists, so a role a provider adds is a decision here rather than a widening. */
+export const MESSAGE_ROLES = ["system", "user", "assistant", "tool"] as const;
+
 export interface SessionListBody {
   readonly items: readonly SessionRow[];
   readonly count: number;
   /** C11-01's order, stated rather than left to be inferred from the first item: last activity, newest first. A client
    *  that re-sorted by creation would show the order a person does not remember in. */
   readonly sortedBy: "lastActivity";
+}
+
+/** One turn of a conversation (D-112), as §2.5 lists what a message must keep: role, its place, when it happened, and
+ *  which conversation — and which task, where there was one — it belongs to.
+ *
+ *  `content` is the redacted text: SECURITY.md §7 puts a credential out of every stored record, and §8.2 counts conversation
+ *  records as a category of their own rather than a place where the event log's redaction may be skipped. */
+export const MessageRecord = Type.Object(
+  {
+    id: MessageId,
+    sessionId: SessionId,
+    /** Absent for a turn no task produced. Every task in this build belongs to a session, so the column is nullable only
+     *  because a one-shot chat turn (C4-02's `/ask`) has no task and pretending otherwise would make the absence illegal. */
+    taskId: Type.Optional(TaskId),
+    role: Type.Union(MESSAGE_ROLES.map((name) => Type.Literal(name))),
+    content: Type.String(),
+    /** The turn's place in the conversation, starting at 1. Not the id: ids minted in the same millisecond are ordered by
+     *  nothing, and §2.5's "ordering" has to survive two turns written in one millisecond. */
+    ordinal: Type.Integer({ minimum: 1 }),
+    createdAt: Type.String({ format: "date-time" }),
+  },
+  { additionalProperties: false },
+);
+export type MessageRecord = Static<typeof MessageRecord>;
+
+/** `GET /sessions/{id}/messages`'s body: §2's cursor pagination, ordered by ordinal so a page cannot shift under a reader
+ *  that is appending. `nextCursor` is the ordinal to resume from, not an id — the ordinal is the stable thing. */
+export interface MessageListBody {
+  readonly items: readonly MessageRecord[];
+  readonly count: number;
+  readonly nextCursor?: string;
 }
 
 /** `GET /sessions/{id}`'s body. The tasks are bounded and the true total is beside them, for the reason a job's run
@@ -134,9 +170,10 @@ export interface SessionDetailBody {
   readonly session: SessionRow;
   readonly tasks: readonly TaskRecord[];
   readonly taskCount: number;
-  /** What this build cannot answer about a conversation, named rather than omitted: C11-03's `session show` asks for
-   *  turns, budget and pinned items, and all three need a message store and D-027's context manager. A detail body that
-   *  simply left them out would let a client render `0 turns` for a conversation that has forty. */
+  /** What this build cannot answer about a conversation, named rather than omitted: C11-03's `session show` also asks for
+   *  budget and pinned items, and both need D-027's context manager. `messages` left this list with D-112 — a detail body
+   *  that simply omitted the field would let a client render `0 turns` for a conversation that has forty, which is why the
+   *  absence is named in the first place. */
   readonly absent: readonly string[];
 }
 

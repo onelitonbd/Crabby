@@ -200,15 +200,13 @@ export async function runSession(
       if (renderer.json) return renderer.done({ ...detail });
       const [context, messages] = await Promise.all([
         client.sessionContext(id).then((response) => response.body as SessionContextBody),
-        client
-          .sessionMessages(id, { limit: 20 })
-          .then(
-            (response) =>
-              response.body as {
-                items: { ordinal: number; role: string; content: string }[];
-                count: number;
-              },
-          ),
+        client.sessionMessages(id, { limit: 20 }).then(
+          (response) =>
+            response.body as {
+              items: { ordinal: number; role: string; content: string }[];
+              count: number;
+            },
+        ),
       ]);
       renderer.line(
         "session",

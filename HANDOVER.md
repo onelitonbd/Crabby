@@ -31,7 +31,7 @@ and pins.
 | Workstream | State |
 | --- | --- |
 | CLI | **Largely done.** 30 commands live; the registry (`apps/cli/registry.ts`) is the authority on what is `ready`. |
-| TUI | **All six panes draw real content.** `chat`, `tasks`, `approvals` (T-A's modal), `jobs` (T17), `models` (T11, editor included) and `logs` (T15's decisions + diagnostics). The log/audit *views* inside logs name their route gaps (see §7) and `model probe` names its own (T11-07). |
+| TUI | **All six panes draw real content, and the views inside them are wired.** `chat` (composer with the real cursor, T5-02; input history on ↑/↓, T5-09; the overflow warning, T8-08), `tasks` (T6-01's filter row), `approvals` (T-A's modal), `jobs` (T17), `models` (T11, editor included, plus T12's tools view on `t`), `logs` (T15's decisions + diagnostics, T14's access view and T13's config view on `v`). The log/audit *views* still name their route gaps (see §7) and `model probe` names its own (T11-07). |
 | Web UI | **Not started.** D-068 decided custom elements, no SPA framework, so nothing here gates it. |
 | Telegram | **Not started.** Needs the tunnel. |
 
@@ -48,6 +48,25 @@ last three to know what just happened and why.
   `composer.ts` (`Enter` sends, `Ctrl+J` newlines). Pure modules, 73 tests, no pty needed.
 - **58 (D-131)** — `apps/tui/stream.ts` (`GET /api/v1/events`), the composer sending through `POST /tasks`, the app
   opening on chat, and `apps/tui/main.test.ts` driving the whole loop with a fake stdin.
+- **59–63 (this stretch)** — the TUI's remaining element rows, wired to what the routes already answer:
+  `tools.ts`/`access.ts`/`settings.ts` are pure projections (T12/T14/T13) and `main.ts` only wires them: `t` opens the
+  tools view inside the models pane (dangerous-first sort, Enter folds the schema), and the logs pane's `v` cycle is five
+  stops — log, audit, decisions, **clients** (revoke asks twice and says what ends; `n` mints a pairing code through the
+  same client method `crabby auth` uses), **config** (the buffer → diff → write pipeline is the CLI's own `applyEdit`,
+  same CAS, same 0600 file). The polish rows: the composer drives the **real terminal cursor** (T5-02 — no drawn block
+  on a TTY), `↑`/`↓` walk the session's input history (T5-09, stepping out past the newest to the empty buffer), the
+  overflow warning computes before the send from the Gateway's own count plus the draft's estimate (T8-08), quitting
+  with a task running confirms once **in words that the task survives** (T1-08, `q`/Ctrl-Q; Ctrl-Z suspends through
+  cooked mode + SIGTSTP and SIGCONT redraws), created task ids and their watch commands get **bare lines** in the
+  transcript (T2-09/T-C8 — `addNote`, no prefix), and the tasks pane has T6-01's filter row (`f` enters, `f` toggles
+  field, Esc clears; prefix match on state and session).
+
+**T5-06 stays a named gap, not a guess.** The capability line under the composer still prints the documented
+conservative defaults (`fs: workspace · net: off · shell: off`), because the one route that could make them real does
+not exist: `GET /auth/clients` carries `capabilities` *per identity*, but nothing answers **"which identity am I"** —
+the caller's own grants row. Building it without that route would mean printing "shell: on" from a guess, and a wrong
+"shell: on" is a wrong promise about what a run may do. The fix is a route (`GET /api/v1/auth/whoami` or an `own` flag
+on the clients list); the line and its comment in `main.ts` name this and wait.
 
 Four bugs in this stretch were found **by running the TUI**, not by tests, and each is now either a test or a comment:
 

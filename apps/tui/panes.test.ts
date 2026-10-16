@@ -14,6 +14,8 @@ import { FRAME_CHROME_ROWS, type FrameState, frameLines } from "./frame.ts";
 import {
   chatKey,
   chatPane,
+  EMPTY_TASK_FILTER,
+  filterTasks,
   PANE_DESCRIPTORS,
   type PaneContext,
   paneState,
@@ -22,6 +24,7 @@ import {
   readTaskItems,
   statusFrom,
   type TaskSummary,
+  taskFilterLine,
   tasksPane,
 } from "./panes.ts";
 import { visibleWidth } from "./render.ts";
@@ -297,22 +300,22 @@ describe("the chat pane", () => {
   it("printable keys go to the composer, so the pane's own bindings cannot swallow them (T3-04)", () => {
     // `a` is an approve in the approvals pane and a literal here. A pane-level binding that took printable keys would make
     // the composer unusable, which is the failure T3-04's row exists to prevent.
-    const typed = chatKey(emptyComposer(), undefined, { kind: "char", char: "a" }, undefined);
+    const typed = chatKey(emptyComposer(), [], { kind: "char", char: "a" }, undefined);
     assert.equal(typed.composer.buffer, "a");
-    const bound = chatKey(emptyComposer(), undefined, { kind: "char", char: "a" }, "approve");
+    const bound = chatKey(emptyComposer(), [], { kind: "char", char: "a" }, "approve");
     assert.equal(bound.action, "approve");
   });
 
   it("Enter sends and clears the composer, Ctrl+J does not", () => {
     const composer = applyAction(emptyComposer(), { kind: "insert", text: "hello" }, undefined);
-    const sent = chatKey(composer, undefined, { kind: "enter" }, undefined);
+    const sent = chatKey(composer, [], { kind: "enter" }, undefined);
     assert.equal(sent.action, "send");
     assert.equal(
       sent.composer.buffer,
       "",
       "the composer empties so the next question is not appended to this one",
     );
-    const typed = chatKey(composer, undefined, { kind: "ctrl", letter: "j" }, undefined);
+    const typed = chatKey(composer, [], { kind: "ctrl", letter: "j" }, undefined);
     assert.equal(typed.action, undefined);
     assert.equal(typed.composer.buffer, "hello\n");
   });
@@ -362,5 +365,60 @@ describe("reading the Gateway's own body shape", () => {
   it("throws when a created task has no id, because nothing can be followed", () => {
     assert.equal(readTaskId({ id: "tsk_x" }), "tsk_x");
     assert.throws(() => readTaskId({ ok: true }), /without a task id/);
+  });
+});
+
+describe("T6-01's filter row", () => {
+  const tasks = [
+    { id: "t1", state: "running", objective: "the running one", sessionId: "s_1" },
+    { id: "t2", state: "completed", objective: "the done one", sessionId: "s_2" },
+  ];
+  const wide = {
+    client: {} as never,
+    pane: "tasks" as const,
+    rows: 24,
+    columns: 40,
+    color: "none" as const,
+    offline: false,
+    lastConfirmed: "just now",
+  };
+
+  it("prefix-matches both fields, empty text matching everything", () => {
+    assert.equal(filterTasks(tasks, EMPTY_TASK_FILTER).length, 2);
+    assert.deepEqual(
+      filterTasks(tasks, { field: "state", state: "run", session: "" }).map((t) => t.id),
+      ["t1"],
+    );
+    assert.deepEqual(
+      filterTasks(tasks, { field: "session", state: "", session: "s_2" }).map((t) => t.id),
+      ["t2"],
+    );
+    assert.equal(filterTasks(tasks, { field: "state", state: "gone", session: "" }).length, 0);
+  });
+
+  it("one line, two fields, brackets on the field f edits, fits 40 whole", () => {
+    const line = taskFilterLine({ field: "state", state: "run", session: "", active: true });
+    assert.match(line, /\[state: run▏\]/);
+    assert.match(line, /· session: —/);
+    assert.ok(line.length <= 40, `40 columns: ${line}`);
+    // The brackets mark the field even with the editor closed: which field `f` opens is a fact the row states for free.
+    const idle = taskFilterLine({ field: "session", state: "", session: "s_1", active: false });
+    assert.match(idle, /\[session: s_1\]/);
+    assert.match(idle, /state: — ·/);
+  });
+
+  it("the pane draws the row when it does something, and names an empty match (T6-06's rule)", () => {
+    const plain = tasksPane(wide, tasks, 0);
+    assert.doesNotMatch(
+      plain.join("\n"),
+      /filter /,
+      "no filter row when there is nothing to narrow",
+    );
+    const filtered = tasksPane(wide, tasks, 0, { field: "state", state: "run", session: "" });
+    assert.match(filtered.join("\n"), /filter \[state: run\] · session: —/);
+    assert.match(filtered.join("\n"), /the running one/);
+    assert.doesNotMatch(filtered.join("\n"), /the done one/);
+    const none = tasksPane(wide, tasks, 0, { field: "state", state: "zzz", session: "" });
+    assert.match(none.join("\n"), /no tasks match — Esc clears the filter/);
   });
 });

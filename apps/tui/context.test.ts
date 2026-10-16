@@ -143,7 +143,7 @@ describe("the whole view", () => {
     const lines = contextLines(body(), 40, false);
     for (const line of lines) assert.ok(line.length <= 40, line);
     // The hint wraps at 40, so the assertion reads the tail of the view as one sentence, not one drawn line.
-    const hint = (lines.at(-2) ?? "") + " " + (lines.at(-1) ?? "");
+    const hint = `${lines.at(-2) ?? ""} ${lines.at(-1) ?? ""}`;
     assert.ok(hint.replace(/\s+/g, " ").includes("c compact now"), hint);
   });
 

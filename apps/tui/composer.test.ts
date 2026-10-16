@@ -20,6 +20,7 @@ import {
   filterSlash,
   MAX_COMPOSER_LINES,
   modelSwitchWarning,
+  overflowLines,
   slashMenuLines,
 } from "./composer.ts";
 
@@ -61,7 +62,7 @@ describe("T5-A's asymmetry", () => {
 
 describe("T5-09's history does not steal the scroll key", () => {
   it("`↑` is history when the buffer is empty", () => {
-    assert.deepEqual(actionFor({ kind: "up" }, true), { kind: "history", previous: undefined });
+    assert.deepEqual(actionFor({ kind: "up" }, true), { kind: "history", direction: "up" });
   });
 
   it("`↑` is ignored when there is text to scroll away from", () => {
@@ -69,20 +70,62 @@ describe("T5-09's history does not steal the scroll key", () => {
   });
 
   it("a restored input replaces the buffer and puts the cursor at its end", () => {
-    const state = applyAction(
-      emptyComposer(),
-      { kind: "history", previous: undefined },
+    const state = applyAction(emptyComposer(), { kind: "history", direction: "up" }, [
       "earlier question",
-    );
+    ]);
     assert.equal(state.buffer, "earlier question");
     assert.equal(state.cursor, "earlier question".length);
   });
 
   it("history with nothing to restore leaves the buffer alone", () => {
-    assert.equal(
-      applyAction(emptyComposer(), { kind: "history", previous: undefined }, undefined).buffer,
-      "",
-    );
+    assert.equal(applyAction(emptyComposer(), { kind: "history", direction: "up" }, []).buffer, "");
+  });
+
+  it("T8-08's overflow warning: two lines, only when the next turn strictly exceeds the window", () => {
+    const lines = overflowLines(900, 125, 1000);
+    assert.equal(lines.length, 2);
+    assert.match(lines[0] ?? "", /1,025 of 1,000/);
+    assert.match(lines[1] ?? "", /\/compact/);
+    assert.match(lines[1] ?? "", /\/model/);
+    // At the window is not over it; a zero window is no window, and neither warns.
+    assert.deepEqual(overflowLines(900, 100, 1000), []);
+    assert.deepEqual(overflowLines(900, 125, 0), []);
+  });
+
+  it("the view reports the edit column for the real cursor (T5-02)", () => {
+    const view = composerView({ buffer: "hello there", cursor: 6, history: [] }, 40);
+    assert.equal(view.cursorColumn, 6);
+    assert.equal(view.cursorLine, 0);
+  });
+
+  it("T5-09's walk: ↑ walks older, ↓ walks back and steps out past the newest (T5-09)", () => {
+    const inputs = ["first ask", "second ask", "third ask"];
+    let state = emptyComposer();
+    state = applyAction(state, { kind: "history", direction: "up" }, inputs);
+    assert.equal(state.buffer, "third ask");
+    state = applyAction(state, { kind: "history", direction: "up" }, inputs);
+    assert.equal(state.buffer, "second ask");
+    state = applyAction(state, { kind: "history", direction: "up" }, inputs);
+    assert.equal(state.buffer, "first ask", "the oldest is the end of the walk");
+    state = applyAction(state, { kind: "history", direction: "up" }, inputs);
+    assert.equal(state.buffer, "first ask", "staying at the oldest is not a crash");
+    state = applyAction(state, { kind: "history", direction: "down" }, inputs);
+    assert.equal(state.buffer, "second ask");
+    state = applyAction(state, { kind: "history", direction: "down" }, inputs);
+    assert.equal(state.buffer, "third ask");
+    state = applyAction(state, { kind: "history", direction: "down" }, inputs);
+    assert.equal(state.buffer, "", "past the newest the walk steps out to the empty buffer");
+    assert.equal(state.historyIndex, undefined);
+  });
+
+  it("an edit ends the walk: typing after a recall is a new draft, not a walk (T5-09)", () => {
+    const inputs = ["first ask", "second ask"];
+    let state = applyAction(emptyComposer(), { kind: "history", direction: "up" }, inputs);
+    state = applyAction(state, { kind: "insert", text: "x" }, inputs);
+    assert.equal(state.historyIndex, undefined, "the walk is over the moment text lands");
+    // …and the arrows scroll/edit again rather than walking: ↑ on a non-empty, non-walking buffer is not history.
+    assert.deepEqual(actionFor({ kind: "up" }, false, undefined), { kind: "ignore" });
+    assert.deepEqual(actionFor({ kind: "up" }, true), { kind: "history", direction: "up" });
   });
 });
 

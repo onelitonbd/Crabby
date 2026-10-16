@@ -184,6 +184,46 @@ describe("FrameRenderer", () => {
   });
 });
 
+describe("T5-02's real cursor", () => {
+  it("the plan reports the row its writes leave the cursor on", () => {
+    // Only the middle line changes: the writes end there, and the reported row is that row — not the frame's last.
+    const plan = planFrame(["a", "b", "c"], ["a", "B", "c"], 40);
+    assert.equal(plan.cursorRow, 1);
+    // A frame that changed nothing writes nothing and invents no position (-1): the renderer keeps its own.
+    const same = planFrame(["a", "b"], ["a", "b"], 40);
+    assert.equal(same.cursorRow, -1);
+    assert.equal(same.text, "");
+  });
+
+  it("placeCursor moves from where the last plan left the cursor and shows it", () => {
+    const writes: string[] = [];
+    const terminal: Terminal = {
+      columns: 40,
+      rows: 10,
+      write: (text) => writes.push(text),
+    };
+    const renderer = new FrameRenderer(terminal);
+    renderer.drawNow(["alpha", "bravo", "charlie"]);
+    writes.length = 0;
+    // Row 1, column 3 of a 3-row frame: up one row from the plan's final row (2), then to the column.
+    renderer.placeCursor(1, 3);
+    const text = writes.join("");
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the sequences under test
+    assert.match(text, /\u001b\[1A/, text);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the sequences under test
+    assert.match(text, /\u001b\[4G/, text);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the sequences under test
+    assert.match(text, /\u001b\[\?25h/, text);
+    // Clamped inside the frame: a row past the end lands on the frame's last row — down one from row 1 — and cannot
+    // park a cursor in the scrollback below it.
+    writes.length = 0;
+    renderer.placeCursor(99, 0);
+    assert.equal(renderer.height, 3);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the sequences under test
+    assert.match(writes.join(""), /\u001b\[1B/);
+  });
+});
+
 describe("the plan is a value, not a side effect", () => {
   it("planFrame does not touch the terminal it was not given", () => {
     // The purity is what lets the tests above assert on cursor arithmetic without a pty, and it is the same reason the

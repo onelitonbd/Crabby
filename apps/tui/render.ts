@@ -65,6 +65,10 @@ export interface FramePlan {
   /** How many terminal lines the frame occupies after this plan, so the next plan knows where it is. */
   readonly height: number;
   readonly lines: readonly string[];
+  /** The row the cursor sits on after this plan is written, 0-based within the frame. `placeCursor` starts from here —
+   *  a real cursor (T5-02) is moved *relative* to where the plan left it, and a renderer that guessed would walk off the
+   *  frame the first time a changed line sat above an unchanged one. */
+  readonly cursorRow: number;
 }
 
 /** One ANSI CSI sequence. **Declared once, with one suppression**, because `lint/suspicious/noControlCharactersInRegex` is
@@ -124,7 +128,9 @@ export function planFrame(
   ) {
     // Identical after clipping is a frame that did not change, and it must write nothing: P-011's budget is spent per
     // *change*, and a renderer that redraws on every poll would spend it whether anything happened or not.
-    return { text: "", height: previousLines.length, lines: fitted };
+    // Nothing changed, so the cursor is where the *previous* plan left it — the caller's tracker holds that, and this
+    // early return must not invent a new position.
+    return { text: "", height: previousLines.length, lines: fitted, cursorRow: -1 };
   }
 
   const rows = Math.max(previousLines.length, fitted.length);
@@ -149,7 +155,7 @@ export function planFrame(
   // frame, just above where the frame was). A bare cursor move destroys nothing — only a write does — so this is what lets
   // `printToScrollback` put its text where the frame was rather than inside the region the frame used to occupy.
   if (fitted.length < previousLines.length) text += moveBy(-(previousLines.length - fitted.length));
-  return { text, height: fitted.length, lines: fitted };
+  return { text, height: fitted.length, lines: fitted, cursorRow: cursor };
 }
 
 /** Holds the last frame and the cursor's position in the buffer. One instance per TUI; panes call `draw(lines)` and know
@@ -158,6 +164,7 @@ export class FrameRenderer {
   readonly #terminal: Terminal;
   #previous: string[] = [];
   #height = 0;
+  #cursorRow = 0;
 
   constructor(terminal: Terminal) {
     this.#terminal = terminal;
@@ -184,6 +191,19 @@ export class FrameRenderer {
     this.#previous = [...plan.lines];
     this.#height = plan.height;
     if (plan.text !== "") this.#terminal.write(plan.text);
+    if (plan.cursorRow >= 0) this.#cursorRow = plan.cursorRow;
+  }
+
+  /** T5-02: put the **real** terminal cursor on a frame row and column and show it. The row says the composer's edit
+   *  point must be a real cursor — "Termux's IME and its editing keys only behave around a real cursor" — and a drawn
+   *  block is exactly what the row refuses. Rows are frame-relative (the frame may start anywhere in the scrollback);
+   *  the move is relative to where the last plan left the cursor, which `#cursorRow` tracks. */
+  placeCursor(row: number, column: number): void {
+    const clampedRow = Math.max(0, Math.min(this.#height - 1, Math.trunc(row)));
+    const clampedCol = Math.max(0, Math.trunc(column));
+    this.#terminal.write(`${moveBy(clampedRow - this.#cursorRow)}${CSI}${clampedCol + 1}G`);
+    this.#cursorRow = clampedRow;
+    this.#terminal.write(showCursor());
   }
 
   /** The first frame needs room. In an inline buffer the terminal scrolls when the cursor reaches the last row, so
@@ -202,6 +222,8 @@ export class FrameRenderer {
 
   hideCursor(): void {
     this.#terminal.write(hideCursor());
+    // A hidden cursor's row is still tracked: the next `placeCursor` moves from here, not from where the cursor was last
+    // visible — the move sequence does not care whether the cursor was shown.
   }
 
   showCursor(): void {

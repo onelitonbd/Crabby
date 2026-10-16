@@ -160,6 +160,8 @@ export interface TaskSummary {
   readonly id: string;
   readonly state: string;
   readonly objective: string;
+  /** The conversation the task belongs to — the route's `TaskRecord` requires it, and T6-01's session filter reads it. */
+  readonly sessionId?: string | undefined;
   readonly model?: string | undefined;
   readonly elapsed?: string | undefined;
   readonly pendingApprovals?: number;
@@ -201,14 +203,51 @@ export function statusFrom(
 
 const CARD_LINES = 3;
 
-/** The tasks pane's body. T6-01's filter row is a later slice; what is here is the list itself and the empty state, because
- *  an empty state is the first thing a new user sees and T6-06 makes it a teaching moment rather than a blank row. */
+/** T6-01's filter: two fields on one row, one of them the one being edited. Empty text means the field filters nothing.
+ *  `active` is the edit mode the `f` key enters — the row marks the live field while it is on. */
+export interface TaskFilter {
+  readonly field: "state" | "session";
+  readonly state: string;
+  readonly session: string;
+  readonly active?: boolean | undefined;
+}
+
+export const EMPTY_TASK_FILTER: TaskFilter = { field: "state", state: "", session: "" };
+
+/** The filter as a predicate — exported because the pane's cursor and Enter both live in main.ts, and a list the pane
+ *  filters with one rule and the keys select into with another would be two answers to "what am I looking at". Prefix
+ *  match: a filter is typed one letter at a time, and a list that goes empty mid-word is a list that stopped helping. */
+export function filterTasks(
+  tasks: readonly TaskSummary[],
+  filter: TaskFilter,
+): readonly TaskSummary[] {
+  return tasks.filter(
+    (task) =>
+      (filter.state.length === 0 || task.state.startsWith(filter.state)) &&
+      (filter.session.length === 0 || (task.sessionId ?? "").startsWith(filter.session)),
+  );
+}
+
+/** The one filter row: both fields always visible, brackets on the field `f` edits — the mark is the row's answer to
+ *  "one field at a time", and it is on even while the edit mode is closed, because which field `f` opens is a fact the
+ *  row can state for free. Worded to fit 40 whole. */
+export function taskFilterLine(filter: TaskFilter): string {
+  const part = (field: "state" | "session", name: string, value: string): string => {
+    const text = `${name}: ${value.length > 0 ? value : "—"}${filter.field === field && filter.active === true ? "▏" : ""}`;
+    return filter.field === field ? `[${text}]` : text;
+  };
+  return `filter ${part("state", "state", filter.state)} · ${part("session", "session", filter.session)}`;
+}
+
+/** The tasks pane's body: T6-01's filter row on top, then the list and the empty state (T6-06 teaches, T6-02's cards
+ *  carry T2-09's own-line ids). The row is drawn when it does something — a list to narrow, or words already typed. */
 export function tasksPane(
   context: PaneContext,
   tasks: readonly TaskSummary[],
   /** T6's cursor. Optional so existing callers keep compiling; the `>` marker is how a phone knows which card Enter
    *  will open (T7's detail), and a marker that moved invisibly would be worse than none. */
   selected = 0,
+  filter: TaskFilter = EMPTY_TASK_FILTER,
 ): readonly string[] {
   if (context.offline) {
     // T1-10: the exact restart command, never a spinner pretending freshness.
@@ -217,16 +256,29 @@ export function tasksPane(
       "restart it with: crabby gateway start",
     ];
   }
+  const filterMatters =
+    filter.active === true || filter.state.length > 0 || filter.session.length > 0;
+  const visible = filterTasks(tasks, filter);
+  const lines: string[] = [];
   if (tasks.length === 0) {
-    return [
+    if (filterMatters) lines.push(taskFilterLine(filter));
+    lines.push(
       "no tasks yet",
       'start one with `t`, or from a shell: crabby task run "what should it do"',
       "(C11-02's rule applies here too: a blank pane is a defect)",
-    ];
+    );
+    return lines;
   }
-  const height = Math.max(1, context.rows - 3);
-  const shown = tasks.slice(0, Math.max(1, Math.floor(height / CARD_LINES)));
-  const lines: string[] = [];
+  if (filterMatters) {
+    lines.push(taskFilterLine(filter));
+    if (visible.length === 0) {
+      lines.push("no tasks match — Esc clears the filter");
+      return lines;
+    }
+  }
+  const height = Math.max(1, context.rows - 3 - (filterMatters ? 1 : 0));
+  const shown = visible.slice(0, Math.max(1, Math.floor(height / CARD_LINES)));
+
   for (let index = 0; index < shown.length; index += 1) {
     const task = shown[index] as TaskSummary;
     const cursor = index === selected ? ">" : " ";
@@ -245,8 +297,8 @@ export function tasksPane(
     // T2-09's rule lives here too: the id is on its own line, so long-press selection lands on it whole.
     lines.push(`  ${task.model ?? "the install default"} · ${task.id}`);
   }
-  if (shown.length < tasks.length) {
-    lines.push(`…and ${tasks.length - shown.length} more — \`crabby task ls\` lists them all`);
+  if (shown.length < visible.length) {
+    lines.push(`…and ${visible.length - shown.length} more — \`crabby task ls\` lists them all`);
   }
   return lines;
 }
@@ -281,10 +333,13 @@ export function chatPane(
    *  (T5-10), the one-turn model override (T5-05), the attached paths (T5-04) and the queue count (T5-08). The caller
    *  owns them because they are facts about the *draft*, and the composer module owns only the buffer. */
   extras: readonly string[] = [],
+  /** T5-02: draw no block glyph and let the caller move the real terminal cursor to `composerView`'s position. A drawn
+   *  block is what the row refuses on the primary platform — the IME edits around a real cursor or not at all. */
+  realCursor = false,
 ): readonly string[] {
   // The composer takes up to six rows (T5-01), the extras and capability line their own, and the transcript gets what is
   // left — never zero, because a pane that has nothing left for the conversation is a pane that cannot show the answer.
-  const composerLines = composerView(composer, columns).lines;
+  const composerLines = composerView(composer, columns, !realCursor).lines;
   const chrome = composerLines.length + 2 + extras.length;
   const height = Math.max(1, rows - chrome);
   const lines: string[] = [];
@@ -334,7 +389,8 @@ function rowLines(row: TranscriptRow): readonly string[] {
  *  pane-level binding that swallowed printable keys would make the composer unusable. */
 export function chatKey(
   composer: ComposerState,
-  previousInput: string | undefined,
+  /** T5-09's walk needs the whole session list, newest last — see `applyAction`. */
+  previousInputs: readonly string[],
   key: Parameters<typeof actionFor>[0],
   paneBinding: string | undefined,
 ): {
@@ -345,10 +401,10 @@ export function chatKey(
   if (paneBinding !== undefined) {
     return { composer, action: paneBinding };
   }
-  const action = actionFor(key, composer.buffer.length === 0);
+  const action = actionFor(key, composer.buffer.length === 0, composer.historyIndex !== undefined);
   if (action.kind === "unbound") return { composer, action: undefined, unbound: action.bytes };
   if (action.kind === "send") return { composer: emptyComposer(), action: "send" };
-  return { composer: applyAction(composer, action, previousInput), action: undefined };
+  return { composer: applyAction(composer, action, previousInputs), action: undefined };
 }
 
 export interface PaneDescriptor {
@@ -369,7 +425,7 @@ export const PANE_DESCRIPTORS: readonly PaneDescriptor[] = [
   },
   {
     pane: "tasks",
-    hints: ["j/k move", "Enter open", "c cancel", "Tab panes", "? help", "q quit"],
+    hints: ["f filter", "j/k move", "Enter open", "c cancel", "Tab panes", "? help", "q quit"],
     built: true,
   },
   {

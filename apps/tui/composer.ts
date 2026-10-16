@@ -28,7 +28,7 @@ export type ComposerAction =
   | { readonly kind: "backspace" }
   | { readonly kind: "left" }
   | { readonly kind: "right" }
-  | { readonly kind: "history"; readonly previous: string | undefined }
+  | { readonly kind: "history"; readonly direction: "up" | "down" }
   | { readonly kind: "unbound"; readonly bytes: string }
   | { readonly kind: "ignore" };
 
@@ -46,6 +46,9 @@ export function actionFor(
     | { readonly kind: "up" }
     | { readonly kind: "down" },
   bufferEmpty: boolean,
+  /** The walk, once started, keeps the arrows: after the first `↑` the buffer is no longer empty, and a walk that died
+   *  there would be a history of exactly one entry. */
+  walking: boolean = false,
 ): ComposerAction {
   if (key.kind === "ctrl" && key.letter === "j") return { kind: "newline" };
   if (key.kind === "enter") return { kind: "send" };
@@ -54,8 +57,9 @@ export function actionFor(
   if (key.kind === "right") return { kind: "right" };
   // T5-09: `↑` is history only when there is nothing to type over. In a pane that scrolls it scrolls, and the composer is
   // not entitled to take it.
-  if (key.kind === "up" && bufferEmpty) return { kind: "history", previous: undefined };
-  if (key.kind === "down" && bufferEmpty) return { kind: "history", previous: undefined };
+  if (key.kind === "up" && (bufferEmpty || walking)) return { kind: "history", direction: "up" };
+  if (key.kind === "down" && (bufferEmpty || walking))
+    return { kind: "history", direction: "down" };
   if (key.kind === "unknown") {
     // A kitty terminal's Shift+Enter lands here. It is *named with its bytes*, so the hint strip can say the key is unbound
     // in this terminal — silently dropping a newline a person pressed is how a composer loses text, and guessing that it
@@ -82,7 +86,10 @@ export function emptyComposer(): ComposerState {
 export function applyAction(
   state: ComposerState,
   action: ComposerAction,
-  previousInput: string | undefined,
+  /** The session's inputs, oldest first — the walk goes newest → oldest on `↑` and back on `↓`, per T5-09's "previous
+   *  inputs". Held by the caller (main.ts) because a buffer that owns its own history would have to survive the pane
+   *  switch, and two copies of what a person typed is two answers to "what did I send". */
+  previousInputs: readonly string[] = [],
 ): ComposerState {
   switch (action.kind) {
     case "insert":
@@ -90,10 +97,11 @@ export function applyAction(
         ...state,
         buffer: `${state.buffer.slice(0, state.cursor)}${action.text}${state.buffer.slice(state.cursor)}`,
         cursor: state.cursor + action.text.length,
+        historyIndex: undefined,
       };
     case "newline": {
       const next = `${state.buffer.slice(0, state.cursor)}\n${state.buffer.slice(state.cursor)}`;
-      return { ...state, buffer: next, cursor: state.cursor + 1 };
+      return { ...state, buffer: next, cursor: state.cursor + 1, historyIndex: undefined };
     }
     case "backspace":
       if (state.cursor === 0) return state;
@@ -101,16 +109,31 @@ export function applyAction(
         ...state,
         buffer: `${state.buffer.slice(0, state.cursor - 1)}${state.buffer.slice(state.cursor)}`,
         cursor: state.cursor - 1,
+        historyIndex: undefined,
       };
     case "left":
       return { ...state, cursor: Math.max(0, state.cursor - 1) };
     case "right":
       return { ...state, cursor: Math.min(state.buffer.length, state.cursor + 1) };
     case "history": {
-      if (previousInput === undefined || previousInput.length === 0) return state;
+      // The walk needs something to walk. A session with no sends yet has nothing, and a caller that kept only the last
+      // entry (the old single-step shape) walks a list of one.
+      if (previousInputs.length === 0) return state;
+      // `↑` from a typed buffer starts at the newest; `↑` again walks older. `↓` walks back toward the newest and steps
+      // *out* of the walk past it — back to the empty buffer the person left, the way every shell's history behaves.
+      const start = state.historyIndex ?? previousInputs.length;
+      const index =
+        action.direction === "up"
+          ? Math.max(0, start - 1)
+          : Math.min(previousInputs.length, start + 1);
+      if (index >= previousInputs.length) {
+        return { ...state, buffer: "", cursor: 0, historyIndex: undefined };
+      }
+      const restored = previousInputs[index];
+      if (restored === undefined) return state;
       // The restored buffer replaces rather than appends, and the cursor goes to its end: the person asked for the last
       // thing they said, not for that thing with an edit point in the middle of it.
-      return { ...state, buffer: previousInput, cursor: previousInput.length };
+      return { ...state, buffer: restored, cursor: restored.length, historyIndex: index };
     }
     case "unbound":
     case "ignore":
@@ -131,9 +154,18 @@ export interface ComposerView {
   readonly hiddenAbove: number;
   /** The line the edit position is on, 0-based within `lines`. */
   readonly cursorLine: number;
+  /** The visible column of the edit position on `cursorLine`, newlines counted as one — the number a **real** cursor
+   *  (T5-02) is placed at when the caller draws no block of its own. */
+  readonly cursorColumn: number;
 }
 
-export function composerView(state: ComposerState, columns: number): ComposerView {
+export function composerView(
+  state: ComposerState,
+  columns: number,
+  /** Draw the block glyph. The default keeps `--plain` and pipes working with no cursor to move; the TTY chat pane asks
+   *  for `false` and moves the real cursor instead, which is T5-02's whole point. */
+  drawBlock = true,
+): ComposerView {
   const before = state.buffer.slice(0, state.cursor);
   const cursorLine = before.split("\n").length - 1;
   const raw = state.buffer.split("\n");
@@ -146,7 +178,7 @@ export function composerView(state: ComposerState, columns: number): ComposerVie
   return {
     lines: shown.map((line, index) => {
       const text = line.length > columns ? line.slice(0, columns) : line;
-      if (index === cursorLine - hiddenAbove) {
+      if (drawBlock && index === cursorLine - hiddenAbove) {
         const at = Math.min(text.length, column);
         return `${text.slice(0, at)}\u258f${text.slice(at)}`;
       }
@@ -154,6 +186,7 @@ export function composerView(state: ComposerState, columns: number): ComposerVie
     }),
     hiddenAbove,
     cursorLine: Math.max(0, cursorLine - hiddenAbove),
+    cursorColumn: column,
   };
 }
 
@@ -209,6 +242,23 @@ export function capabilityLine(capabilities: {
   readonly shell: boolean;
 }): string {
   return `fs: ${capabilities.fs} · net: ${capabilities.net ? "on" : "off"} · shell: ${capabilities.shell ? "on" : "off"}`;
+}
+
+/** T8-08's overflow warning, before the send rather than as a provider error after it. Two lines at the design width:
+ *  the arithmetic (`projected` is the conversation the Gateway counted, `draft` the composer's own estimate) and the two
+ *  fixes the UI actually has — compact this conversation, or switch this turn to a model with a wider window. Strictly
+ *  `exceeds`: a turn that lands exactly on the window is not one this row warns about. */
+export function overflowLines(
+  projectedTokens: number,
+  draftTokens: number,
+  window: number,
+): readonly string[] {
+  const next = projectedTokens + draftTokens;
+  if (window <= 0 || next <= window) return [];
+  return [
+    `! next turn may not fit: ~${next.toLocaleString("en-US")} of ${window.toLocaleString("en-US")}`,
+    "fixes: /compact now · /model wider",
+  ];
 }
 
 /** T5-05's warning when the turn's model cannot do what the composer is about to ask of it. D-045 prices the decision to

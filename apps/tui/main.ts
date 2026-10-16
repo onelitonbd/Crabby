@@ -40,8 +40,10 @@ import {
   actionFor,
   applyAction,
   type ComposerState,
+  composerView,
   emptyComposer,
   modelSwitchWarning,
+  overflowLines,
   SLASH_COMMANDS,
 } from "./composer.ts";
 import { contextLines } from "./context.ts";
@@ -65,7 +67,9 @@ import {
   deleteGapLine,
   deletePromptLines,
   diagnosticsLine,
+  EMPTY_TASK_FILTER,
   editFormLines,
+  filterTasks,
   formAnswers,
   formLines,
   type JobDeleteConfirm,
@@ -94,6 +98,7 @@ import {
   readTaskItems,
   resetNoticeLine,
   statusFrom,
+  type TaskFilter,
   type TaskReader,
   type TaskSummary,
   tasksPane,
@@ -119,6 +124,7 @@ import {
 } from "./task-detail.ts";
 import { type ToolRow, toolsLines } from "./tools.ts";
 import {
+  addNote,
   addSystem,
   applyEvent,
   commitStreaming,
@@ -137,6 +143,9 @@ export interface TuiOptions {
   readonly now?: () => number;
   /** Injected so a test can end the loop; production leaves it unset and `q` ends it. */
   readonly quitAfterKeys?: number;
+  /** T1-08's Ctrl-Z, injected like the clock: the default stops the process the honest way (cooked mode, SIGTSTP), and
+   *  a test injects a spy so a suspended test runner is not part of the suite. */
+  readonly suspend?: (() => void) | undefined;
   /** Injected so the app itself can be tested without a Gateway — the same reason `openai.ts` takes a `fetch`. **The
    *  fake is a whole `TaskReader`, not a patch of one method**, because a test that stubs only the call it exercises
    *  cannot see the pane crash on the call it does not. This seam is what found the two bugs a pty could not reach here:
@@ -180,6 +189,9 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   /** T6's selection. The hint strip has said `j/k move` since the frame slice; the index it moves is wired now that
    *  Enter has somewhere to go (T7's detail). */
   let taskIndex = 0;
+  /** T6-01's filter, and whether its edit mode is open: `f` enters and toggles the field, typing narrows live. */
+  let taskFilter: TaskFilter = EMPTY_TASK_FILTER;
+  let taskFilterEditing = false;
   let approvals: readonly ApprovalSummary[] = [];
   let jobs: readonly JobRow[] = [];
   /** The jobs pane's modes (T17): the detail T17-04 draws, T17-07's backlog prompt and its `each` walk, T17-06's edit
@@ -269,6 +281,18 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
    *  time — a buffer that owns its own history would have to survive the pane switch, and a TUI that keeps two copies of what
    *  a person typed is a TUI with two answers to "what did I send". */
   const previousInputs: string[] = [];
+  /** T1-08's one confirmation: a quit gesture (q, Ctrl-Q) with a task running arms this and says in words what happens
+   *  to the task; the same gesture again quits. Every other key disarms it — an armed quit that survives an unrelated
+   *  key is a trap, and "confirms once" means one press, not an armed state that lingers. */
+  let quitArmed = false;
+  /** T5-02: where the real cursor belongs in the *pane body*, set by `body()`'s chat branch and consumed by the draw
+   *  pair. `undefined` means "not the composer" — every other pane keeps the cursor hidden, because a cursor parked in
+   *  a list is a lie about where typing would land. */
+  let cursorHint: { readonly row: number; readonly column: number } | undefined;
+  /** The pane-body row count of the frame being drawn — the input to the padding/slice arithmetic `placeCursorHint`
+   *  redoes. Set by the draw pair right after `body()` returns, because the message line is pushed *after* the body and
+   *  must not count as body rows. */
+  let bodyRowCount = 0;
 
   // T1-09: the first line is never blank, and when the Gateway is not running it names the command rather than showing a
   // spinner that pretends something is happening.
@@ -399,6 +423,30 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     } catch (error) {
       contextOpen = false;
       message = `context read failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  /** T8-08's numbers, kept fresh without the context view: the same read `c` does, silent on failure — a background
+   *  refresh that could not answer must not scold the person for a pane they never opened. */
+  const refreshContext = async (): Promise<void> => {
+    // The transcript's own session when the frames said so, else the switcher's — and when neither is known yet, one
+    // silent list fetch names the conversation a send just opened, because a fresh conversation is exactly the one
+    // whose budget a first big draft is about to meet.
+    let id = lastSession(transcript);
+    if (id === undefined && sessionRows.length === 0 && client?.sessions !== undefined) {
+      try {
+        const body = (await client.sessions()).body as { readonly items?: readonly SessionRow[] };
+        sessionRows = body.items ?? [];
+        if (sessionIndex >= sessionRows.length) sessionIndex = Math.max(0, sessionRows.length - 1);
+      } catch {
+        // A background refresh that cannot list stays silent; the next send tries again.
+      }
+    }
+    id ??= sessionRows[sessionIndex]?.id;
+    if (id === undefined || client?.sessionContext === undefined) return;
+    try {
+      contextBody = (await client.sessionContext(id)).body as SessionContextBody;
+    } catch {
+      // The numbers stay whatever they were: a stale estimate is a fact, a scolding is not.
     }
   };
   const readTools = async (): Promise<void> => {
@@ -573,6 +621,8 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
    *  itself. Kept here rather than in `frameLines` so that "which pane am I in" is answered once, and the frame stays a
    *  function of (pane, body) with no knowledge of any pane's content. */
   const body = (): readonly string[] => {
+    // Every pane that is not the chat composer leaves the hint unset — the draw pair reads it after the call.
+    cursorHint = undefined;
     if (approvalOpen && approvals.length > 0) {
       const currentApproval = approvals[approvalIndex];
       if (currentApproval === undefined) return [];
@@ -625,7 +675,25 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       if (queue.length > 0 && !queueOpen) {
         extras.push(`queued while the run works: ${String(queue.length)} — q lists them (T5-08)`);
       }
-      return chatPane(
+      // T8-08: the warning computes from what the Gateway counted (projected) plus this draft's own estimate, against
+      // the window the session's model reported. No numbers, no warning — a guess about a window nobody stated would
+      // be exactly the false alarm the row's "before sending, not as an error afterwards" is refusing.
+      const windowSize = contextBody?.budget?.window;
+      if (windowSize !== undefined) {
+        for (const line of overflowLines(
+          contextBody?.projected.tokens ?? 0,
+          estimateTokens(composer.buffer),
+          windowSize,
+        )) {
+          extras.push(line);
+        }
+      }
+      // T5-02: with a real TTY the block glyph is not drawn and the *terminal's* cursor is placed at the edit point
+      // instead — Termux's IME and its editing keys only behave around a real cursor. The row is a body-row computation:
+      // the composer's lines sit `extras + capability line` above the body's end, so the edit row is the body length
+      // minus that tail plus the view's own cursor line. `--plain` and pipes keep the drawn block (no cursor to move).
+      const view = composerView(composer, columns, false);
+      const bodyLines = chatPane(
         transcript,
         composer,
         // T5-06's capability line. **These come from what the Gateway composed for this identity**, and until the chat pane
@@ -637,7 +705,15 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         columns,
         rows - CHROME,
         extras,
+        facts.isTTY,
       );
+      cursorHint = facts.isTTY
+        ? {
+            row: bodyLines.length - extras.length - 1 - view.lines.length + view.cursorLine,
+            column: Math.min(view.cursorColumn, columns - 1),
+          }
+        : undefined;
+      return bodyLines;
     }
     const descriptor = descriptorFor(pane);
     if (pane === "tasks" && taskDetail !== undefined) {
@@ -690,7 +766,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       return body;
     }
     return descriptor.built === true
-      ? tasksPane(context(), tasks, taskIndex)
+      ? tasksPane(context(), tasks, taskIndex, { ...taskFilter, active: taskFilterEditing })
       : plannedPane(
           pane,
           descriptor.milestone ?? "M3",
@@ -714,6 +790,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
 
   const draw = (): void => {
     const lines0 = [...body()];
+    bodyRowCount = lines0.length;
     if (message !== undefined) lines0.push(`! ${message}`);
     const lines = frameLines(
       paneState(context(), frameDescriptor(), lines0, statusFrom(context(), tasks, jobs), help),
@@ -721,6 +798,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       rows,
     );
     renderer.draw(lines, now());
+    placeCursorHint();
   };
 
   /** The uncapped repaint, for **key-driven** frames. P-011's cap exists so a streaming answer cannot repaint the world
@@ -729,6 +807,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
    *  frame after the first, which is the cap protecting the user into the opposite failure. */
   const drawNow = (): void => {
     const lines0 = [...body()];
+    bodyRowCount = lines0.length;
     if (message !== undefined) lines0.push(`! ${message}`);
     const lines = frameLines(
       paneState(context(), frameDescriptor(), lines0, statusFrom(context(), tasks, jobs), help),
@@ -736,6 +815,21 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       rows,
     );
     renderer.drawNow(lines);
+    placeCursorHint();
+  };
+
+  /** T5-02's last step: the hint `body()` left is a *body* row — the frame adds the pane row above it and pads or
+   *  slices the body to `rows - CHROME`, so the frame row is that arithmetic, and the renderer moves the real cursor
+   *  there and shows it. No hint means the cursor hides: a cursor parked on a list is a lie about where typing lands. */
+  const placeCursorHint = (): void => {
+    if (cursorHint === undefined) {
+      renderer.hideCursor();
+      return;
+    }
+    const bodyHeight = Math.max(1, rows - CHROME);
+    const overflow = Math.max(0, bodyRowCount - bodyHeight);
+    const pad = Math.max(0, bodyHeight - bodyRowCount);
+    renderer.placeCursor(1 + pad + cursorHint.row - overflow, cursorHint.column);
   };
 
   // The stream, opened once and kept. **It is not opened per pane switch**: a socket per switch is a socket per keypress,
@@ -772,6 +866,12 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   stdin.setRawMode?.(true);
   renderer.hideCursor();
   stdin.resume();
+  // T1-08's other half of Ctrl-Z: the shell's `fg` delivers SIGCONT, and the app must put itself back the way the
+  // suspend found it — raw mode on, the frame redrawn — rather than leaving a cooked terminal drawing raw bytes.
+  process.on("SIGCONT", () => {
+    stdin.setRawMode?.(true);
+    drawNow();
+  });
 
   // **The `end` promise is created before the first frame**, and that is a product rule rather than a test convenience.
   // Android freezes and kills this process whenever it feels like it, a pipe runs out, and a terminal window can close —
@@ -804,6 +904,11 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   };
 
   const handle = (key: Key): boolean => {
+    // Any key other than the quit gestures re-arms from scratch: the handlers below read `wasArmed` and set the flag
+    // when they ask. Resetting *before* the handlers is the difference between "confirms once" and a trap — but the two
+    // quit handlers must see the value the *previous* key left, so it is captured, not zeroed for them.
+    const wasArmed = quitArmed;
+    quitArmed = false;
     if (approvalOpen && approvals.length > 0) {
       if (key.kind === "char" && key.char === "a") {
         void (async () => {
@@ -1034,6 +1139,46 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       }
       return false;
     }
+    // T6-01's filter edit mode. It sits **here** — before the globals — because an edit mode is T1-07's modal in a
+    // row's clothing: while it is open the letters are text (`s` a session id contains, `a` a state prefix may), and
+    // the globals get the keys back the moment Enter closes it or Esc clears it.
+    if (taskFilterEditing && pane === "tasks" && taskDetail === undefined) {
+      if (key.kind === "escape") {
+        taskFilter = { ...taskFilter, state: "", session: "" };
+        taskFilterEditing = false;
+        message = "filter cleared";
+        return false;
+      }
+      if (key.kind === "enter") {
+        taskFilterEditing = false;
+        return false;
+      }
+      if (key.kind === "char" && key.char === "f") {
+        taskFilter = { ...taskFilter, field: taskFilter.field === "state" ? "session" : "state" };
+        return false;
+      }
+      if (key.kind === "char") {
+        const value =
+          (taskFilter.field === "state" ? taskFilter.state : taskFilter.session) + key.char;
+        taskFilter =
+          taskFilter.field === "state"
+            ? { ...taskFilter, state: value }
+            : { ...taskFilter, session: value };
+        return false;
+      }
+      if (key.kind === "backspace") {
+        const value = (taskFilter.field === "state" ? taskFilter.state : taskFilter.session).slice(
+          0,
+          -1,
+        );
+        taskFilter =
+          taskFilter.field === "state"
+            ? { ...taskFilter, state: value }
+            : { ...taskFilter, session: value };
+        return false;
+      }
+      return false;
+    }
     // T16-01: `s` opens the switcher from any pane — except chat, where T3-04 gives every printable key to the
     // composer and `s` stays a literal. From tasks, jobs, approvals, logs or models, it is the switcher's key.
     if (key.kind === "char" && key.char === "s" && !help && pane !== "chat") {
@@ -1080,10 +1225,31 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       return false;
     }
     if (key.kind === "ctrl" && key.letter === "q") {
-      // T1-08: quitting with a running task confirms first. No modal in this slice — the confirmation is the second press,
-      // stated as a line — and the confirmation requirement is recorded rather than dropped.
-      message =
-        "a task is running; press Ctrl-Q again to quit (T1-08 asks for a confirmation here)";
+      // T1-08: quitting with a running task confirms once, in words that say whether the task survives — it does, because
+      // the run is the Gateway's, not this process's. The second press is the quit.
+      if (running(tasks) !== undefined && !wasArmed) {
+        quitArmed = true;
+        // Worded to survive 40 columns whole: the fact the row demands (whether the task survives) is the prefix.
+        message = "the task survives — Ctrl-Q again to quit";
+        return false;
+      }
+      quit = true;
+      return true;
+    }
+    // T1-08's suspend: cooked mode, then the signal — the terminal gets its cursor back and the shell does the rest.
+    // The SIGCONT listener (registered beside the other signal work) re-enters raw mode and redraws, because a frame
+    // half-erased by the terminal's suspend screen is not a frame this app drew.
+    if (key.kind === "ctrl" && key.letter === "z" && !help) {
+      renderer.printToScrollback(
+        "suspended — the run keeps going on the gateway; fg brings this view back",
+      );
+      (
+        options.suspend ??
+        (() => {
+          stdin.setRawMode?.(false);
+          process.kill(process.pid, "SIGTSTP");
+        })
+      )();
       return false;
     }
     // T5-08's queue list. `q` in chat with anything waiting opens it (the hint strip says `q queue` while that is
@@ -1154,7 +1320,8 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         const draft = { ...emptyComposer(), buffer: item.objective };
         void send(client, draft, transcript, { model: item.model }).then(
           (sent) => {
-            message = sent;
+            transcript = noteTask(transcript, sent?.taskId);
+            message = sent?.note;
             drawNow();
           },
           (error: unknown) => {
@@ -1172,6 +1339,12 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       !help &&
       !(pane === "chat" && composer.buffer.length > 0)
     ) {
+      // T1-08's confirm on the plain quit too: the task survives this process either way, and the words say so.
+      if (running(tasks) !== undefined && !wasArmed) {
+        quitArmed = true;
+        message = "the task survives — q again to quit";
+        return false;
+      }
       quit = true;
       return true;
     }
@@ -1215,13 +1388,18 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       return false;
     }
     if (pane === "tasks" && taskDetail === undefined) {
+      if (key.kind === "char" && key.char === "f" && !help) {
+        taskFilterEditing = true;
+        return false;
+      }
+      const visible = filterTasks(tasks, taskFilter);
       if (
         key.kind === "up" ||
         key.kind === "down" ||
         (key.kind === "char" && (key.char === "j" || key.char === "k"))
       ) {
         const down = key.kind === "down" || (key.kind === "char" && key.char === "j");
-        taskIndex = down ? Math.min(tasks.length - 1, taskIndex + 1) : Math.max(0, taskIndex - 1);
+        taskIndex = down ? Math.min(visible.length - 1, taskIndex + 1) : Math.max(0, taskIndex - 1);
         return false;
       }
     }
@@ -1229,10 +1407,11 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     if (
       pane === "tasks" &&
       key.kind === "enter" &&
-      tasks.length > 0 &&
+      filterTasks(tasks, taskFilter).length > 0 &&
       client?.getTask !== undefined
     ) {
-      const selected = tasks[Math.min(taskIndex, tasks.length - 1)];
+      const visibleTasks = filterTasks(tasks, taskFilter);
+      const selected = visibleTasks[Math.min(taskIndex, visibleTasks.length - 1)];
       if (selected !== undefined) {
         void readTaskDetail(selected.id).then(drawNow);
       }
@@ -1923,12 +2102,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     // The composer owns every printable key when the chat pane is up (T3-04), and the pane's own bindings are read *after*
     // it — so a letter can never be swallowed by a pane binding and a pane binding can never eat a half-typed word.
     if (pane === "chat" && isComposerKey(key)) {
-      const handled = chatKey(
-        composer,
-        composerHistory(previousInputs),
-        key as ComposerKey,
-        undefined,
-      );
+      const handled = chatKey(composer, previousInputs, key as ComposerKey, undefined);
       const draft = composer;
       if (handled.action === "send") {
         composer = emptyComposer();
@@ -1953,6 +2127,9 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
           queue = [...queue, { objective: text, model: draftModel }];
           draftModel = undefined;
           draftAttachments = [];
+          // The queue is a send that waits, and T5-09's history records what was typed — a queued line is as much a
+          // previous input as one that went out at once, and a walk that skips it would forget words the person said.
+          previousInputs.push(text);
           composer = emptyComposer();
           message = `queued — it sends when the run settles (${String(queue.length)} waiting)`;
           return false;
@@ -1968,8 +2145,12 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         void send(client, draft, transcript, { model, attachments }).then(
           (sent) => {
             composer = emptyComposer();
-            message = sent;
-            drawNow();
+            // T2-09: the id and the exact watch command each get a line of their own in the scrollback — lines a
+            // long-press can take whole, whatever becomes of the message line above them.
+            transcript = noteTask(transcript, sent?.taskId);
+            message = sent?.note;
+            // T8-08's numbers move with every turn: the next draft's warning is only as good as the last count.
+            void refreshContext().then(drawNow);
           },
           (error: unknown) => {
             message = `send failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -2032,12 +2213,13 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         const draft = { ...emptyComposer(), buffer: item.objective };
         return send(client, draft, transcript, { model: item.model }).then(
           (sent) => {
-            message = sent;
-            return undefined;
+            transcript = noteTask(transcript, sent?.taskId);
+            message = sent?.note;
+            return refreshContext();
           },
           (error: unknown) => {
             message = `queued send failed: ${error instanceof Error ? error.message : String(error)}`;
-            return undefined;
+            return refreshContext();
           },
         );
       });
@@ -2075,11 +2257,6 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
  *  is the point: the composer must never be handed a `tab` and must never be told to handle one. */
 type ComposerKey = Parameters<typeof chatKey>[2];
 
-/** The most recent input, which is what `↑` restores. The newest last, so the last element is the previous message. */
-function composerHistory(inputs: readonly string[]): string | undefined {
-  return inputs.at(-1);
-}
-
 /** The keys the composer claims when the chat pane is up. T3-04's rule is that a pane's bindings and the composer cannot
  *  overlap: `a` is an approve in the approvals pane and a letter here, so the composer's claim is checked *first* and the
  *  pane's bindings only see what the composer did not take. Tab, `?`, Ctrl-C and Ctrl-Q stay with the pane — a person must
@@ -2087,6 +2264,10 @@ function composerHistory(inputs: readonly string[]): string | undefined {
 function isComposerKey(key: Key): boolean {
   if (key.kind === "char") return true;
   if (key.kind === "ctrl") return key.letter === "j";
+  // T5-09's arrows are the composer's *when the chat pane is up*: the condition that keeps them from stealing a scroll
+  // key lives in `actionFor` (history only on an empty buffer, or a walk already running), because this chat pane binds
+  // no scrolling to ↑/↓ — the panes that do scroll are other panes, and this claim is never consulted there.
+  if (key.kind === "up" || key.kind === "down") return true;
   return (
     key.kind === "enter" || key.kind === "backspace" || key.kind === "left" || key.kind === "right"
   );
@@ -2107,8 +2288,13 @@ async function send(
     readonly model?: string | undefined;
     readonly attachments?: readonly string[];
   } = {},
-): Promise<string | undefined> {
-  if (client === undefined) return "no gateway to send to — start one with: crabby gateway start";
+): Promise<{ readonly note: string; readonly taskId: string | undefined } | undefined> {
+  if (client === undefined) {
+    return {
+      note: "no gateway to send to — start one with: crabby gateway start",
+      taskId: undefined,
+    };
+  }
   const text = draft.buffer.trim();
   if (text.length === 0) return undefined;
   const objective =
@@ -2130,10 +2316,19 @@ async function send(
       )
     ).body,
   );
-  // The pin's mortality is the draft line's job ("one-turn override" shows while typing, T5-05); the confirmation
-  // carries what a shell needs — the id and the model it ran on — in a line a 40-column frame does not cut in half.
+  // The pin's mortality is the draft line's job ("one-turn override" shows while typing, T5-05). The copyable facts go
+  // back separately: T2-09 wants the task id on **its own short line** (Termux copies by long-press, and an id inside a
+  // sentence is an id that gets clipped) and T-C8 wants the exact command whole — both lines are far under 40 columns,
+  // so neither is ever cut. The `!` line keeps the verb and the one-turn model note.
   const turn = options.model === undefined ? "" : ` — this turn on ${options.model}`;
-  return `sent as task ${created}${turn} · \`crabby task watch ${created}\` follows it from a shell`;
+  return { note: `sent as task ${created}${turn}`, taskId: created };
+}
+
+/** The two bare lines a created task earns in the transcript (T2-09): the id, then the exact watch command. One place,
+ *  because both callers — the live send and the queue drain — must agree on what a send leaves behind. */
+function noteTask(transcript: TranscriptState, taskId: string | undefined): TranscriptState {
+  if (taskId === undefined) return transcript;
+  return addNote(addNote(transcript, taskId), `crabby task watch ${taskId}`);
 }
 
 /** The mint answer as drawn lines — `mintLines` over the response body, kept beside the other module-level helpers so

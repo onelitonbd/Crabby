@@ -55,6 +55,7 @@ class FakeStdin extends EventEmitter {
 interface Run {
   readonly out: () => string;
   readonly code: Promise<number>;
+  readonly codeSettled: () => boolean;
   readonly stdin: FakeStdin;
   readonly created: { objective: string; key: string; model: string | undefined }[];
   readonly cancelled: string[];
@@ -76,6 +77,7 @@ function harness(
       readonly stateWord: string;
       readonly revision: number;
     }[];
+    readonly suspend?: () => void;
     /** A config.json for the tests that touch the models pane's data (`/model`, T5-05). Written before `runTui` so the
      *  startup read sees it. */
     readonly config?: Record<string, unknown>;
@@ -125,7 +127,22 @@ function harness(
       patched.push({ id, title: body.title, ifMatch });
       return { ok: true, status: 200, body: { session: {}, note: "renamed" } };
     },
-    sessionContext: async () => ({ ok: true, status: 200, body: {} }),
+    sessionContext: async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        sessionId: "s_1",
+        projected: { tokens: 900, source: "estimated" },
+        budget: {
+          window: 1000,
+          reserveForOutput: 100,
+          tokens: 900,
+          compactAtTokens: 800,
+          compactAt: 0.8,
+        },
+        turns: 1,
+      },
+    }),
     compactSession: async () => ({ ok: true, status: 200, body: { note: "compacted" } }),
     pinMessages: async () => ({ ok: true, status: 200, body: { note: "pinned" } }),
     // T12/T14's reads and writes.
@@ -192,6 +209,7 @@ function harness(
       body: { listener: { host: "127.0.0.1", port: 8734 } },
     }),
   };
+  let settled = false;
   const code = runTui({
     dataDir: dir,
     columns: options.columns ?? 40,
@@ -200,13 +218,25 @@ function harness(
     stdin: stdin as unknown as NodeJS.ReadStream,
     stdout,
     client,
+    suspend: options.suspend,
     // `now` is frozen so the repaint cap cannot swallow a frame the test is waiting for; the cap itself is tested in
     // `render.test.ts`, and here it would only make this file flaky.
     now: () => 0,
-  });
+  }).then(
+    (value) => {
+      settled = true;
+      return value;
+    },
+    (error: unknown) => {
+      settled = true;
+      throw error;
+    },
+  );
   return {
     out: () => out.join(""),
     code,
+    /** Whether the run has already exited — a quit assertion's negative, without awaiting the exit. */
+    codeSettled: () => settled,
     stdin,
     created,
     cancelled,
@@ -278,6 +308,16 @@ describe("crabby tui, driven by bytes", () => {
       plain(run.out()),
       /sent as task tsk_sent/,
       "and the pane names the task so a shell can follow it",
+    );
+    // T2-09: the copyable facts get lines of their own — a bare id line, then the exact watch command — because Termux
+    // copies by long-press and an id inside a sentence is an id that gets clipped.
+    const lines = plain(run.out())
+      .split(/[\r\n]/)
+      .map((line) => line.trim());
+    assert.ok(lines.includes("tsk_sent"), "the task id lives on its own line");
+    assert.ok(
+      lines.includes("crabby task watch tsk_sent"),
+      "the watch command lives whole on its own line",
     );
     await run.finish();
   });
@@ -559,6 +599,154 @@ describe("crabby tui, driven by bytes", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.deepEqual(run.revoked, ["cli_1"]);
     assert.match(plain(run.out()), /revoked cli_1/, run.out());
+    await run.finish();
+  });
+
+  it("the composer drives the real cursor, and ↑ walks the session's inputs (T5-02 + T5-09)", async () => {
+    const run = harness();
+    await run.ready();
+    run.stdin.type("omega");
+    await new Promise((resolve) => setImmediate(resolve));
+    const raw = run.out();
+    // T5-02: with a TTY the block glyph is gone and the terminal's own cursor is placed and shown.
+    assert.doesNotMatch(raw, /\u258f/, "no drawn block on the primary platform");
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape sequences under test
+    assert.match(raw, /\u001b\[\?25h/, "the real cursor is shown");
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape sequences under test
+    assert.match(raw, /\u001b\[\d+G/, "placed at a column, absolutely within the row");
+    run.stdin.type("\r");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    run.stdin.type("zeta");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    run.stdin.type("\r");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    // T5-09: the walk. ↑ once recalls the newest input; ↑ again walks to the one before it.
+    run.stdin.type("\u001b[A");
+    await new Promise((resolve) => setImmediate(resolve));
+    const withZeta = plain(run.out()).match(/zeta/g)?.length ?? 0;
+    assert.ok(withZeta >= 2, "the newest input is recalled into the composer");
+    run.stdin.type("\u001b[A");
+    await new Promise((resolve) => setImmediate(resolve));
+    const withOmega = plain(run.out()).match(/omega/g)?.length ?? 0;
+    assert.ok(withOmega >= 2, "the walk continues to the input before it");
+    const draftsBeforeWalk = (plain(run.out()).match(/the draft is/g) ?? []).length;
+    run.stdin.type("\u001b[B\u001b[B"); // ↓ to the newest, ↓ again steps out to the empty buffer
+    await new Promise((resolve) => setImmediate(resolve));
+    // An empty buffer draws no draft line. The two ↓ wrote exactly one fresh "the draft is" — the intermediate stop on
+    // the newest input — and the exit past it wrote none, which is the empty buffer the walk started from.
+    const draftsAfterWalk = (plain(run.out()).match(/the draft is/g) ?? []).length;
+    assert.equal(draftsAfterWalk, draftsBeforeWalk + 1, "the walk exits to the empty buffer");
+    await run.finish();
+  });
+
+  it("warns before the send when the next turn exceeds the window, with the two fixes (T8-08)", async () => {
+    const run = harness({
+      // The refresh reads the switcher's session when no frame has named one yet.
+      sessions: [{ id: "s_1", titleShown: "main", stateWord: "active", revision: 1 }],
+    });
+    await run.ready();
+    run.stdin.type("warm up");
+    await new Promise((resolve) => setImmediate(resolve));
+    run.stdin.type("\r");
+    await new Promise((resolve) => setTimeout(resolve, 80)); // the send resolves, the context refresh runs
+    // 900 projected + 125 for this draft = 1,025 of the fake's 1,000-token window: over.
+    run.stdin.type("x".repeat(500));
+    await new Promise((resolve) => setImmediate(resolve));
+    const text = plain(run.out());
+    assert.match(text, /next turn may not fit: ~1,025 of 1,000/, text);
+    assert.match(text, /fixes: \/compact now · \/model wider/, text);
+    await run.finish();
+  });
+
+  it("quitting with a task running asks once, in words, then quits (T1-08)", async () => {
+    const run = harness({
+      tasks: [{ id: "tsk_running", state: "running", objective: "x", model: "local/q" }],
+    });
+    await run.ready();
+    run.stdin.type("q"); // first press: the words
+    await new Promise((resolve) => setImmediate(resolve));
+    const text = plain(run.out());
+    assert.match(text, /the task survives — q again to quit/, text);
+    assert.equal(run.codeSettled(), false, "the first q does not quit");
+    run.stdin.type("q"); // second press: the quit
+    const code = await Promise.race([
+      run.code,
+      new Promise<number>((resolve) => setTimeout(() => resolve(-1), 2000)),
+    ]);
+    assert.equal(code, 0, "the second q quits");
+  });
+
+  it("Ctrl-Q quits an idle app at once, and Ctrl-Z suspends through the injected hook (T1-08)", async () => {
+    let suspended = 0;
+    const run = harness({
+      suspend: () => {
+        suspended += 1;
+      },
+    });
+    await run.ready();
+    run.stdin.type("\u001a"); // Ctrl-Z (0x1A, the C0 the shell's suspend maps to)
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(suspended, 1, "the injected suspend ran");
+    assert.match(
+      plain(run.out()),
+      /suspended — the run keeps going on the gateway/,
+      "the scrollback says what the suspend means",
+    );
+    run.stdin.type("\u0011"); // Ctrl-Q, no task running: quits at once
+    const code = await Promise.race([
+      run.code,
+      new Promise<number>((resolve) => setTimeout(() => resolve(-1), 2000)),
+    ]);
+    assert.equal(code, 0, "Ctrl-Q quits an idle app without a confirmation");
+  });
+
+  it("the tasks pane filters on f, one field at a time (T6-01)", async () => {
+    const run = harness({
+      tasks: [
+        {
+          id: "tsk_run",
+          state: "running",
+          objective: "the running ask",
+          sessionId: "s_1",
+          model: "local/q",
+        },
+        {
+          id: "tsk_done",
+          state: "completed",
+          objective: "the finished ask",
+          sessionId: "s_2",
+          model: "local/q",
+        },
+      ],
+    });
+    await run.ready();
+    run.stdin.type("\t2"); // out of chat, to tasks
+    await new Promise((resolve) => setImmediate(resolve));
+    run.stdin.type("f"); // edit mode, state field
+    await new Promise((resolve) => setImmediate(resolve));
+    const doneBefore = (plain(run.out()).match(/the finished ask/g) ?? []).length;
+    run.stdin.type("run");
+    await new Promise((resolve) => setImmediate(resolve));
+    const text = plain(run.out());
+    assert.match(text, /filter \[state: run▏\] · session: —/, text);
+    assert.match(text, /the running ask/, text);
+    // The accumulated buffer keeps the pre-filter frames, so "filtered out" means: the narrowing wrote no new card for
+    // the completed task — the count of its objective is exactly what it was before the filter bit.
+    assert.equal(
+      (plain(run.out()).match(/the finished ask/g) ?? []).length,
+      doneBefore,
+      "the completed task is filtered out",
+    );
+    run.stdin.type("f"); // toggle to the session field
+    await new Promise((resolve) => setImmediate(resolve));
+    run.stdin.type("s_9");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(plain(run.out()), /no tasks match — Esc clears the filter/);
+    run.stdin.type("\u001b"); // Esc clears
+    await new Promise((resolve) => setImmediate(resolve));
+    const after = plain(run.out());
+    assert.match(after, /filter cleared/, after);
+    assert.match(after, /the finished ask/, "both tasks are back");
     await run.finish();
   });
 

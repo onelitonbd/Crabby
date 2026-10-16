@@ -1,6 +1,8 @@
 # HANDOVER.md — where Crabby is, and what to do next
 
-**Written by the agent that built slices 42–58, on 2026-10-16, at the owner's request.** Everything here is a fact about
+**Written by the agent that built slices 42–58, on 2026-10-16, at the owner's request; slices 59–63 (the TUI element
+rows), 64 (the Web UI) and 65 (the Telegram adapter) were built afterwards and this file was corrected in the same
+changes, per its own rule.** Everything here is a fact about
 the repository at commit `main`, not a plan. If something here disagrees with the code, the code is right and this file is
 stale — fix this file in the same change.
 
@@ -26,20 +28,21 @@ Then: `PROJECT_BRIEF.md` → `ARCHITECTURE.md` → `DECISIONS.md` → the spec f
 recovery (including cross-process resume), scheduler, tools, event delivery, compaction with automatic and manual triggers,
 and pins.
 
-**M3 is in progress: "four interfaces in parallel".** Two of the four exist.
+**M3's four interfaces all exist.** What remains of the phase is its exit test, not a missing interface.
 
 | Workstream | State |
 | --- | --- |
 | CLI | **Largely done.** 30 commands live; the registry (`apps/cli/registry.ts`) is the authority on what is `ready`. |
-| TUI | **All six panes draw real content, and the views inside them are wired.** `chat` (composer with the real cursor, T5-02; input history on ↑/↓, T5-09; the overflow warning, T8-08), `tasks` (T6-01's filter row), `approvals` (T-A's modal), `jobs` (T17), `models` (T11, editor included, plus T12's tools view on `t`), `logs` (T15's decisions + diagnostics, T14's access view and T13's config view on `v`). The log/audit *views* still name their route gaps (see §7) and `model probe` names its own (T11-07). |
-| Web UI | **Not started.** D-068 decided custom elements, no SPA framework, so nothing here gates it. |
-| Telegram | **Not started.** Needs the tunnel. |
+| TUI | **Built.** All six panes draw real content, and the views inside them are wired: `chat` (composer with the real cursor, T5-02; input history on ↑/↓, T5-09; the overflow warning, T8-08), `tasks` (T6-01's filter row), `approvals` (T-A's modal), `jobs` (T17), `models` (T11, editor included, plus T12's tools view on `t`), `logs` (T15's decisions + diagnostics, T14's access view and T13's config view on `v`). The log/audit *views* still name their route gaps (see §7) and `model probe` names its own (T11-07). |
+| Web UI | **Built** (slices 64, D-068/D-067) — the Gateway serves `apps/web` as no-build custom elements; eight screens, §13's asset/API token split tested; route-less places name their gaps by name. |
+| Telegram | **Built** (slice 65, D-132) — `packages/telegram` over grammY: silent gate, in-chat pairing to per-chat identities, 36-row command table, `apr:<id>:<nonce>` approvals, paced delivery with recorded failures, SSE watch, `telegram.json` state (D-078's sixth file). **Never run against a live token** (the owner's was revoked) — `getUpdates`, `setMyCommands` and a real card tap are unverified on the wire; `vault://` resolution is M5 (F-56). |
 
 **Phase exit for M3** (`docs/ROADMAP.md` §5): the parity test walks `docs/INTERFACES_AND_API.md` §8 with every blank cell
-carrying an accepted limitation, and one task is started on Telegram, watched from Web, approved in the TUI, cancelled from
-the CLI — in one demo, documented as the release test.
+carrying an accepted limitation — **that half passes** — and one task is started on Telegram, watched from Web, approved in
+the TUI, cancelled from the CLI — in one demo, documented as the release test. **The demo is the remaining M3 work, and it
+needs a live Telegram token.**
 
-Decisions run to **D-131**; open questions to **O-075**. `docs/ROADMAP.md` has one paragraph per slice (39–58) — read the
+Decisions run to **D-132**; open questions to **O-075**. `docs/ROADMAP.md` has one paragraph per slice (39–65) — read the
 last three to know what just happened and why.
 
 ## 3. The last three slices, and the bugs they found
@@ -131,9 +134,11 @@ log is the only place the answer is.
    (T11-07) — see §7. T11-04's `reserve` input is drawn and reported as not-stored (F-62 refused the field).
 3. **`model probe`** (C7-09) — deliberately unbuilt: it needs a credential a Gateway holds, so it wants a **route**, not a
    CLI verb. D-125 says where it stands.
-4. **Web UI** — unblocked by D-068 (custom elements). Check `docs/UI_UX_SPEC.md` §2 and the W-rows in
-   `docs/review/WEB.md`. The Gateway does not serve static files yet, so that is the first decision.
-5. **Telegram** — needs the tunnel, which is its own phase.
+4. ~~**Web UI**~~ — **built** (slice 64): the Gateway serves the no-build bundle; screens per `docs/review/WEB.md`'s
+   accepted rows, gaps named where routes are absent.
+5. ~~**Telegram**~~ — **built** (slice 65, D-132): polling, not the tunnel — v1 is getUpdates over the loopback-owned
+   Gateway. A **live token** at `crabby config set telegram.token <token>` then `crabby telegram start` is the
+   un-run verification; the four-interface demo (§2) is what the token unblocks.
 
 ## 7. Things that are open and belong to the owner
 

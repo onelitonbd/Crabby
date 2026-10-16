@@ -1381,6 +1381,44 @@ Phase exit: the parity test walks `docs/INTERFACES_AND_API.md` §8 and passes wi
 accepted limitation. One task, started on Telegram, watched from Web, approved in the TUI, cancelled from the CLI —
 in one demo, documented as the release test.
 
+**Sixty-fourth slice — the Web UI, served by the Gateway it pairs to (D-068, D-067).** M3's third interface, and the
+first the Gateway itself serves: `packages/gateway/web.ts` plus a `webRoot` hook in `app.ts` answer asset requests
+**before** the auth guard, because §13's scope note is the security property — an asset needs no token and every API
+route does — while the handler still applies path containment and a fixed content-type map, and marks every answer
+`no-store` so a shared browser cannot cache a screen. The client is framework-free custom elements, no build step:
+`safe.js` (template-tag escaping, a nested template's SafeString passing through without a double escape),
+`router.js` (hash → screen; a pre-settings hash normalizes to its subtab, an unknown one lands on chat with the note),
+`format.js` (W16-01's cron and its words), `store.js`. Eight screens: connect (redeem only, D-053 — no code mint in
+the browser), chat (slash menu, streaming, a stop control bound to its own class so a later send can never inherit
+it), tasks (nine filters; the detail pane is the task's events and its checkpoint), approvals (A3's exact target,
+A10's conflict banner, A12's why), sessions (rename carries a quoted If-Match; delete confirms by typed title,
+W15-07), jobs (the schedule written both ways), settings in seven subtabs — the config editor is schema-driven and
+**diff-before-apply** (W12-02) with the T3 marker on security families. Where a route does not exist the screen says
+so by name (logs, memory, extensions, vault, tunnel, lifecycle, telegram, job delete, probe, onboarding) — the same
+gap sentences the TUI prints. `crabby web open` reads the published listener and says `gateway start` when no file is
+there. Gates: `web.test.ts` 30/30 over the serving path (containment, types, no-store, the §13 split, 4/4 of them
+integration), full sweep 1202/1202, typecheck, biome, parity, docs:check; a throwaway jsdom smoke over the custom
+elements, kept out of the tree.
+
+**Sixty-fifth slice — the Telegram adapter, and M3's fourth interface (D-132).** The interface with no web page and
+no socket of its own arrives as `packages/telegram`, a tenant of the Gateway like the TUI: twelve modules over
+grammY's `Api`, and the loop's policy is ours (D-069's split, kept). The gate is silent — an unauthorized sender
+produces no reply and one attempt record (G1-01) — pairing happens in chat (`/start <code>` redeems through
+`POST /auth/pair` into a per-chat bearer identity, G1-02/04), and the state is `telegram.json`, D-078's sixth file at
+`0600`, corrupt reads degrading to empty rather than fabricated. The surface is the COMMANDS table (36 rows = 32
+commands + 4 refusals that name their decisions), the menu seven of them (G-O04), bare text is *visibly* a question
+(G3-30), and approvals ride `apr:<id>:<nonce>` callback data with a three-way verification and one identical
+"not pending" answer for every foreign tap (G-A3/A4/S09). Delivery paces per chat (~1/s private, lower for groups),
+edits coalesce newest-wins with approvals bypassing, `retry_after` is honored for one retry and then the answer is
+recorded, never dropped (G4-01/02, G-A13, G-T06). Watching is the Gateway's own SSE reconnected with
+`Last-Event-ID`, a gap frame replayed rather than guessed; the terminal outcome is its own message (G4-03), silence
+past 30s is labeled (G4-07), and the offset advances only after an update is handled (G-S03) so a crash replays one
+update into a bot that de-duplicates, not into a gap. The config write is two-step from a chat and `telegram.*` keys
+are refused there outright (G7-03). Gates: the adapter's 104 tests across ten files, full sweep 1308/1308,
+typecheck, biome, parity (32 routes), docs:check (132 accepted decisions). **Not verified live, and named:** no
+Telegram token existed to poll against, so `getUpdates`, `setMyCommands` and a real card tap await a token at
+`crabby telegram start`; `vault://` resolution is the M5 slice (F-56).
+
 ## 6. Phase M4 — Providers, memory, extensions
 
 - Provider adapters: `openai-compatible` (+ user-defined endpoints, D-041), `ollama`, `anthropic`, `gemini`, each

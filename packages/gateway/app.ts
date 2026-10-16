@@ -105,6 +105,7 @@ import {
   jobRow,
   ListQuery,
   type MessageListBody,
+  type ModelOverridesWriteBody,
   newId,
   PairCodeRequestBody,
   PairRequestBody,
@@ -112,6 +113,7 @@ import {
   PatchSessionBody,
   PinMessagesBody,
   PutConfigBody,
+  PutModelOverridesBody,
   parseConfigIfMatch,
   parseIfMatch,
   ResumeTaskBody,
@@ -160,9 +162,14 @@ import {
 import {
   composeAskCandidates,
   type ModelDescriptor,
+  type ModelOverride,
+  nextOverride,
+  type OverrideProvenance,
   type Provider,
   type ProviderComposition,
+  parseOverride,
   selectPinnedModel,
+  writeOverrideRecord,
 } from "@crabby/providers";
 import {
   appendEvent,
@@ -635,6 +642,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   registerSystemRoutes(app, deps, bus, runner, scheduler, jobStore);
   registerPolicyRoutes(app, deps, platform);
   registerConfigRoutes(app, deps);
+  registerModelRoutes(app, deps);
   registerAuthRoutes(app, deps, bus);
   registerTaskRoutes(app, deps, bus, checkpoints, cancellation, approvals, runner);
   registerJobRoutes(app, deps, jobStore, scheduler);
@@ -1403,6 +1411,223 @@ function registerConfigRoutes(app: FastifyInstance, deps: GatewayDeps): void {
             "`changed` is the flag a restart banner reads."
           : `written to ${deps.layout.configPath} with no change: the document is byte-for-byte what the file already ` +
             "said, so there is nothing to restart for and the token did not move",
+      };
+      return reply.header("etag", configETag(after.token)).send(body);
+    },
+  );
+}
+
+// ------------------------------------------------------------------ models (§4.4, D-045/D-126/D-127)
+
+/** §4.4's two `/models` paths. `GET` answers §3.8's whole subject in one body — the **effective** descriptor the next
+ *  request runs on, the **reported** one the endpoint supplied, the stored override record and the provenance saying
+ *  which entries are the user's — read from the one composition this Gateway already holds (`deps.providers`), so a
+ *  model that failed to compose is a row that says why rather than a row that vanishes. `PUT` is the same writer
+ *  `crabby model edit` uses (`@crabby/providers`' `writeOverrideRecord`, D-064/D-127's "both paths reach the same
+ *  stored value" enforced by import, not by discipline), under §2's `If-Match` rule and with composition's own gate
+ *  applied *after* the write, so a ceiling that does not fit is the user's file changed and composition's reason
+ *  beside it — the same answer the CLI prints, because the CLI and this route are two faces of one verb.
+ *
+ *  The gate is the token, not `config.write` (the reason `PUT /config`'s header gives): §6.1 names no capability for
+ *  this act, and every path here is priced by the client identity the guard demanded before the route ran. */
+function registerModelRoutes(app: FastifyInstance, deps: GatewayDeps): void {
+  app.get("/api/v1/models", async (request, reply) => {
+    const query = (request.query ?? {}) as { provider?: string };
+    const loaded = loadConfig(deps.layout);
+    const fileProviders = (loaded.file.provider ?? {}) as Record<string, unknown>;
+    const wanted = query.provider;
+    const composed = deps.providers ?? [];
+    const rows = await Promise.all(
+      composed
+        .filter((entry) => wanted === undefined || entry.id === wanted)
+        .map(async (entry) => {
+          if (!entry.ok) {
+            // D-100's disabled entry is a row that names its reason, not an absence: a settings screen that hid it
+            // would hide best exactly when the user is looking for why their endpoint went quiet.
+            return { id: entry.id, state: "disabled", reason: entry.reason };
+          }
+          const declared = (fileProviders[entry.id] ?? {}) as {
+            models?: Record<string, unknown>;
+            overrides?: Record<string, unknown>;
+          };
+          // `describe` may be asynchronous by contract; the row waits rather than pretending the descriptor was free.
+          const effective = await entry.provider.describe();
+          return {
+            id: entry.id,
+            state: "composed",
+            ...(entry.warnings.length === 0 ? {} : { warnings: entry.warnings }),
+            models: entry.modelIds.map((modelId) => ({
+              modelId,
+              effective: effective[modelId] ?? null,
+              reported: declared.models?.[modelId] ?? null,
+              override: declared.overrides?.[modelId] ?? null,
+              provenance: entry.overrides[modelId] ?? null,
+            })),
+          };
+        }),
+    );
+    return reply.send({
+      providers: rows,
+      serverTime: new Date().toISOString(),
+      note:
+        "`effective` is what the next request runs on; `reported` is what the endpoint supplied (the value " +
+        "`provider.<id>.models.<modelId>` stores); `override` and `provenance` are the user's record and what it " +
+        "moved, side by side, because §3.8's whole subject is that difference. This Gateway keeps the configuration " +
+        "it loaded at startup, so a write applies at the next start.",
+    });
+  });
+
+  app.put<{ Params: { provider: string; model: string }; Body: PutModelOverridesBody }>(
+    "/api/v1/models/:provider/:model/overrides",
+    { schema: { body: PutModelOverridesBody } },
+    async (request, reply) => {
+      const header = request.headers["if-match"];
+      const presented = parseConfigIfMatch(typeof header === "string" ? header : undefined);
+      if (presented === undefined)
+        throw new GatewayError({
+          code: "if_match_required",
+          message:
+            'an override write carries the document it read, as `If-Match: "9f2c…"` for the token `GET /api/v1/config` ' +
+            "answered — §2's concurrency rule, so two interfaces editing one configuration do not silently overwrite " +
+            "each other",
+          class: "validation",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      if (!presented.ok)
+        throw validationError(
+          [{ path: "if-match", kind: "invalid", message: presented.reason }],
+          request.crabbyRequestId,
+        );
+
+      const loaded = loadConfig(deps.layout);
+      const providers = (loaded.file.provider ?? {}) as Record<string, unknown>;
+      const providerId = request.params.provider;
+      const modelId = request.params.model;
+      const entry = providers[providerId];
+      if (entry === undefined || typeof entry !== "object")
+        throw new GatewayError({
+          code: "provider_unknown",
+          message:
+            `no provider '${providerId}' is declared in this configuration, so there is no model of its to override; ` +
+            "`POST /api/v1/providers` (or `crabby provider add`) declares one first, and §3.8's chain is " +
+            "user override → preset → discovery → adapter default — never a record with no entry under it",
+          class: "not-found",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      const declared = entry as {
+        models?: Record<string, unknown>;
+        overrides?: Record<string, unknown>;
+      };
+      if (declared.models === undefined || !(modelId in declared.models))
+        throw new GatewayError({
+          code: "model_unknown",
+          message:
+            `provider '${providerId}' does not declare the model '${modelId}', and an override for an undeclared ` +
+            "model is a key composition would ignore (D-126) — the write would create a dead record rather than a " +
+            "capability, so it is refused here where the sentence can be read",
+          class: "not-found",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+
+      // A stored record that does not parse is a refusal that offers the fix, not a base to build on (D-127): the CLI
+      // offers `--clear`, and this route's body has the same lever. Only a write that *builds on* the record needs it
+      // parsed — a pure clear is the repair, so it proceeds.
+      const storedOverrides = declared.overrides ?? {};
+      const isClear = request.body.clear === true;
+      let current: ModelOverride | undefined;
+      if (!isClear && modelId in storedOverrides) {
+        const parsedCurrent = parseOverride(storedOverrides[modelId]);
+        if (!parsedCurrent.ok) {
+          throw new GatewayError({
+            code: "override_unparsable",
+            message:
+              `provider '${providerId}' holds an override for '${modelId}' that does not parse: ${parsedCurrent.reason} ` +
+              'Clear it first — body `{"clear": true}`, or the CLI\'s `crabby model edit <provider>/<model> --clear` — ' +
+              "and write the record again; D-127's rule is that a record the authority refuses is a failure, not a base.",
+            class: "conflict",
+            retryable: false,
+            ...(request.crabbyRequestId === undefined
+              ? {}
+              : { requestId: request.crabbyRequestId }),
+          });
+        }
+        current = parsedCurrent.override;
+      }
+
+      const next = nextOverride(isClear ? undefined : current, request.body);
+      if (!next.ok)
+        throw validationError(
+          [{ path: "body", kind: "invalid", message: next.reason }],
+          request.crabbyRequestId,
+        );
+
+      const report = writeOverrideRecord({
+        persist: (file, token) => {
+          const written = writeConfig(deps.layout, file, undefined, { token });
+          return written.ok
+            ? { ok: true as const }
+            : {
+                ok: false as const,
+                message: written.message,
+                ...(written.code === undefined ? {} : { code: written.code }),
+              };
+        },
+        loaded: { file: loaded.file, token: presented.token },
+        providerId,
+        modelId,
+        override: next.override,
+      });
+      if (!report.ok) {
+        const code = report.code ?? "unwritable";
+        throw new GatewayError({
+          code: `config_${code}`,
+          message: report.message ?? "the configuration could not be written",
+          class: CONFIG_REFUSAL_CLASS[code],
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      const after = loadConfig(deps.layout);
+      const changed = loaded.token !== after.token;
+      const client = request.crabbyClient;
+      deps.log.info("model override written", {
+        provider: providerId,
+        model: modelId,
+        changed,
+        // Named like the config write's line, for the same reason: the reader of the audit trail wants "which document
+        // moved and by whose hand", never the value a capability claim carries.
+        etag: after.token,
+        ...(client === undefined ? {} : { by: client.id, via: client.interface }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      const body: ModelOverridesWriteBody = {
+        changed,
+        override: report.override ?? null,
+        changes: report.changes,
+        composed: report.composed,
+        ...(report.composeReason === undefined ? {} : { composeReason: report.composeReason }),
+        provenance: report.provenance ?? null,
+        // `changed` is about the *file* (the token moved, so a stale reader exists) and `changes` is about the
+        // *effective descriptor* (what the override moved). A restatement moves the first and not the second —
+        // D-126: a restated value is not a trust decision — so the note names the distinction instead of letting
+        // one flag stand for both.
+        note: !report.composed
+          ? `written, but the provider did not compose with it: ${report.composeReason ?? "no reason given"}. The ` +
+            "record is in the file and the gate is composition's (D-127), so the provider stays disabled until the " +
+            "document parses — which is the refusal working, not a silent half-write."
+          : report.changes.length === 0
+            ? "written; the record restates what the endpoint already reported, so nothing about the effective " +
+              "descriptor moved (D-126: a restated value is not a trust decision)" +
+              (changed
+                ? ", though the file now carries the claim, and the usual restart flag applies."
+                : " and the file did not move.")
+            : changed
+              ? "written; the effective descriptor above is what the next start composes, because this Gateway keeps " +
+                "the configuration it loaded at startup (`changed` is the restart flag)."
+              : "written; the effective descriptor above is what the next start composes.",
       };
       return reply.header("etag", configETag(after.token)).send(body);
     },

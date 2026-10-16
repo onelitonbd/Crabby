@@ -141,3 +141,22 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   পরিবারের wire-সার + /api/tags non-goal + pull-state remainder)।
 - **গেট:** providers 145/145 (openai 43 + anthropic 13 + gemini 12 + ollama 10 + compose/fake/conformance বাকিটা),
   tsc শূন্য, biome শূন্য, parity ✔, docs:check ✔ (133 accepted)। ফুল sweep কমিটের আগে।
+
+## করলাম (M4 slice 2 — override write-এর HTTP অর্ধ, D-134)
+
+- **shared রাইটার সরানো হলো:** `nextOverride` + `describeOverride` + `writeOverrideRecord` এখন
+  `packages/providers/override-write.ts`-এ — document write **injected** (`ConfigPersister`), কারণ providers প্যাকেজ
+  ফাইল-লেআউটের মালিক নয়। CLI (model-edit.ts) নিজ layout বেঁধে পুরনো signature রাখল; Gateway route নিজটা বাঁধল।
+  D-064/D-127-এর "both paths reach the same stored value" এখন তিন পাথে import-বলে বলবৎ।
+- **`GET /api/v1/models`:** effective/reported/override/provenance পাশাপাশি; D-100 disabled entry নাম-ধরে সারিতে;
+  `?provider=` ফিল্টার; `describe()` হতে পারে async — row অপেক্ষা করে।
+- **`PUT /api/v1/models/{provider}/{model}/overrides`:** If-Match বাধ্যতামূলক; body = উত্তর-আকৃতি (`"true"|"false"|
+  "auto"` স্ট্রিং, `auto` = দাবি প্রত্যাহার); `provider_unknown`/`model_unknown` নিজ কোডে (D-126 অঘোষিত মডেলের রেকর্ড
+  ignore করে — dead key লেখা যাবে না); অপার্স-রেকর্ড → `override_unparsable` (clear অফার করে; বিশুদ্ধ clear পার্স ছাড়াই
+  এগোয়); composition-এর গেট লেখার **পরে** — না-মাপান্দ → `composed:false` + কারণ, ফাইল তবু বদলায় (D-127)। `changed`
+  ফাইল-সম্পর্কে, `changes` effective-সম্পর্কে — restatement প্রথমটা নড়ায় দ্বিতীয়টা নয়; note পার্থক্যটা বলে।
+- **api-contracts/models.ts:** `PutModelOverridesBody` + `ModelOverridesWriteBody`।
+- **§3.8-এর বাক্য চার adapter-এই পিন:** anthropic 14, gemini 13, ollama 11 (openai-র টেস্ট আগেই ছিল)।
+- **ডক:** PROVIDERS_AND_TOOLS §3.8-এর শেষ রুলে D-134 বাক্য; INTERFACES §4.4-এর দুই row সমৃদ্ধ; ROADMAP-এ
+  ষাট-ষষ্ঠ+সতেরোতম slice প্যারাগ্রাফ; D-134 রেকর্ড।
+- **গেট:** models.test 8/8, model-edit 17/17, provider 18/18, tsc শূন্য, biome শূন্য। ফুল sweep কমিটের আগে।

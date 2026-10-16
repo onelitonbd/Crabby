@@ -1419,6 +1419,41 @@ typecheck, biome, parity (32 routes), docs:check (132 accepted decisions). **Not
 Telegram token existed to poll against, so `getUpdates`, `setMyCommands` and a real card tap await a token at
 `crabby telegram start`; `vault://` resolution is the M5 slice (F-56).
 
+**Sixty-sixth slice — the three absent provider families, and §7's suite as the gate (D-133).** `anthropic`,
+`gemini` and `ollama` compose, each because it differs genuinely and each passing the conformance suite over a scripted
+loopback server — no live key anywhere, §7's own rule. `anthropic` rides the Messages API: `system` hoisted to a
+top-level field, `max_tokens` defaulted from the descriptor the user already declared, tool calls as `tool_use` blocks
+with results as `tool_result` in a user turn, typed SSE, a `stop_reason` table whose unknown values are
+`invalid-response` rather than a guessed terminal, the key on `x-api-key` and never in a URL. `gemini` rides
+`generateContent`: the `parts` grammar, a tool result as a `functionResponse` carrying the tool's **name** resolved from
+the proposing turn, `SAFETY`/`RECITATION` → `content-filter`, the key on `x-goog-api-key` even though the quickstart
+puts `?key=` on the URL — a credential in a URL is a credential in access logs (G1-03). `ollama` rides the native
+`/api/chat`: NDJSON streaming, the `done_reason` table, `num_predict` from the descriptor, a `tool_name` on each
+result. **The native listing is a named non-goal, and the suite is the reason**: §7's own case makes D-100's sentence
+executable — a model `listModels()` names with no descriptor has unknowable limits, and `/api/tags` names models
+without pricing them — so the first draft's installed∪declared union was refused by the suite, which is the suite
+doing its job; `listModels()` is the declared, priced set, and the tags screen plus pull state (`/api/pull`,
+`/api/ps`) are D-133's remainder as a contract change, not a fifth method on one adapter. The shared wire machinery
+(`wire.ts` — guards, deadlines, in-flight table, failure translation) now carries all four adapters, `compose.ts`
+routes the three kinds, `ABSENT_FAMILIES` keeps only `mock` (§17: a task must not complete with no model behind it),
+and §3.8's failure sentence is pinned on all four. Gates: providers 145/145, full sweep 1343/1343, typecheck, biome,
+parity, docs:check.
+
+**Sixty-seventh slice — the override write becomes one writer with three faces (D-134).** D-127's claim — both
+interaction paths reach the same stored value — stopped being CLI-only the day §4.4's `PUT
+/models/{provider}/{model}/overrides` shipped, so the record rules and the storage step moved into `@crabby/providers`
+(`override-write.ts`, with the document write injected, because the providers package does not own a file layout), the
+CLI binds its layout and keeps its signature, and the route binds the Gateway's. The route's body is the answer shape,
+not the record: `supports` values are the strings a person types, because `auto` — withdraw my claim — is a third
+state a boolean cannot carry. Three refusals have their own codes: `provider_unknown` and `model_unknown` (D-126
+ignores a record for an undeclared model, so the route refuses to create a dead key), and `override_unparsable`, a
+conflict that offers the clear rather than a base to build on. Composition's gate is composition's, applied after the
+write: a ceiling that does not fit is the user's file changed and `composed: false` beside it. `GET /models` answers
+the difference §3.8 exists to serve — effective, reported, override and provenance side by side, a disabled entry
+named rather than hidden — and the answer's `changed` is about the file while `changes` is about the descriptor,
+because a restatement moves the first and not the second. Gates: models 8/8 over HTTP, model-edit 17/17, provider
+18/18, full sweep, typecheck, biome, parity, docs:check.
+
 ## 6. Phase M4 — Providers, memory, extensions
 
 - Provider adapters: `openai-compatible` (+ user-defined endpoints, D-041), `ollama`, `anthropic`, `gemini`, each

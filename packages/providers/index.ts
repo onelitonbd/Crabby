@@ -21,4 +21,5 @@ export * from "./gemini.ts";
 export * from "./ollama.ts";
 export * from "./openai.ts";
 export * from "./override.ts";
+export * from "./override-write.ts";
 export * from "./wire.ts";

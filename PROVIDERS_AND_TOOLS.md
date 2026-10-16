@@ -392,7 +392,12 @@ Rules:
   **fails the provider closed**, with the field named. Applying the parts that were understood would leave a user who
   typo'd one flag believing they had raised a context window when they had not (SECURITY.md §2 rule 02).
 - `crabby model list` shows model, provider, effective capability set, and which entries are overridden;
-  `crabby model edit <provider>/<model>` is the single entry point, mirrored in the Web UI and the TUI.
+  `crabby model edit <provider>/<model>` is the single entry point, mirrored in the Web UI and the TUI. **The Gateway
+  serves the same writer (D-134)**: `GET /models` answers effective, reported, override and provenance side by side,
+  and `PUT /models/{provider}/{model}/overrides` is this verb over a wire — the record rules and the storage step are
+  one implementation in `@crabby/providers` (`override-write.ts`), the CLI binds its layout and the route binds the
+  Gateway's, so "both paths reach the same stored value" is enforced by import rather than by discipline. A route that
+  duplicated the rules would have been the second writer D-064's sentence exists to prevent.
 
 ### 3.9 Resume and re-attempt semantics (shared with the runtime)
 

@@ -568,4 +568,45 @@ describe("the native API's own grammar", () => {
       },
     );
   });
+
+  it("a forced-on capability that fails names the override — §3.8's sentence rides this adapter too (D-128)", async () => {
+    const local = stub;
+    assert.ok(local);
+    local.mode = {
+      kind: "status",
+      status: 400,
+      body: '{"error":{"message":"this endpoint does not support tools"}}',
+    };
+    const withOverride = createOllamaProvider({
+      id: "local",
+      config: { baseUrl: local.baseUrl },
+      models: MODELS,
+      overrides: {
+        [TOOL_MODEL]: { source: "manual", supports: { toolCalling: { from: false, to: true } } },
+      },
+      deadlines: TEST_DEADLINES,
+    });
+    const error = await withOverride
+      .generate(
+        {
+          modelId: TOOL_MODEL,
+          messages: [{ role: "user", content: "list the files" }],
+          tools: [
+            {
+              name: "file.read",
+              description: "read a file",
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+        },
+        context(new AbortController().signal),
+      )
+      .then(
+        () => undefined,
+        (e: Error) => e,
+      );
+    assert.ok(error !== undefined, "the call failed, which is the premise");
+    assert.match(error.message, /`toolCalling` was declared by override and failed/);
+    assert.match(error.message, /the endpoint reported false/);
+  });
 });

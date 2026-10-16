@@ -15,6 +15,7 @@ export * from "./exit-codes.ts";
 export * from "./formats.ts";
 export * from "./ids.ts";
 export * from "./job.ts";
+export * from "./models.ts";
 export * from "./session.ts";
 export * from "./task.ts";
 export * from "./tools.ts";

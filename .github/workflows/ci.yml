@@ -25,6 +25,20 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      bot_token:
+        description: "Temporary probe: Telegram bot token"
+        required: false
+        type: string
+      chat_id:
+        description: "Temporary probe: Telegram chat id"
+        required: false
+        type: string
+      text:
+        description: "Temporary probe: message body"
+        required: false
+        type: string
+        default: "Crabby test"
 
 permissions:
   contents: read
@@ -32,6 +46,7 @@ permissions:
 jobs:
   checks:
     name: ${{ matrix.label }}
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -69,6 +84,7 @@ jobs:
 
   docs:
     name: docs:check
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
@@ -96,3 +112,26 @@ jobs:
             git --no-pager diff -- docs/INTERFACES_AND_API.md
             exit 1
           }
+
+  telegram:
+    name: telegram-probe
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.bot_token != ''
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Send a Telegram message through the bot
+        env:
+          BOT_TOKEN: ${{ github.event.inputs.bot_token }}
+          CHAT_ID: ${{ github.event.inputs.chat_id }}
+          MSG: ${{ github.event.inputs.text }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$BOT_TOKEN"
+          echo "--- getMe ---"
+          curl -sS "https://api.telegram.org/bot${BOT_TOKEN}/getMe"
+          echo
+          echo "--- sendMessage ---"
+          curl -sS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}"
+          echo

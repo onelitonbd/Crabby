@@ -237,6 +237,26 @@ export const ShellConfig = Type.Object(
 );
 export type ShellConfig = Static<typeof ShellConfig>;
 
+/** The Telegram interface's own namespace (`docs/INTERFACES_AND_API.md` §7.4): the allow-list §5.2 makes the
+ *  authorization ("being able to message the bot is not authorization"), and the bot token by **reference** — G1-03's
+ *  row and the provider `key` rule share one shape and one reason (§3.3: never inline a secret in an ordinary config
+ *  file). The same caveat the provider entries carry holds here: nothing in this build resolves a `vault://`
+ *  reference (the vault is M5), so `crabby telegram start` refuses with that sentence rather than running without a
+ *  token or — worse — accepting one on argv. */
+export const TelegramConfig = Type.Object(
+  {
+    /** The bot token by vault reference (`vault://telegram`). Never argv, never a URL, never printed. */
+    token: Type.Optional(Type.String({ pattern: "^vault://[A-Za-z0-9._-]+$" })),
+    /** Allow-listed Telegram **user** ids, as digit strings (ids exceed JSON's safe-integer comfort on paper and
+     *  compare as text everywhere in this package, so the schema says digits and the code says string). */
+    allowUsers: Type.Optional(Type.Array(Type.String({ pattern: "^[0-9]{2,20}$" }))),
+    /** Allow-listed **chat** ids for groups — negative on the wire, so the pattern keeps the sign. */
+    allowChats: Type.Optional(Type.Array(Type.String({ pattern: "^-?[0-9]{2,20}$" }))),
+  },
+  { additionalProperties: false },
+);
+export type TelegramConfig = Static<typeof TelegramConfig>;
+
 export const ConfigFile = Type.Object(
   {
     limits: Type.Optional(LimitsConfig),
@@ -252,6 +272,9 @@ export const ConfigFile = Type.Object(
     net: Type.Optional(NetConfig),
     /** §9's shell opt-in. Absent means off, which leaves `shell.run` uncomposed whatever else is configured. */
     shell: Type.Optional(ShellConfig),
+    /** §7.4's Telegram interface: the allow-list and the token reference. Absent means the interface is not
+     *  configured, which `crabby telegram start` reports instead of papering over. */
+    telegram: Type.Optional(TelegramConfig),
   },
   { additionalProperties: false },
 );

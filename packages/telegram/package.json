@@ -1,0 +1,18 @@
+{
+  "name": "@crabby/telegram",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The Telegram interface (docs/review/TELEGRAM.md): grammY as the transport adapter only (P-009, D-069) — update parsing, retry_after handling and 429 backoff live here, not in the library",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@crabby/api-contracts": "0.0.0",
+    "@crabby/core": "0.0.0",
+    "@crabby/gateway": "0.0.0",
+    "@crabby/platform": "0.0.0",
+    "grammy": "1.46.0"
+  }
+}

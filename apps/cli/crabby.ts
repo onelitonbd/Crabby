@@ -44,6 +44,7 @@ import { type ModelVerb, type ProviderVerb, runModel, runProvider } from "./comm
 import { runSession, type SessionVerb } from "./commands/session.ts";
 import { runStatus } from "./commands/status.ts";
 import { runTask, type TaskVerb } from "./commands/task.ts";
+import { runTelegramStart } from "./commands/telegram.ts";
 import { runTools } from "./commands/tools.ts";
 import { runTuiCommand } from "./commands/tui.ts";
 import { readVersion, runVersion } from "./commands/version.ts";
@@ -275,6 +276,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       // C8-03: prints the Gateway-served URL and the pairing hint. It starts nothing (D-067) and takes no verb —
       // the row is `web open`, and `crabby web` alone answers the same way rather than a usage error.
       return runWebOpen(layout, renderer);
+    }
+    case "telegram": {
+      // §7.4's interface row: the bot against this Gateway. In this build it answers the vault sentence and exits 4;
+      // `commands/telegram.ts` carries the reasoning and the loop wiring one gate away.
+      return runTelegramStart(rest, layout, renderer);
     }
     case "tui": {
       // The TUI is an application, not a verb, so it is answered here rather than from `registry.ts` — and the reason is

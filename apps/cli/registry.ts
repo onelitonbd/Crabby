@@ -632,8 +632,10 @@ export const COMMANDS: readonly CommandSpec[] = [
     verb: "start",
     summary: "run the Telegram bot against this Gateway",
     flags: [],
-    status: "planned",
-    milestone: "M3 (the Telegram interface)",
+    // Ready as of the M3 Telegram slice: the command exists, loads config the one way, and answers the vault
+    // sentence (G1-03) until the vault resolves — an exit-4 answer is a built command's answer, not a planned row's
+    // promise. The loop wiring sits beside it in `commands/telegram.ts`.
+    status: "ready",
   },
   // `tui` is **not a row here**, and its absence is the decision D-129 records. This row used to exist and said "planned
   // for M3 (the TUI, after P-011 resolves Ink)" — two wrong things at once: the TUI does not wait for P-011 (the control

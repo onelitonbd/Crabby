@@ -126,7 +126,9 @@ export function readCredentials(layout: DataLayout): ClientCredentials | undefin
 }
 
 export interface RequestOptions {
-  readonly method?: "GET" | "POST" | "DELETE" | "PATCH";
+  /** `PUT` is the config write's verb (D-107's compare-and-swap); a client that could not send it would be a client
+   *  that could not edit configuration, which is a capability gap, not a smaller surface. */
+  readonly method?: "GET" | "POST" | "DELETE" | "PATCH" | "PUT";
   readonly body?: unknown;
   readonly headers?: Record<string, string>;
   readonly signal?: AbortSignal;

@@ -169,8 +169,8 @@ Concurrency note: SQLite allows one writer at a time. Crabby's write path should
 ### 4.1 Files in the state directory (D-078)
 
 The names are here because a name that lives only in code is a name an interface eventually hard-codes. `<stateDir>` is
-`~/.crabby` on Termux and Linux, and everything below is the whole footprint — a sixth file is a decision to record in
-`DECISIONS.md`, not a constant to add quietly:
+`~/.crabby` on Termux and Linux, and everything below is the whole footprint — a new file is a decision to record in
+`DECISIONS.md`, not a constant to add quietly (the sixth was D-132's):
 
 | File | Mode | What it is |
 | --- | --- | --- |
@@ -182,6 +182,7 @@ The names are here because a name that lives only in code is a name an interface
 | `gateway.json` | `0600` | What the running Gateway publishes about its own listener: host, port, pid, `startedAt`, version. Written at `listen`, **removed by a clean shutdown**, so "stale file" and "no Gateway" are different observable states. |
 | `client.json` | `0600` | A paired client's own bearer token and the client id it belongs to. It is the client's config location in the same directory only because on a phone the client and the Gateway are one machine's two processes; the Gateway never reads it. |
 | `last-exit.json` | — | D-066's shutdown record: how the process left and whether the drain finished, which is what lets `doctor` tell a crash from a Ctrl-C. |
+| `telegram.json` | `0600` | D-132's sixth file: the Telegram adapter's whole state — one bearer token and client id per paired chat with its user and kind, the per-chat task watches, the long-poll offset, and the flood-shed counter — so a chat's pairing survives a restart and a crash replays at most the last update (the offset advances only after an update is handled). Corrupt reads degrade to empty rather than guessed: pairing again is one `/start` away, and a fabricated state would be §4.2's sin in a file that holds bearer material. |
 
 ## 5. Storage Architecture
 

@@ -97,6 +97,16 @@ export interface TaskReader {
     id: string,
     range: { readonly from: number; readonly through: number },
   ): Promise<Response<unknown>>;
+  /** T12's tools view reads `GET /tools` — the same page `crabby tools ls` prints, digest and all. */
+  tools?(): Promise<Response<unknown>>;
+  /** T14's access view: the paired identities, the revocation that ends their streams, and the mint that pairs a
+   *  new one — all through the client's own methods, so the TUI and `crabby auth` cannot drift. */
+  authList?(): Promise<Response<unknown>>;
+  authRevoke?(id: string): Promise<Response<unknown>>;
+  pairCode?(body: {
+    readonly name: string;
+    readonly interface: string;
+  }): Promise<Response<unknown>>;
   listJobs?(options?: { readonly state?: string }): Promise<Response<unknown>>;
   /** `GET /jobs/{id}` — T17-04's detail reads the row, the bounded run history and the unacknowledged backlog rows from
    *  one answer, so a user deciding what to do about missed runs is not made to ask twice. */
@@ -398,7 +408,7 @@ export const PANE_DESCRIPTORS: readonly PaneDescriptor[] = [
     // T11-03/04/06/08's editor is wired (`e`, `r`), and the hint line lists only what is possible right now (T3-01):
     // the probe (T11-07) is the row this build cannot act on and names its gap in the pane instead.
     pane: "models",
-    hints: ["e edit", "r reset", "j/k move", "Tab panes", "? help", "q quit"],
+    hints: ["e edit", "t tools", "r reset", "j/k move", "Tab panes", "? help", "q quit"],
     built: true,
     equivalent: "crabby model list / crabby model edit",
   },

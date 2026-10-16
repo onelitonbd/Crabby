@@ -59,6 +59,7 @@ interface Run {
   readonly created: { objective: string; key: string; model: string | undefined }[];
   readonly cancelled: string[];
   readonly patched: { id: string; title: string | undefined; ifMatch: number }[];
+  readonly revoked: string[];
   readonly finish: () => Promise<void>;
   /** Resolves once the app has written its first frame. Every test waits for this rather than a tick, because `runTui`
    *  awaits `connect` and the first read before it attaches its `end` listener — so a test that ends the stream too early
@@ -102,6 +103,7 @@ function harness(
   const created: { objective: string; key: string; model: string | undefined }[] = [];
   const cancelled: string[] = [];
   const patched: { id: string; title: string | undefined; ifMatch: number }[] = [];
+  const revoked: string[] = [];
   const tasks = options.tasks ?? [];
   const client: TaskReader = {
     listTasks: async () => ({ ok: true, status: 200, body: { items: tasks } }),
@@ -126,6 +128,69 @@ function harness(
     sessionContext: async () => ({ ok: true, status: 200, body: {} }),
     compactSession: async () => ({ ok: true, status: 200, body: { note: "compacted" } }),
     pinMessages: async () => ({ ok: true, status: 200, body: { note: "pinned" } }),
+    // T12/T14's reads and writes.
+    tools: async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        items: [
+          {
+            id: "shell.run",
+            capabilities: ["shell.run"],
+            riskTier: "T3",
+            tierText: "T3",
+            tierRules: ["every call asks, unless the session already holds it"],
+            enabled: true,
+            availability: { available: true, requires: "any" },
+            pendingRecordFields: [],
+            inputSchema: { type: "object", properties: { command: { type: "string" } } },
+            limits: { timeoutMs: 120000, maxOutputBytes: 65536 },
+          },
+          {
+            id: "fs.read",
+            capabilities: ["fs.read"],
+            riskTier: "T0",
+            tierText: "T0",
+            tierRules: [],
+            enabled: true,
+            availability: { available: true, requires: "any" },
+            pendingRecordFields: [],
+          },
+        ],
+        registry: { source: "PROVIDERS_AND_TOOLS.md §4.2", rows: 2, digest: "d1g3st" },
+      },
+    }),
+    authList: async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        items: [
+          {
+            id: "cli_1",
+            name: "pixel 8a",
+            interface: "cli",
+            capabilities: ["session.read", "task.create"],
+            createdAt: "2026-10-01T09:00:00Z",
+            lastUsedAt: "2026-10-15T22:10:00Z",
+            liveStreams: 2,
+          },
+        ],
+      },
+    }),
+    authRevoke: async (id: string) => {
+      revoked.push(id);
+      return { ok: true, status: 200, body: { streamsEnded: 2 } };
+    },
+    pairCode: async () => ({
+      ok: true,
+      status: 201,
+      body: { code: "824199", expiresAt: "2026-10-16T10:30:00Z", capabilities: ["a", "b"] },
+    }),
+    diagnostics: async () => ({
+      ok: true,
+      status: 200,
+      body: { listener: { host: "127.0.0.1", port: 8734 } },
+    }),
   };
   const code = runTui({
     dataDir: dir,
@@ -146,6 +211,7 @@ function harness(
     created,
     cancelled,
     patched,
+    revoked,
     finish: async () => {
       stdin.end();
       await code;
@@ -436,6 +502,63 @@ describe("crabby tui, driven by bytes", () => {
     assert.equal(run.created.length, 1);
     assert.match(run.created[0]?.objective ?? "", /\[attached files: .*notes\.txt\]/);
     assert.match(plain(run.out()), /attached: .*notes\.txt/, "the draft shows what will ride");
+    await run.finish();
+  });
+
+  it("`t` opens the tools view in the models pane, sorted dangerous-first (T12)", async () => {
+    const run = harness();
+    await run.ready();
+    // Tab leaves chat first: in chat the composer owns every printable key (T3-04), so `6` is a literal there.
+    run.stdin.type("\t6"); // to models
+    await new Promise((resolve) => setImmediate(resolve));
+    run.stdin.type("t");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const text = plain(run.out());
+    assert.match(text, /tools — 2 · registry d1g3st/, text);
+    // Dangerous first: T3 sorts above T0.
+    const shellAt = text.indexOf("T3 shell.run");
+    const fsAt = text.indexOf("T0 fs.read");
+    assert.ok(shellAt >= 0 && fsAt > shellAt, `T3 should sort first: ${text}`);
+    // The escalation rule travels with the selection.
+    assert.match(text, /every call asks/, text);
+    // Enter expands the schema; a second press folds it.
+    run.stdin.type("\r");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(plain(run.out()), /"command"/, "the schema page draws");
+    run.stdin.type("\r");
+    await new Promise((resolve) => setImmediate(resolve));
+    run.stdin.type("\u001b"); // back to the models list
+    await new Promise((resolve) => setImmediate(resolve));
+    // The tools view swallows every key (no quit inside it), so a `q` that lands proves the pane is models again.
+    run.stdin.type("q");
+    const code = await Promise.race([
+      run.code,
+      new Promise<number>((resolve) => setTimeout(() => resolve(-1), 2000)),
+    ]);
+    assert.equal(code, 0, "Esc left the tools view — q quits the app again");
+  });
+
+  it("`v` walks to the access view: r prints first, r again revokes (T14)", async () => {
+    const run = harness();
+    await run.ready();
+    run.stdin.type("\t5"); // out of chat (T3-04), then to logs
+    await new Promise((resolve) => setImmediate(resolve));
+    run.stdin.type("v"); // log → audit
+    run.stdin.type("v"); // → decisions
+    run.stdin.type("v"); // → clients
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const text = plain(run.out());
+    assert.match(text, /bind 127\.0\.0\.1:8734 · loopback only/, text);
+    assert.match(text, /pixel 8a \(cli\) · connected · 2 streams/, text);
+    assert.match(text, /T14-04/, "the carried gaps are named in the view");
+    run.stdin.type("r"); // first press: the print
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(plain(run.out()), /2 streams end/, "the count prints before the act");
+    assert.deepEqual(run.revoked, [], "nothing is revoked on the first press");
+    run.stdin.type("r"); // second press: the act
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(run.revoked, ["cli_1"]);
+    assert.match(plain(run.out()), /revoked cli_1/, run.out());
     await run.finish();
   });
 

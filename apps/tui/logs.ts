@@ -14,9 +14,12 @@ import type { ApprovalSummary } from "./approvals.ts";
 import type { PaneContext } from "./panes.ts";
 import { clip } from "./render.ts";
 
-export type LogsView = "log" | "audit" | "decisions";
+export type LogsView = "log" | "audit" | "decisions" | "clients" | "config";
 
-export const LOGS_VIEWS: readonly LogsView[] = ["log", "audit", "decisions"];
+/** The cycle grew by two: the access view (T14) and the config view (T13) live in this pane because the review's own
+ *  grouping is "Settings/access/logs" and T1-02's six-name row has no seventh seat. The other three panes keep their
+ *  views; `v` walks all five. */
+export const LOGS_VIEWS: readonly LogsView[] = ["log", "audit", "decisions", "clients", "config"];
 
 export function nextLogsView(view: LogsView): LogsView {
   const index = LOGS_VIEWS.indexOf(view);

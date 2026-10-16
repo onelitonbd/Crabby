@@ -27,14 +27,15 @@ import {
   type TaskCheckpoint,
   type TaskRecord,
 } from "@crabby/api-contracts";
-import { loadConfig } from "@crabby/core";
-import { GatewayFailure } from "@crabby/gateway";
+import { loadConfig, writeConfig } from "@crabby/core";
+import { GatewayFailure, readCredentials } from "@crabby/gateway";
 import { dataLayout, terminalFacts } from "@crabby/platform";
 import { checkPath } from "@crabby/policy";
 import { SUPPORTED_FEATURES } from "@crabby/providers";
 import { findUnsafeShapes, writeDiagnosticsArtifact } from "../cli/commands/diagnostics.ts";
 import { nextOverride, writeOverrideRecord } from "../cli/commands/model-edit.ts";
 import { connect } from "../cli/connect.ts";
+import { accessLines, type ClientRow, mintLines } from "./access.ts";
 import {
   actionFor,
   applyAction,
@@ -101,6 +102,14 @@ import {
 } from "./panes.ts";
 import { clip, FrameRenderer, type Terminal } from "./render.ts";
 import { switcherLines, switchNote } from "./sessions.ts";
+import {
+  applyEdit,
+  type ConfigEntry,
+  configEntries,
+  diffLines,
+  parseValue as parseValueForDiff,
+  settingsLines,
+} from "./settings.ts";
 import { followEvents, type StreamHandle } from "./stream.ts";
 import {
   emptyTaskDetail,
@@ -108,6 +117,7 @@ import {
   type TaskDetailState,
   taskDetailLines,
 } from "./task-detail.ts";
+import { type ToolRow, toolsLines } from "./tools.ts";
 import {
   addSystem,
   applyEvent,
@@ -208,6 +218,25 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   let contextConfirm = false;
   let pinTyping = false;
   let pinBuffer = "";
+  /** T12's tools view, inside the models pane on `t` (the review groups "Providers/models/tools"; T1-02's row has no
+   *  seventh seat). The rows are `GET /tools`'s answer; expansion is per selection. */
+  let toolsOpen = false;
+  let toolRows: readonly ToolRow[] = [];
+  let toolDigest: string | undefined;
+  let toolIndex = 0;
+  let toolExpanded = false;
+  /** T14's access view and T13's config view — two more stops on the logs pane's `v` cycle. The clients state is the
+   *  Gateway's answer; the config state is the local file's, walked out of the schema. */
+  let clientRows: readonly ClientRow[] = [];
+  let clientIndex = 0;
+  let revokeConfirmFor: string | undefined;
+  let mintNote: readonly string[] | undefined;
+  let listener: { readonly host: string; readonly port: number | undefined } | undefined;
+  let configRows: readonly ConfigEntry[] = [];
+  let configIndex = 0;
+  let configEditing: string | undefined;
+  let configBuffer = "";
+  let configDiff: readonly string[] | undefined;
   /** T5-05's one-turn override and T5-04's attached paths. Both die with the send — a one-turn switch that outlived its
    *  turn would be a permanent switch told as a temporary one, and an attachment that rode every later message would
    *  leak a path into conversations that never asked for it. */
@@ -370,6 +399,49 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     } catch (error) {
       contextOpen = false;
       message = `context read failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  const readTools = async (): Promise<void> => {
+    if (client?.tools === undefined) return;
+    try {
+      const body = (await client.tools()).body as {
+        readonly items?: readonly ToolRow[];
+        readonly registry?: { readonly digest?: string };
+      };
+      toolRows = body.items ?? [];
+      toolDigest = body.registry?.digest;
+      if (toolIndex >= toolRows.length) toolIndex = Math.max(0, toolRows.length - 1);
+    } catch (error) {
+      message = `tools read failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  const readClients = async (): Promise<void> => {
+    if (client?.authList === undefined) return;
+    try {
+      const body = (await client.authList()).body as { readonly items?: readonly ClientRow[] };
+      clientRows = body.items ?? [];
+      if (clientIndex >= clientRows.length) clientIndex = Math.max(0, clientRows.length - 1);
+    } catch (error) {
+      message = `clients read failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  const readListener = async (): Promise<void> => {
+    if (client?.diagnostics === undefined) return;
+    try {
+      const body = (await client.diagnostics()).body as {
+        readonly listener?: { readonly host: string; readonly port: number | undefined };
+      };
+      listener = body.listener;
+    } catch {
+      // The listener line is additive; a failed diagnostics read leaves the view without it rather than in an error.
+    }
+  };
+  const readConfig = (): void => {
+    try {
+      configRows = configEntries(loadConfig(layout).config);
+      if (configIndex >= configRows.length) configIndex = Math.max(0, configRows.length - 1);
+    } catch (error) {
+      message = `config read failed: ${error instanceof Error ? error.message : String(error)}`;
     }
   };
   const readModels = (): void => {
@@ -586,7 +658,25 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       return jobsPane(context(), jobs, jobIndex);
     }
     if (pane === "logs") {
+      if (logsView === "clients") {
+        return accessLines(clientRows, columns, clientIndex, {
+          listener,
+          confirmFor: revokeConfirmFor,
+          mint: mintNote,
+          ownClientId: readCredentials(layout)?.clientId,
+        });
+      }
+      if (logsView === "config") {
+        return settingsLines(configRows, columns, configIndex, {
+          editing: configEditing,
+          buffer: configBuffer,
+          diff: configDiff,
+        });
+      }
       return logsPane(context(), logsView, decisions);
+    }
+    if (pane === "models" && toolsOpen) {
+      return toolsLines(toolRows, columns, toolIndex, toolExpanded, rows - CHROME, toolDigest);
     }
     if (pane === "models") {
       if (modelEdit !== undefined) return formLines(modelEdit, columns);
@@ -1404,6 +1494,157 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       if (key.kind === "char" && key.char === "v") {
         logsView = nextLogsView(logsView);
         if (logsView === "decisions") void readDecisions().then(drawNow);
+        if (logsView === "clients") {
+          revokeConfirmFor = undefined;
+          mintNote = undefined;
+          void readClients().then(readListener).then(drawNow);
+        }
+        if (logsView === "config") {
+          configEditing = undefined;
+          configBuffer = "";
+          configDiff = undefined;
+          readConfig();
+        }
+        return false;
+      }
+      // T14's access view: `r` prints what revocation will end and asks again (T14-03), `n` mints a pairing code for
+      // the interface this code is being read into — a local action, D-053, with the host named (T14-02).
+      if (logsView === "clients") {
+        if (
+          key.kind === "up" ||
+          key.kind === "down" ||
+          (key.kind === "char" && (key.char === "j" || key.char === "k"))
+        ) {
+          revokeConfirmFor = undefined;
+          const down = key.kind === "down" || (key.kind === "char" && key.char === "j");
+          clientIndex = down
+            ? Math.min(clientRows.length - 1, clientIndex + 1)
+            : Math.max(0, clientIndex - 1);
+          return false;
+        }
+        if (key.kind === "char" && key.char === "r" && clientRows.length > 0) {
+          const row = clientRows[clientIndex];
+          if (row === undefined || client?.authRevoke === undefined) return false;
+          if (revokeConfirmFor !== row.id) {
+            revokeConfirmFor = row.id;
+            return false;
+          }
+          revokeConfirmFor = undefined;
+          void client
+            .authRevoke(row.id)
+            .then((response) => {
+              const ended = (response.body as { readonly streamsEnded?: number }).streamsEnded;
+              message =
+                `revoked ${row.id}` +
+                (typeof ended === "number" && ended > 0
+                  ? ` — ${String(ended)} stream(s) ended`
+                  : "");
+              if (readCredentials(layout)?.clientId === row.id) {
+                message = `${message} — that was this app's own identity; its token is dead`;
+              }
+              return readClients().then(drawNow);
+            })
+            .catch((error: unknown) => {
+              message = `revoke failed: ${error instanceof Error ? error.message : String(error)}`;
+              drawNow();
+            });
+          return false;
+        }
+        if (key.kind === "char" && key.char === "n" && !help) {
+          if (client?.pairCode === undefined) return false;
+          void client
+            .pairCode({ name: `tui-minted-${String(Date.now() % 10000)}`, interface: "web" })
+            .then((response) => {
+              const body = response.body as {
+                readonly code: string;
+                readonly expiresAt: string;
+                readonly capabilities: readonly string[];
+              };
+              const gatewayHost =
+                listener === undefined
+                  ? "this machine"
+                  : `${listener.host}:${String(listener.port ?? "?")}`;
+              mintNote = mintLinesFor(body, gatewayHost, columns);
+              drawNow();
+              return undefined;
+            })
+            .catch((error: unknown) => {
+              message = `mint failed: ${error instanceof Error ? error.message : String(error)}`;
+              drawNow();
+            });
+          return false;
+        }
+        return false;
+      }
+      // T13's config view: the write is the CLI's pipeline, and the confirm is the diff shown before it (T13-03).
+      if (logsView === "config") {
+        if (configEditing !== undefined) {
+          if (key.kind === "escape") {
+            configEditing = undefined;
+            configBuffer = "";
+            configDiff = undefined;
+            message = "edit cancelled — nothing written";
+            return false;
+          }
+          if (key.kind === "char") {
+            configBuffer = configBuffer + key.char;
+            configDiff = undefined;
+            return false;
+          }
+          if (key.kind === "backspace") {
+            configBuffer = configBuffer.slice(0, -1);
+            configDiff = undefined;
+            return false;
+          }
+          if (key.kind === "enter") {
+            const entry = configRows[configIndex];
+            if (entry === undefined) return false;
+            if (configDiff === undefined) {
+              configDiff = diffLines(
+                entry.key,
+                entry.value,
+                parseValueForDiff(configBuffer),
+                columns,
+              );
+              return false;
+            }
+            const loaded = loadConfig(layout);
+            const result = applyEdit(
+              { file: loaded.file, token: loaded.token },
+              entry.key,
+              configBuffer,
+              writeConfig,
+              layout,
+            );
+            configEditing = undefined;
+            configBuffer = "";
+            configDiff = undefined;
+            message = result.message;
+            if (result.ok) readConfig();
+            drawNow();
+            return false;
+          }
+          return false;
+        }
+        if (
+          key.kind === "up" ||
+          key.kind === "down" ||
+          (key.kind === "char" && (key.char === "j" || key.char === "k"))
+        ) {
+          const down = key.kind === "down" || (key.kind === "char" && key.char === "j");
+          configIndex = down
+            ? Math.min(configRows.length - 1, configIndex + 1)
+            : Math.max(0, configIndex - 1);
+          return false;
+        }
+        if (key.kind === "enter") {
+          const entry = configRows[configIndex];
+          if (entry === undefined) return false;
+          configEditing = entry.key;
+          configBuffer = "";
+          configDiff = undefined;
+          return false;
+        }
         return false;
       }
       if (key.kind === "char" && key.char === "d") {
@@ -1431,6 +1672,37 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     }
     if (pane === "models") {
       const view = modelViews[modelIndex];
+      // T12's view, on `t` — the models pane is "Providers/models/tools" in the review's own grouping, and a tool
+      // list that lived nowhere would be a capability with no visible control (docs/INTERFACES_AND_API.md §8).
+      if (toolsOpen) {
+        if (key.kind === "escape" || (key.kind === "char" && key.char === "t")) {
+          toolsOpen = false;
+          toolExpanded = false;
+          return false;
+        }
+        if (
+          key.kind === "up" ||
+          key.kind === "down" ||
+          (key.kind === "char" && (key.char === "j" || key.char === "k"))
+        ) {
+          const down = key.kind === "down" || (key.kind === "char" && key.char === "j");
+          toolIndex = down
+            ? Math.min(toolRows.length - 1, toolIndex + 1)
+            : Math.max(0, toolIndex - 1);
+          toolExpanded = false;
+          return false;
+        }
+        if (key.kind === "enter") {
+          toolExpanded = !toolExpanded;
+          return false;
+        }
+        return false;
+      }
+      if (key.kind === "char" && key.char === "t" && !help) {
+        toolsOpen = true;
+        void readTools().then(drawNow);
+        return false;
+      }
       // T11-03/04/08's editor: the typed fields use the composer's own key table (one answer to "where is the cursor"),
       // Space cycles a capability's three positions, Enter saves through `nextOverride` + `writeOverrideRecord` — the
       // same stored-value rules and the same storage path `crabby model edit` uses (D-064).
@@ -1862,6 +2134,20 @@ async function send(
   // carries what a shell needs — the id and the model it ran on — in a line a 40-column frame does not cut in half.
   const turn = options.model === undefined ? "" : ` — this turn on ${options.model}`;
   return `sent as task ${created}${turn} · \`crabby task watch ${created}\` follows it from a shell`;
+}
+
+/** The mint answer as drawn lines — `mintLines` over the response body, kept beside the other module-level helpers so
+ *  the key handler stays a handler. */
+function mintLinesFor(
+  body: {
+    readonly code: string;
+    readonly expiresAt: string;
+    readonly capabilities: readonly string[];
+  },
+  gatewayHost: string,
+  columns: number,
+): readonly string[] {
+  return mintLines(body, gatewayHost, columns);
 }
 
 /** A stable-enough key from the words themselves. `Date.now()` would make every send unique, which is the opposite of what an

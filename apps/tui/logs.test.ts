@@ -103,9 +103,11 @@ describe("T15-05 and T15-07 — the artifact path and the tested-redaction note"
 });
 
 describe("the view cycle", () => {
-  it("walks log → audit → decisions → log", () => {
+  it("walks log → audit → decisions → clients → config → log (T14 and T13 ride the same `v`)", () => {
     assert.equal(nextLogsView("log"), "audit");
     assert.equal(nextLogsView("audit"), "decisions");
-    assert.equal(nextLogsView("decisions"), "log");
+    assert.equal(nextLogsView("decisions"), "clients");
+    assert.equal(nextLogsView("clients"), "config");
+    assert.equal(nextLogsView("config"), "log");
   });
 });

@@ -233,6 +233,10 @@ export interface GatewayClient {
   patchSession(id: string, body: PatchSessionBody, ifMatch: number): Promise<Response<unknown>>;
   authList(): Promise<Response<unknown>>;
   authRevoke(id: string): Promise<Response<unknown>>;
+  /** `POST /auth/pair-codes` — T14-02's mint, over the same route `crabby auth pair` drives. The TUI is a local
+   *  invocation (D-053), so it may mint for another interface exactly as the CLI does; the code's authority is the
+   *  interface baseline the Gateway computes, and the panel prints the count so a narrowing is checkable. */
+  pairCode(body: { readonly name: string; readonly interface: string }): Promise<Response<unknown>>;
 }
 
 export class GatewayFailure extends Error {
@@ -400,5 +404,6 @@ export function createClient(input: {
     authList: () => request("/api/v1/auth/clients"),
     authRevoke: (id) =>
       request(`/api/v1/auth/clients/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    pairCode: (body) => request("/api/v1/auth/pair-codes", { method: "POST", body }),
   };
 }

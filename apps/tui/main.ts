@@ -14,6 +14,8 @@
 // **capped** repaint (P-011's 4 fps). The repaint cap lives in `FrameRenderer`, not here, because the pane that streams
 // fastest is the pane that would forget it.
 
+import os from "node:os";
+import { estimateTokens } from "@crabby/agent-runtime";
 import {
   type Event,
   EXIT,
@@ -28,11 +30,19 @@ import {
 import { loadConfig } from "@crabby/core";
 import { GatewayFailure } from "@crabby/gateway";
 import { dataLayout, terminalFacts } from "@crabby/platform";
+import { checkPath } from "@crabby/policy";
 import { SUPPORTED_FEATURES } from "@crabby/providers";
 import { findUnsafeShapes, writeDiagnosticsArtifact } from "../cli/commands/diagnostics.ts";
 import { nextOverride, writeOverrideRecord } from "../cli/commands/model-edit.ts";
 import { connect } from "../cli/connect.ts";
-import { actionFor, applyAction, type ComposerState, emptyComposer } from "./composer.ts";
+import {
+  actionFor,
+  applyAction,
+  type ComposerState,
+  emptyComposer,
+  modelSwitchWarning,
+  SLASH_COMMANDS,
+} from "./composer.ts";
 import { contextLines } from "./context.ts";
 import {
   FRAME_CHROME_ROWS as CHROME,
@@ -89,7 +99,7 @@ import {
   unparsableFields,
   walkPromptLines,
 } from "./panes.ts";
-import { FrameRenderer, type Terminal } from "./render.ts";
+import { clip, FrameRenderer, type Terminal } from "./render.ts";
 import { switcherLines, switchNote } from "./sessions.ts";
 import { followEvents, type StreamHandle } from "./stream.ts";
 import {
@@ -196,7 +206,17 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   let contextOpen = false;
   let contextBody: SessionContextBody | undefined;
   let contextConfirm = false;
+  let pinTyping = false;
   let pinBuffer = "";
+  /** T5-05's one-turn override and T5-04's attached paths. Both die with the send — a one-turn switch that outlived its
+   *  turn would be a permanent switch told as a temporary one, and an attachment that rode every later message would
+   *  leak a path into conversations that never asked for it. */
+  let draftModel: string | undefined;
+  let draftAttachments: readonly string[] = [];
+  /** T5-08's queue: messages sent while a task runs wait here instead of interrupting, and `q` lists them. */
+  let queue: readonly { readonly objective: string; readonly model?: string | undefined }[] = [];
+  let queueOpen = false;
+  let queueIndex = 0;
   /** T15's three views. `decisions` is T15-04's data — every state of `GET /approvals`, because the view's subject is
    *  every prompt *and its answer*, `expired` included. */
   let logsView: LogsView = "log";
@@ -501,18 +521,50 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       });
     }
     if (contextOpen && contextBody !== undefined) {
-      return contextLines(contextBody, columns, contextConfirm);
+      return contextLines(contextBody, columns, contextConfirm, pinTyping ? pinBuffer : undefined);
+    }
+    if (queueOpen) {
+      // T5-08's list: the queue with its count, the selected row marked, and the reorder/drop keys named. It is the
+      // only place `q` means the queue, and the chat hint strip says so while anything waits in it.
+      const lines = [`queued while the run works: ${String(queue.length)}`];
+      const first = Math.max(0, Math.min(queueIndex - 4, queue.length - 8));
+      const shown = queue.slice(first, first + 8);
+      for (let index = 0; index < shown.length; index += 1) {
+        const item = shown[index] as { readonly objective: string };
+        const cursor = first + index === queueIndex ? ">" : " ";
+        lines.push(`${cursor} ${clip(item.objective, columns - 2)}`);
+      }
+      lines.push("Enter send now · j/k move · u up · n down · d drop · Esc back");
+      return lines;
     }
     if (pane === "chat") {
+      // The draft's own lines (T5-03/04/05/08/10). Each is one line, each says what it is, and none exists when its fact
+      // does not: a queue count with no queue would be a lie about traffic that is not happening.
+      const extras: string[] = [];
+      if (draftModel !== undefined)
+        extras.push(`this turn on ${draftModel} (one-turn override, T5-05)`);
+      if (draftAttachments.length > 0)
+        extras.push(`attached: ${draftAttachments.join(", ")} (T5-04)`);
+      if (composer.buffer.trim().length > 0) {
+        extras.push(
+          `the draft is ~${estimateTokens(composer.buffer).toLocaleString("en-US")} tokens (estimate, not a count — D-064)`,
+        );
+      }
+      if (queue.length > 0 && !queueOpen) {
+        extras.push(`queued while the run works: ${String(queue.length)} — q lists them (T5-08)`);
+      }
       return chatPane(
         transcript,
         composer,
         // T5-06's capability line. **These come from what the Gateway composed for this identity**, and until the chat pane
         // reads that route they are the documented defaults — printed as they are, because a wrong "shell: on" is a wrong
-        // promise about what a run may do, and the defaults here are the conservative ones.
+        // promise about what a run may do, and the defaults here are the conservative ones. The route that would make
+        // them real is the caller's own grants row: GET /auth/clients carries `capabilities` per identity, but nothing
+        // answers "which one am I" — a gap this line names in HANDOVER rather than guesses past.
         { fs: "workspace", net: false, shell: false },
         columns,
         rows - CHROME,
+        extras,
       );
     }
     const descriptor = descriptorFor(pane);
@@ -556,12 +608,25 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         );
   };
 
-  const draw = (): void => {
+  /** The frame's descriptor, with the one state-dependent hint swap the app makes: while messages sit queued, the chat
+   *  pane's `q` lists them instead of quitting (T5-08), and the hint strip is the authority (T3-04) — so the strip says
+   *  `q queue` for exactly as long as that is the truth. */
+  const frameDescriptor = () => {
     const descriptor = descriptorFor(pane);
+    if (pane !== "chat" || queue.length === 0) return descriptor;
+    return {
+      ...descriptor,
+      // The swap never removes the way out: `q` now lists the queue, so the same hint names the quit that remains —
+      // Ctrl-C's second press — rather than leaving the strip silent about leaving (T3-01's protection).
+      hints: descriptor.hints.map((hint) => (hint === "q quit" ? "q queue · Ctrl-C quit" : hint)),
+    };
+  };
+
+  const draw = (): void => {
     const lines0 = [...body()];
     if (message !== undefined) lines0.push(`! ${message}`);
     const lines = frameLines(
-      paneState(context(), descriptor, lines0, statusFrom(context(), tasks, jobs), help),
+      paneState(context(), frameDescriptor(), lines0, statusFrom(context(), tasks, jobs), help),
       columns,
       rows,
     );
@@ -573,11 +638,10 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
    *  that feels dead. The frozen-clock tests are what found this: a cap driven by an injected `now` swallowed every
    *  frame after the first, which is the cap protecting the user into the opposite failure. */
   const drawNow = (): void => {
-    const descriptor = descriptorFor(pane);
     const lines0 = [...body()];
     if (message !== undefined) lines0.push(`! ${message}`);
     const lines = frameLines(
-      paneState(context(), descriptor, lines0, statusFrom(context(), tasks, jobs), help),
+      paneState(context(), frameDescriptor(), lines0, statusFrom(context(), tasks, jobs), help),
       columns,
       rows,
     );
@@ -815,10 +879,11 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       if (key.kind === "escape") {
         contextOpen = false;
         contextConfirm = false;
+        pinTyping = false;
         pinBuffer = "";
         return false;
       }
-      if (pinBuffer !== "") {
+      if (pinTyping) {
         if (key.kind === "char") {
           pinBuffer = pinBuffer + key.char;
           return false;
@@ -830,6 +895,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         if (key.kind === "enter") {
           const id = lastSession(transcript);
           const match = /^(\d+)-(\d+)$/.exec(pinBuffer.trim());
+          pinTyping = false;
           pinBuffer = "";
           if (client?.pinMessages === undefined || id === undefined || match === null) return false;
           const from = Number(match[1]);
@@ -850,6 +916,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         return false;
       }
       if (key.kind === "char" && key.char === "p") {
+        pinTyping = true;
         pinBuffer = "";
         return false;
       }
@@ -929,7 +996,92 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         "a task is running; press Ctrl-Q again to quit (T1-08 asks for a confirmation here)";
       return false;
     }
-    if (key.kind === "char" && key.char === "q" && !help) {
+    // T5-08's queue list. `q` in chat with anything waiting opens it (the hint strip says `q queue` while that is
+    // true); when the buffer is empty and the queue is empty, `q` is still quit — the strip never lies about which.
+    if (
+      key.kind === "char" &&
+      key.char === "q" &&
+      !help &&
+      pane === "chat" &&
+      composer.buffer.length === 0 &&
+      queue.length > 0
+    ) {
+      queueOpen = true;
+      queueIndex = 0;
+      return false;
+    }
+    // The same claim, held for quit itself: with words in the composer, `q` is a letter (T3-04 gives the composer every
+    // printable key — and a draft containing "quiet" that quit the app was the bug this guard is).
+    if (queueOpen) {
+      if (key.kind === "escape") {
+        queueOpen = false;
+        return false;
+      }
+      if (
+        key.kind === "up" ||
+        key.kind === "down" ||
+        (key.kind === "char" && (key.char === "j" || key.char === "k"))
+      ) {
+        const down = key.kind === "down" || (key.kind === "char" && key.char === "j");
+        queueIndex = down
+          ? Math.min(queue.length - 1, queueIndex + 1)
+          : Math.max(0, queueIndex - 1);
+        return false;
+      }
+      if (key.kind === "char" && (key.char === "u" || key.char === "n")) {
+        // Reorder, in the list: `u` walks the row toward the front, `n` toward the back. The queue is order-sensitive —
+        // it drains from the front — so a list without a way to change the order would be a list without a point.
+        const index = queueIndex;
+        const target = key.char === "u" ? index - 1 : index + 1;
+        if (index >= 0 && target >= 0 && target < queue.length) {
+          const next = [...queue];
+          const item = next[index];
+          if (item !== undefined && target !== index) {
+            next[index] = next[target] as (typeof queue)[number];
+            next[target] = item;
+            queue = next;
+            queueIndex = target;
+          }
+        }
+        return false;
+      }
+      if (key.kind === "char" && key.char === "d") {
+        const item = queue[queueIndex];
+        queue = queue.filter((_, index) => index !== queueIndex);
+        queueIndex = Math.max(0, Math.min(queueIndex, queue.length - 1));
+        if (queue.length === 0) queueOpen = false;
+        message = item === undefined ? "" : `dropped: ${item.objective.slice(0, 30)}`;
+        return false;
+      }
+      if (key.kind === "enter") {
+        // Send now: the person has decided this one cannot wait for the run to settle. It goes through the same send
+        // the composer uses, one-turn facts included, and leaves the queue.
+        const item = queue[queueIndex];
+        if (item === undefined) return false;
+        queue = queue.filter((_, index) => index !== queueIndex);
+        queueIndex = Math.max(0, Math.min(queueIndex, queue.length - 1));
+        if (queue.length === 0) queueOpen = false;
+        const draft = { ...emptyComposer(), buffer: item.objective };
+        void send(client, draft, transcript, { model: item.model }).then(
+          (sent) => {
+            message = sent;
+            drawNow();
+          },
+          (error: unknown) => {
+            message = `send failed: ${error instanceof Error ? error.message : String(error)}`;
+            drawNow();
+          },
+        );
+        return false;
+      }
+      return false;
+    }
+    if (
+      key.kind === "char" &&
+      key.char === "q" &&
+      !help &&
+      !(pane === "chat" && composer.buffer.length > 0)
+    ) {
       quit = true;
       return true;
     }
@@ -1394,6 +1546,108 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         }
       }
     }
+    /** T5-03's execution half. The menu draws the commands; this maps the typed one onto a control that already exists —
+     *  a pane, an overlay, the cancel route — because a slash command with its own private implementation of one of those
+     *  would be a second implementation to keep true. Unknown words get T-O8's answer: the closest real command, named. */
+    const executeSlash = (text: string): void => {
+      const word = (text.split(/\s+/)[0] ?? "").toLowerCase();
+      const rest = text.slice(word.length).trim();
+      if (!SLASH_COMMANDS.some((command) => command === word)) {
+        const close = SLASH_COMMANDS.find((command) => command.startsWith(word.slice(0, 3)));
+        message =
+          close === undefined
+            ? `${word} is not a command here — the menu lists what is`
+            : `${word} is not a command — the closest is ${close}`;
+        return;
+      }
+      if (word === "/model") {
+        if (rest.length === 0) {
+          pane = "models";
+          message = "the models pane — this is the visible control /model names";
+          return;
+        }
+        const target = modelViews.find((view) => `${view.provider}/${view.model}` === rest);
+        if (target === undefined) {
+          message = `no model ${rest} is configured — the models pane lists what is`;
+          return;
+        }
+        draftModel = rest;
+        // D-045's delta, named before the turn is spent: tool calling is the loss a run cannot route around.
+        const tools =
+          target.effective?.supports.toolCalling ?? target.reported?.supports.toolCalling;
+        const warning = modelSwitchWarning(tools === false ? ["tool calling"] : []);
+        message = warning ?? `this turn will run on ${rest}`;
+        return;
+      }
+      if (word === "/compact") {
+        contextOpen = true;
+        contextConfirm = false;
+        void readContext().then(drawNow);
+        return;
+      }
+      if (word === "/pin") {
+        contextOpen = true;
+        contextConfirm = false;
+        pinTyping = true;
+        pinBuffer = "";
+        void readContext().then(drawNow);
+        return;
+      }
+      if (word === "/task") {
+        pane = "tasks";
+        return;
+      }
+      if (word === "/cancel") {
+        const run = running(tasks);
+        if (run === undefined) {
+          message = "nothing is running — /cancel would have stopped a task mid-step";
+          return;
+        }
+        // T5-07's stop: the cancel route's finish-the-step semantics, in the body rather than in a comment, so the wire
+        // carries what the hint says.
+        void client
+          ?.cancelTask(run.id, { mode: "finish-step" })
+          .then(() => {
+            message = "stop asked — the current step finishes, then the task settles";
+            return readTasks().then(drawNow);
+          })
+          .catch((error: unknown) => {
+            message = `cancel failed: ${error instanceof Error ? error.message : String(error)}`;
+            drawNow();
+          });
+        return;
+      }
+      if (word === "/attach") {
+        const typed = rest.trim();
+        if (typed.length === 0) {
+          message = "/attach takes a path — it rides the next send as text (T5-04)";
+          return;
+        }
+        // The shell is not here to expand `~`, so the app does: a phone user typing `~/notes.txt` means their home, and
+        // handing the checkPath a literal directory named `~` inside the workspace would check one file and read another.
+        const path =
+          typed === "~" || typed.startsWith("~/") ? os.homedir() + typed.slice(1) : typed;
+        try {
+          const config = loadConfig(layout);
+          const roots = config.config.workspace?.roots ?? [];
+          const verdict = checkPath(path, {
+            home: os.homedir(),
+            dataDir: layout.stateDir,
+            roots,
+          });
+          if (!verdict.ok) {
+            message = `refused: ${verdict.reason}`;
+            return;
+          }
+          draftAttachments = [...draftAttachments, verdict.resolved];
+          message = `attached ${verdict.resolved} — it rides the next send as text`;
+        } catch (error) {
+          message = `attach failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
+        return;
+      }
+    };
+
     // The composer owns every printable key when the chat pane is up (T3-04), and the pane's own bindings are read *after*
     // it — so a letter can never be swallowed by a pane binding and a pane binding can never eat a half-typed word.
     if (pane === "chat" && isComposerKey(key)) {
@@ -1413,11 +1667,33 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         message = `${handled.unbound} is not bound here — this terminal has no Shift+Enter (D-061 measured that); use Ctrl+J for a newline`;
       }
       if (handled.action === "send") {
+        const text = draft.buffer.trim();
+        // The slash menu first (T5-03): a buffer that names a command is a control, not a message — the row's own rule
+        // that every command also has a visible control is what keeps these mapped onto panes and overlays that exist.
+        if (text.startsWith("/")) {
+          composer = emptyComposer();
+          executeSlash(text);
+          return false;
+        }
+        // T5-08: while a task runs, a send *queues* rather than interrupts. The words stay visible in the queue, the
+        // count is on the composer, and the queue's first row goes out when the run settles (the poll watches for it).
+        if (running(tasks) !== undefined) {
+          queue = [...queue, { objective: text, model: draftModel }];
+          draftModel = undefined;
+          draftAttachments = [];
+          composer = emptyComposer();
+          message = `queued — it sends when the run settles (${String(queue.length)} waiting)`;
+          return false;
+        }
         message = undefined;
         // The history records what was typed, not what was sent, and it records it before the send is attempted: a send that
         // fails must not erase the words a person just typed.
-        if (draft.buffer.trim().length > 0) previousInputs.push(draft.buffer.trim());
-        void send(client, draft, transcript).then(
+        if (text.length > 0) previousInputs.push(text);
+        const model = draftModel;
+        const attachments = draftAttachments;
+        draftModel = undefined;
+        draftAttachments = [];
+        void send(client, draft, transcript, { model, attachments }).then(
           (sent) => {
             composer = emptyComposer();
             message = sent;
@@ -1473,7 +1749,26 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
           ? readTaskDetail(taskDetail.record.id)
           : Promise.resolve(),
       )
-      .then(draw);
+      .then(draw)
+      .then(() => {
+        // T5-08's drain: the run settled, so the queue's first row goes out. One per poll — a burst of sends is what
+        // the queue exists to prevent — and each carries the model it was queued with, not whatever is default now.
+        if (queue.length === 0 || running(tasks) !== undefined) return Promise.resolve();
+        const item = queue[0];
+        if (item === undefined) return Promise.resolve();
+        queue = queue.slice(1);
+        const draft = { ...emptyComposer(), buffer: item.objective };
+        return send(client, draft, transcript, { model: item.model }).then(
+          (sent) => {
+            message = sent;
+            return undefined;
+          },
+          (error: unknown) => {
+            message = `queued send failed: ${error instanceof Error ? error.message : String(error)}`;
+            return undefined;
+          },
+        );
+      });
   }, POLL_MS);
   const shutdown = (): void => {
     clearInterval(poll);
@@ -1533,24 +1828,40 @@ async function send(
   client: TaskReader | undefined,
   draft: ComposerState,
   from: TranscriptState,
+  /** T5-05's one-turn model pin and T5-04's attached paths. Attachments travel **as text** — there is no upload field
+   *  in this build's API and inventing an envelope would be a second format to keep true — so the paths ride the
+   *  objective, clearly marked, and the run's own file tools (already §8-checked) read them. */
+  options: {
+    readonly model?: string | undefined;
+    readonly attachments?: readonly string[];
+  } = {},
 ): Promise<string | undefined> {
   if (client === undefined) return "no gateway to send to — start one with: crabby gateway start";
   const text = draft.buffer.trim();
   if (text.length === 0) return undefined;
-  if (text.startsWith("/"))
-    return `slash commands are not wired in the TUI yet — ${text} works in the CLI`;
+  const objective =
+    options.attachments === undefined || options.attachments.length === 0
+      ? text
+      : `${text}\n[attached files: ${options.attachments.join(", ")}]`;
   const session = lastSession(from);
   const created = readTaskId(
     (
       await client.createTask(
-        { objective: text, ...(session === undefined ? {} : { sessionId: session }) },
+        {
+          objective,
+          ...(session === undefined ? {} : { sessionId: session }),
+          ...(options.model === undefined ? {} : { model: options.model }),
+        },
         // An idempotency key derived from the words, so a retried send on a phone that lost its network does not start the task
         // twice. The Gateway owns what that key means (D-084's handoff); the TUI only has to supply one.
-        `tui-${hash(text)}`,
+        `tui-${hash(objective)}`,
       )
     ).body,
   );
-  return `sent as task ${created} — \`crabby task watch ${created}\` follows it from a shell`;
+  // The pin's mortality is the draft line's job ("one-turn override" shows while typing, T5-05); the confirmation
+  // carries what a shell needs — the id and the model it ran on — in a line a 40-column frame does not cut in half.
+  const turn = options.model === undefined ? "" : ` — this turn on ${options.model}`;
+  return `sent as task ${created}${turn} · \`crabby task watch ${created}\` follows it from a shell`;
 }
 
 /** A stable-enough key from the words themselves. `Date.now()` would make every send unique, which is the opposite of what an

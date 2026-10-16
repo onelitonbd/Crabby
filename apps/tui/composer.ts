@@ -157,10 +157,30 @@ export function composerView(state: ComposerState, columns: number): ComposerVie
   };
 }
 
-/** T5-03's slash commands, filtered as typed. `/model` `/compact` `/pin` `/task` `/cancel` — the row's list, and **every one
- *  of them also has a visible control in the Web** (`docs/INTERFACES_AND_API.md` §8's parity rule: a shortcut-only
- *  capability is not a capability). */
-export const SLASH_COMMANDS = ["/model", "/compact", "/pin", "/task", "/cancel"] as const;
+/** T5-03's slash commands, filtered as typed. The row's five — `/model` `/compact` `/pin` `/task` `/cancel` — plus
+ *  `/attach`, the sixth the row's own ≤6-line menu has room for and T5-04's path-as-text needs. **Every one of them
+ *  also has a visible control** (`docs/INTERFACES_AND_API.md` §8's parity rule: a shortcut-only capability is not a
+ *  capability) — here that control is the pane or overlay the command lands in, so the menu and the keys cannot
+ *  disagree about what exists. */
+export const SLASH_COMMANDS = [
+  "/model",
+  "/compact",
+  "/pin",
+  "/task",
+  "/cancel",
+  "/attach",
+] as const;
+
+/** What each command says under the input: one line, the same words the pane's own hint would use, so the menu is
+ *  never the only place a command's meaning lives. */
+export const SLASH_ABOUT: Readonly<Record<(typeof SLASH_COMMANDS)[number], string>> = {
+  "/model": "pick the model — this turn only (T5-05); bare /model opens the models pane",
+  "/compact": "compact this conversation, preview first (T8-07)",
+  "/pin": "protect turn ranges from compaction (T8-04)",
+  "/task": "to the tasks pane",
+  "/cancel": "stop the running task — finishes the step, then settles (T5-07)",
+  "/attach": "attach a file by path — workspace roots and the §8 deny-list apply (T5-04)",
+};
 
 export function filterSlash(text: string, limit = 6): readonly string[] {
   if (!text.startsWith("/")) return [];
@@ -168,6 +188,16 @@ export function filterSlash(text: string, limit = 6): readonly string[] {
   return SLASH_COMMANDS.filter((command) => command.slice(1).toLowerCase().startsWith(query)).slice(
     0,
     limit,
+  );
+}
+
+/** T5-03's drawn menu: the filtered commands, each with its about line, at the width the composer has. */
+export function slashMenuLines(text: string, columns: number): readonly string[] {
+  return filterSlash(text).map((command) =>
+    `${command.padEnd(9)}${SLASH_ABOUT[command as (typeof SLASH_COMMANDS)[number]]}`.slice(
+      0,
+      Math.max(8, columns),
+    ),
   );
 }
 

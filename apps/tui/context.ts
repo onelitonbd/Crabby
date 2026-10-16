@@ -96,6 +96,9 @@ export function contextLines(
   body: SessionContextBody,
   columns: number,
   confirmCompact: boolean,
+  /** T8-04's pin input, drawn inline on the view while it is being typed — an overlay asking for a range is still one
+   *  screen, and the range a person is typing belongs next to the pins it will join. */
+  pinInput?: string | undefined,
 ): readonly string[] {
   const lines = [
     `context of ${body.sessionId}${body.model === undefined ? "" : ` · ${body.model}`}`,
@@ -105,6 +108,9 @@ export function contextLines(
     ...policyLines(body),
     ...overflowLines(body),
   ];
+  if (pinInput !== undefined) {
+    lines.push(`pin range (from-through, like 3-5): ${pinInput}▏ (Enter pins · Esc back)`);
+  }
   lines.push(
     confirmCompact
       ? "compact NOW? press c again — the tail above is the preview of what it would summarize"

@@ -15,7 +15,7 @@
 // transcript), and any assertion about a Gateway's behaviour.
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -56,7 +56,7 @@ interface Run {
   readonly out: () => string;
   readonly code: Promise<number>;
   readonly stdin: FakeStdin;
-  readonly created: { objective: string; key: string }[];
+  readonly created: { objective: string; key: string; model: string | undefined }[];
   readonly cancelled: string[];
   readonly patched: { id: string; title: string | undefined; ifMatch: number }[];
   readonly finish: () => Promise<void>;
@@ -75,6 +75,9 @@ function harness(
       readonly stateWord: string;
       readonly revision: number;
     }[];
+    /** A config.json for the tests that touch the models pane's data (`/model`, T5-05). Written before `runTui` so the
+     *  startup read sees it. */
+    readonly config?: Record<string, unknown>;
     readonly columns?: number;
     readonly rows?: number;
   } = {},
@@ -82,6 +85,9 @@ function harness(
   const dir = mkdtempSync(path.join(tmpdir(), "crabby-tui-"));
   const layout = dataLayout(dir);
   mkdirSync(layout.stateDir, { recursive: true, mode: 0o700 });
+  if (options.config !== undefined) {
+    writeFileSync(layout.configPath, `${JSON.stringify(options.config)}\n`, { mode: 0o600 });
+  }
   const out: string[] = [];
   const stdout = {
     columns: options.columns ?? 40,
@@ -93,7 +99,7 @@ function harness(
     },
   } as unknown as NodeJS.WriteStream;
   const stdin = new FakeStdin();
-  const created: { objective: string; key: string }[] = [];
+  const created: { objective: string; key: string; model: string | undefined }[] = [];
   const cancelled: string[] = [];
   const patched: { id: string; title: string | undefined; ifMatch: number }[] = [];
   const tasks = options.tasks ?? [];
@@ -103,8 +109,11 @@ function harness(
       cancelled.push(id);
       return { ok: true, status: 202, body: {} };
     },
-    createTask: async (body: { readonly objective: string }, key: string) => {
-      created.push({ objective: body.objective, key });
+    createTask: async (
+      body: { readonly objective: string; readonly model?: string | undefined },
+      key: string,
+    ) => {
+      created.push({ objective: body.objective, key, model: body.model });
       return { ok: true, status: 201, body: { id: "tsk_sent" } };
     },
     // T16's reads and writes, as envelopes like every other fake here.
@@ -301,6 +310,132 @@ describe("crabby tui, driven by bytes", () => {
       [{ id: "ses_b", title: "renamed", ifMatch: 5 }],
       "T16-05: one write path, carrying the row's revision as If-Match",
     );
+    await run.finish();
+  });
+
+  it("a send while a task runs queues, `q` lists it, `d` drops it (T5-08)", async () => {
+    const run = harness({
+      tasks: [{ id: "tsk_running", state: "running", objective: "x", model: "local/q" }],
+    });
+    await run.ready();
+    run.stdin.type("summarise this later");
+    run.stdin.type("\r");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(run.created.length, 0, "a send during a run does not start a second task");
+    // 40 columns clips the message before its last word, so the clause is what the assertion reads.
+    assert.match(plain(run.out()), /queued — it sends when the run/, run.out());
+    run.stdin.type("q"); // the queue list, because the chat hint says `q queue` now
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(
+      plain(run.out()),
+      /q queue/,
+      "T3-04: the strip is the authority, so it changed first",
+    );
+    assert.match(
+      plain(run.out()),
+      /summarise this later/,
+      "the queued words are the list's content",
+    );
+    run.stdin.type("d");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.match(plain(run.out()), /dropped: summarise this later/);
+    await run.finish();
+  });
+
+  it("/model sets this turn's pin with D-045's delta named, and the send carries it (T5-05)", async () => {
+    const run = harness({
+      config: {
+        provider: {
+          local: {
+            baseUrl: "http://127.0.0.1:9",
+            models: {
+              "q/tools": {
+                contextWindow: 4096,
+                maxOutputTokens: 512,
+                supports: { streaming: true, toolCalling: true },
+                cancellation: "best-effort",
+                rateLimits: null,
+                cost: "local",
+                batching: null,
+              },
+              "q/plain": {
+                contextWindow: 4096,
+                maxOutputTokens: 512,
+                supports: { streaming: true, toolCalling: false },
+                cancellation: "best-effort",
+                rateLimits: null,
+                cost: "local",
+                batching: null,
+              },
+            },
+          },
+        },
+      },
+    });
+    await run.ready();
+    // Typing the command draws the menu (T5-03); Enter runs it and names D-045's delta.
+    run.stdin.type("/model local/q/plain");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(plain(run.out()), /pick the model/, "the menu is up as typed");
+    run.stdin.type("\r");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // 40 columns clips the message mid-clause, so the assertion reads the clause that survives (the extras rule again).
+    assert.match(
+      plain(run.out()),
+      /would use a model without/,
+      "D-045's delta, named before the turn is spent",
+    );
+    // The next draft carries the override as a visible fact until the send spends it.
+    run.stdin.type("hello there");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(
+      plain(run.out()),
+      /this turn on local\/q\/plain/,
+      "the override is a visible draft fact",
+    );
+    run.stdin.type("\r");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(run.created.length, 1);
+    assert.equal(run.created[0]?.model, "local/q/plain", "the pin rides the create call");
+    // At 40 the confirmation clips after the model — the id and the pin fact are what survives, which is the row's own
+    // claim (T5-05: the warning and the one-turn draft fact; the mortality is the draft line's words).
+    assert.match(plain(run.out()), /sent as task tsk_sent — this turn on/, run.out());
+    await run.finish();
+  });
+
+  it("/attach checks the §8 path rules and rides the next send as text (T5-04)", async () => {
+    // A short root on purpose: at 40 columns a mkdtemp path clips before `notes.txt` ends, and the assertion would be
+    // reading the frame's ellipsis instead of the fact. `/tmp/crabby-ws-<pid>/notes.txt` fits the design case whole.
+    const root = path.join(tmpdir(), `ws${String(process.pid)}`);
+    mkdirSync(root, { recursive: true });
+    const run = harness({
+      config: { workspace: { roots: [root] } },
+    });
+    await run.ready();
+    // A path inside the configured root is accepted, as text.
+    run.stdin.type(`/attach ${path.join(root, "notes.txt")}`);
+    run.stdin.type("\r");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.match(plain(run.out()), /attached .*notes\.txt/, run.out());
+    // One on the deny-list is refused, root or no root — §8's deny applies to read as well as write.
+    run.stdin.type("/attach ~/.ssh/id.pem");
+    run.stdin.type("\r");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // 40 columns clips the refusal mid-sentence; the quoted path is what survives, and the expanded `~` is what the
+    // check judged — a literal directory named `~` inside the root would have been accepted, which is the bug this
+    // assertion would have worn otherwise.
+    assert.match(
+      plain(run.out()),
+      /refused: '[^']*\.ssh\/id\.pem'/,
+      "the §8 deny-list is the second gate",
+    );
+    // The send carries the attachment as marked text, and nothing rides the next one.
+    run.stdin.type("read the notes");
+    run.stdin.type("\r");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(run.created.length, 1);
+    assert.match(run.created[0]?.objective ?? "", /\[attached files: .*notes\.txt\]/);
+    assert.match(plain(run.out()), /attached: .*notes\.txt/, "the draft shows what will ride");
     await run.finish();
   });
 

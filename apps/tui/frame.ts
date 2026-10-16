@@ -290,14 +290,15 @@ export function statusLine(status: StatusState, columns: number): string {
 /** T3-01's hint strip, and the one rule that makes it safe to truncate. The row caps the strip at six hints and one line,
  *  and at 40 columns only two of a pane's six fit — so the strip **drops the least essential hints and keeps the essential
  *  ones**, the same way the status line keeps its protected fields (T2-08). The protected two are `?` (help) and `q`
- *  (quit), because **a person who cannot see how to leave the app is stuck**: the strip is the app's only always-visible
+ *  (quit), because **a person who cannot see how to leave the app is stuck** — any hint that names quitting counts,
+ *  including a second path to it: the strip is the app's only always-visible
  *  key list on a narrow screen, and dropping its exit because six other keys were more interesting is how a TUI becomes
  *  something a person force-kills with the phone's own controls.
  *
  *  The rest go from the end, since a pane orders them most-useful-first — which is T3-01's "the keys for what is actually
  *  possible right now", read as an ordering the truncation can act on. */
 export function hintStrip(hints: readonly string[], columns: number): string {
-  const essential = (hint: string): boolean => /\? help|q quit/.test(hint);
+  const essential = (hint: string): boolean => /\? help|quit/.test(hint);
   const kept = [...hints.slice(0, 6)];
   while (visibleWidth(kept.join(" · ")) > columns) {
     // From the end, because the caller orders most-useful-first (the docstring above is the rule the loop once contradicted:

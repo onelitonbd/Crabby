@@ -18,7 +18,7 @@ import {
   capabilityLine,
   composerView,
   emptyComposer,
-  filterSlash,
+  slashMenuLines,
 } from "./composer.ts";
 import type { FrameState, Pane, StatusState } from "./frame.ts";
 import { statusLine } from "./frame.ts";
@@ -60,7 +60,10 @@ export interface TaskReader {
   /** T6-04: cancelling needs no modal in the TUI, the same as Web W5-03. It goes through the route the CLI's
    *  `task cancel` uses, so D-090's record is written by the Gateway either way — a keypress is not a second implementation
    *  of a cancellation, it is a request for one. */
-  cancelTask(id: string): Promise<unknown>;
+  cancelTask(
+    id: string,
+    body?: { readonly mode?: "finish-step" | "immediate"; readonly reason?: string },
+  ): Promise<unknown>;
   /** T5-07's send is a **task start**, not a conversation write: the TUI sends through the same `POST /tasks` the CLI's
    *  `crabby chat` calls (D-123), so a chat is a run in every interface and there is no second writer of conversation
    *  history. The idempotency key is supplied by the caller because its meaning belongs to the Gateway's handoff. */
@@ -264,11 +267,15 @@ export function chatPane(
    *  the party that owns them and a pane that re-guessed the number would drift from it the first time the help sheet added a
    *  row. */
   rows: number,
+  /** The composer's state lines that are not the buffer itself: the slash menu (T5-03), the draft's token estimate
+   *  (T5-10), the one-turn model override (T5-05), the attached paths (T5-04) and the queue count (T5-08). The caller
+   *  owns them because they are facts about the *draft*, and the composer module owns only the buffer. */
+  extras: readonly string[] = [],
 ): readonly string[] {
-  // The composer takes up to six rows (T5-01), the capability line one, and the transcript gets what is left — never zero,
-  // because a pane that has nothing left for the conversation is a pane that cannot show the answer.
+  // The composer takes up to six rows (T5-01), the extras and capability line their own, and the transcript gets what is
+  // left — never zero, because a pane that has nothing left for the conversation is a pane that cannot show the answer.
   const composerLines = composerView(composer, columns).lines;
-  const chrome = composerLines.length + 2;
+  const chrome = composerLines.length + 2 + extras.length;
   const height = Math.max(1, rows - chrome);
   const lines: string[] = [];
   const shown = visibleRows(transcript, height);
@@ -278,10 +285,12 @@ export function chatPane(
   const padding = Math.max(0, height - lines.length);
   for (let index = 0; index < padding; index += 1) lines.push("");
   lines.push(...composerLines);
+  // T5-03's menu, filtered as typed, under the input and at most six lines — each with its about line now, because a
+  // bare `/pin` teaches nothing and a phone has no room for a second help sheet.
+  for (const line of slashMenuLines(composer.buffer.slice(0, composer.cursor), columns))
+    lines.push(`  ${line}`);
+  lines.push(...extras);
   lines.push(capabilityLine(capabilities));
-  // T5-03's menu, filtered as typed, under the input and at most six lines.
-  for (const command of filterSlash(composer.buffer.slice(0, composer.cursor)))
-    lines.push(`  ${command}`);
   // T4-12's held-position note, only when something is actually held.
   if (transcript.held > 0) lines.push(`  new content (${transcript.held}) — press End to follow`);
   return lines;

@@ -284,8 +284,10 @@ describe("the chat pane", () => {
     for (const char of "/co")
       composer = applyAction(composer, { kind: "insert", text: char }, undefined);
     const lines = chatPane(emptyTranscript(40, "none"), composer, CAPS, 40, 24);
+    // The menu line is the command and its about line now — a bare `/compact` teaches nothing, and the about is the
+    // same sentence the pane's hints use, so the menu is never the only place the command's meaning lives.
     assert.ok(
-      lines.some((line) => line.trim() === "/compact"),
+      lines.some((line) => line.trim().startsWith("/compact") && line.includes("compact this conversation")),
       lines.join(" | "),
     );
   });

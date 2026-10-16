@@ -20,6 +20,7 @@ import {
   filterSlash,
   MAX_COMPOSER_LINES,
   modelSwitchWarning,
+  slashMenuLines,
 } from "./composer.ts";
 
 describe("T5-A's asymmetry", () => {
@@ -133,8 +134,15 @@ describe("T5-01's input area", () => {
 });
 
 describe("T5-03's slash menu", () => {
-  it("filters as typed", () => {
-    assert.deepEqual(filterSlash("/"), ["/model", "/compact", "/pin", "/task", "/cancel"]);
+  it("filters as typed, `/attach` the sixth the menu's own cap has room for", () => {
+    assert.deepEqual(filterSlash("/"), [
+      "/model",
+      "/compact",
+      "/pin",
+      "/task",
+      "/cancel",
+      "/attach",
+    ]);
     assert.deepEqual(filterSlash("/co"), ["/compact"]);
     assert.deepEqual(filterSlash("/nothing"), []);
   });
@@ -165,5 +173,21 @@ describe("T5-06 and T5-05", () => {
 
   it("says nothing when nothing would be lost", () => {
     assert.equal(modelSwitchWarning([]), undefined);
+  });
+});
+
+describe("T5-03's drawn menu", () => {
+  it("draws each command with its about line, within the width", () => {
+    const lines = slashMenuLines("/", 40);
+    assert.equal(lines.length, 6);
+    for (const line of lines) assert.ok(line.length <= 40, line);
+    assert.ok(lines[5]?.includes("/attach"), lines.join(" | "));
+    // At 40 the about line clips after its first clauses — the row's own extras rule — so the marker assertion runs wide.
+    assert.ok(lines[0]?.includes("pick the model"), lines[0]);
+    assert.ok(slashMenuLines("/", 120)[0]?.includes("T5-05"), "wide enough for the whole sentence");
+  });
+
+  it("draws nothing for text that is not a command", () => {
+    assert.deepEqual(slashMenuLines("hello", 40), []);
   });
 });

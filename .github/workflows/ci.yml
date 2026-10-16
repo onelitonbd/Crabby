@@ -144,6 +144,10 @@ jobs:
             --data-urlencode "text=${MSG}" | tee probe/sendmessage.json
           echo
           echo "sent at $(date -u +%FT%TZ)" | tee probe/meta.txt
+          # The sandbox cannot reach the artifact blob store, so the responses travel back as check-run annotations.
+          echo "::warning title=Telegram getMe::$(cat probe/getme.json)"
+          echo "::warning title=Telegram getChat::$(cat probe/getchat.json)"
+          echo "::warning title=Telegram sendMessage::$(cat probe/sendmessage.json)"
       - name: Upload the Telegram API responses
         if: always()
         uses: actions/upload-artifact@v4

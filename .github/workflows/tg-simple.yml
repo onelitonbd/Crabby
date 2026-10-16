@@ -1,0 +1,9 @@
+name: tg-simple
+on:
+  push:
+    branches: ['tg-simple/*']
+jobs:
+  hello:
+    runs-on: ubuntu-22.04
+    steps:
+      - run: echo "HELLO_FROM_RUNNER"

@@ -1,0 +1,31 @@
+name: telegram-probe
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  telegram:
+    name: telegram-probe
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Send a Telegram message through the bot
+        env:
+          RAW: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          LINE="$(printf '%s' "$RAW" | head -1 | tr -d '\r' | tr -d '[:space:]')"
+          JSON="$(printf '%s' "$LINE" | base64 -d 2>/dev/null || true)"
+          if [ -z "$JSON" ]; then echo "payload decode failed"; exit 1; fi
+          TOKEN="$(printf '%s' "$JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+          CHAT="$(printf '%s' "$JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["chat_id"])')"
+          MSG="$(printf '%s' "$JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["text"])')"
+          echo "::add-mask::$TOKEN"
+          curl -sS "https://api.telegram.org/bot${TOKEN}/getMe" > getme.json
+          curl -sS "https://api.telegram.org/bot${TOKEN}/getChat?chat_id=${CHAT}" > getchat.json
+          curl -sS -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT}" --data-urlencode "text=${MSG}" > sendmessage.json
+          echo "::warning title=Telegram getMe::$(cat getme.json)"
+          echo "::warning title=Telegram getChat::$(cat getchat.json)"
+          echo "::warning title=Telegram sendMessage::$(cat sendmessage.json)"

@@ -81,3 +81,16 @@ TUI-র সব কাজ আগেই শেষ (ধাপ ১-এর ৫ ব্
 2. Route-নির্ভর বাকি (ধাপ ২): GET /logs, /audit, probe, job-delete, providers (W9), extensions/memory — তিন
    ইন্টারফেসেই gap-note।
 3. খোলা সিদ্ধান্ত: D-066 vault-secrets (milestone-বাঁধা)।
+
+## করলাম (টোকেন এসেছে — লাইভ যাচাইয়ের প্রস্তুতি)
+
+মালিক নতুন bot টোকেন দিলেন (2026-10-16)। টোকেন কোথাও কমিট/লগ হয়নি — workspace-এ `.tg-token` (0600, রিপোর বাইরে)।
+
+- **স্যান্ডবক্সের সীমা, প্রমাণসহ:** `api.telegram.org`-এ DNS বসে, TLS হ্যান্ডশেক কাটা পড়ে (SSL_ERROR_SYSCALL) — egress
+  allowlist-এ Telegram নেই। তাই লাইভ পোল এই পরিবেশ থেকে সম্ভব নয় (আগের "Telegram blocked" নোটেরই পুনর্নিশ্চিতি);
+  Telegram-নোটিশও এখান থেকে পাঠানো যায় না — WORKLOG mirror-ই চলছে।
+- **`scripts/telegram-live-check.ts` + `npm run telegram:check`:** মালিকের ডিভাইসে এক কমান্ডে D-132-এর তিন অযাচাইত
+  বিষয় যাচায় — getMe (টোকেন), setMyCommands (মেনু), getUpdates 5s (পোল, আমাদের addressUpdate দিয়ে শেপ-প্রিন্ট,
+  content নয়)। টোকেন env থেকে (G1-03: argv/লগ নয়), কোথাও সংরক্ষিত নয়। 401/409/নেটওয়ার্ক — তিনটারই নাম-ধরা ব্যাখ্যা।
+- **এখানে যা যাচাই হলো:** no-token → usage + exit 1; নেটওয়ার্ক-ব্যর্থতা → সৎ লাইন + exit 1 (উপরের স্যান্ডবক্স-সীমার
+  বার্তাসহ)। tsc শূন্য, biome ✔। **বাকি:** ফোন/হোস্টে `TG_BOT_TOKEN=… npm run telegram:check` চালিয়ে আউটপুট দেখা।

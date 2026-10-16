@@ -22,6 +22,7 @@
     "test:integration": "node --test tests/integration/*.test.ts",
     "test:security": "node --test 'tests/security/*.test.ts' 'packages/policy/*.test.ts' 'packages/providers/*.test.ts'",
     "test:parity": "node scripts/parity.ts",
+    "telegram:check": "node scripts/telegram-live-check.ts",
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit -p tsconfig.json",

@@ -28,7 +28,11 @@ Then: `PROJECT_BRIEF.md` → `ARCHITECTURE.md` → `DECISIONS.md` → the spec f
 recovery (including cross-process resume), scheduler, tools, event delivery, compaction with automatic and manual triggers,
 and pins.
 
-**M3's four interfaces all exist.** What remains of the phase is its exit test, not a missing interface.
+**M3 is code-complete, and every gate that can run without a Telegram socket passes** (sweep 1308/1308, typecheck,
+biome, parity, docs:check — re-run 2026-10-16). What remains of the phase exit is **only the four-interface demo**,
+which awaits the live-token check on the host: `TG_BOT_TOKEN=… npm run telegram:check` (the build sandbox cannot
+reach `api.telegram.org`), then the demo — a task started on Telegram, watched from Web, approved in the TUI,
+cancelled from the CLI — documented as the release test.
 
 | Workstream | State |
 | --- | --- |
@@ -137,8 +141,11 @@ log is the only place the answer is.
 4. ~~**Web UI**~~ — **built** (slice 64): the Gateway serves the no-build bundle; screens per `docs/review/WEB.md`'s
    accepted rows, gaps named where routes are absent.
 5. ~~**Telegram**~~ — **built** (slice 65, D-132): polling, not the tunnel — v1 is getUpdates over the loopback-owned
-   Gateway. A **live token** at `crabby config set telegram.token <token>` then `crabby telegram start` is the
-   un-run verification; the four-interface demo (§2) is what the token unblocks.
+   Gateway. The un-run verification is one command on the host: `TG_BOT_TOKEN=… npm run telegram:check` (token from
+   @BotFather; env-only, G1-03). **M3 is otherwise closed; M4 starts** per `docs/ROADMAP.md` §6 — provider adapters
+   and the conformance suite first (D-042's presets), then the overrides' loop half (D-126's named remainder),
+   memory (D-065's FTS5), skills (D-035), MCP client (D-040), importer C-1/C-2 — with the M3 demo folded in the day
+   the token check passes.
 
 ## 7. Things that are open and belong to the owner
 

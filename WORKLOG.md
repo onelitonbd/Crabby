@@ -94,3 +94,16 @@ TUI-র সব কাজ আগেই শেষ (ধাপ ১-এর ৫ ব্
   content নয়)। টোকেন env থেকে (G1-03: argv/লগ নয়), কোথাও সংরক্ষিত নয়। 401/409/নেটওয়ার্ক — তিনটারই নাম-ধরা ব্যাখ্যা।
 - **এখানে যা যাচাই হলো:** no-token → usage + exit 1; নেটওয়ার্ক-ব্যর্থতা → সৎ লাইন + exit 1 (উপরের স্যান্ডবক্স-সীমার
   বার্তাসহ)। tsc শূন্য, biome ✔। **বাকি:** ফোন/হোস্টে `TG_BOT_TOKEN=… npm run telegram:check` চালিয়ে আউটপুট দেখা।
+
+## করলাম (M3 বন্ধ — ফাইনাল চেক)
+
+"final check diye M3 ses kore M4 chalu koro" — **M3 কোড-সম্পূর্ণ ঘোষণা করলাম**, যাচাইসহ:
+
+- **ফাইনাল সুইপ (2026-10-16):** ফুল টেস্ট **1308/1308**, tsc শূন্য, biome শূন্য, parity ✔ (32 routes — §8-এর প্রতিটা
+  blank cell-এ accepted limitation), docs:check ✔ (24 docs)। M3 exit-এর অটোমেটেবল অর্ধেক পাস।
+- **যা বাকি (টোকেন-নির্ভর):** চার-ইন্টারফেস ডেমো (Telegram start → Web watch → TUI approve → CLI cancel) — হোস্টে
+  `TG_BOT_TOKEN=… npm run telegram:check` পাস হলেই সম্ভব। HANDOVER §2-তে M3-এর এই অবস্থা লেখা হলো।
+- **M4 শুরুর ভিত্তি:** ROADMAP §6 ক্রম — provider adapters + conformance (D-042 presets) → overrides-এর loop অর্ধেক
+  (D-126-এর নাম-ধরা বাকি) → memory (D-065 FTS5) → skills (D-035) → MCP client (D-040) → importer C-1/C-2। M4-এর
+  স্থাপত্য-সিদ্ধান্ত বেশিরভাগই আগেই বন্ধ (O-008/015/016/021/026/028/029/030/031/038)। মালিকের কাছে যে ক'টা সত্যিই
+  খোলা (conformance-এর লাইভ প্রোভাইডার, route-নির্ভর স্কোপ, 'each' backlog action) — সেগুলো জিজ্ঞেস করা হলো।

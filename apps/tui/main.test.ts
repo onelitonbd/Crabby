@@ -222,10 +222,12 @@ describe("crabby tui, driven by bytes", () => {
     await run.ready();
     run.stdin.type("\t");
     await new Promise((resolve) => setImmediate(resolve));
-    assert.match(plain(run.out()), />tasks/, "Tab cycles forward from chat");
+    // 40 columns abbreviates the row to three characters (T1-02, asserted by the first test in this file), so the cursor
+    // is read off the abbreviated row: `>tas` is tasks selected, `>cha` is chat again.
+    assert.match(plain(run.out()), />tas /, "Tab cycles forward from chat");
     run.stdin.type("1");
     await new Promise((resolve) => setImmediate(resolve));
-    assert.match(plain(run.out()), />chat/, "and a number jumps");
+    assert.match(plain(run.out()), />cha /, "and a number jumps");
     await run.finish();
   });
 

@@ -38,7 +38,11 @@ export function decodeKey(bytes: string): { key: Key; rest: string } | undefined
     case "\r":
       return { key: { kind: "enter" }, rest: bytes.slice(1) };
     case "\n":
-      return { key: { kind: "enter" }, rest: bytes.slice(1) };
+      // Ctrl+J **is** LF in a raw terminal — that is the byte it has sent since teletypes. Decoding it as `enter` too
+      // made CR and LF indistinguishable and broke D-061's asymmetry end to end: "first\nsecond" arrived as two sends,
+      // which is how main.test.ts's Ctrl-J test caught it. The composer's table (actionFor) already binds `ctrl+j` to
+      // the newline insert; the decode now names the key that byte actually is.
+      return { key: { kind: "ctrl", letter: "j" }, rest: bytes.slice(1) };
     case "\t":
       return { key: { kind: "tab" }, rest: bytes.slice(1) };
     case "\u007f":

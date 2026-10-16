@@ -33,11 +33,12 @@ describe("decodeKey", () => {
     assert.deepEqual(key("\u0011"), { kind: "ctrl", letter: "q" });
   });
 
-  it("reads Enter and Ctrl+J as the same key but from different bytes", () => {
-    // P-010 measured both arriving. They are one action for the composer, and the distinction is what would let a future
-    // binding treat them differently — so the decode names one key and the *bytes* remain distinguishable in the test.
+  it("reads Enter and Ctrl+J as different keys, because they are different bytes", () => {
+    // P-010 measured both arriving, and D-061's asymmetry needs them *different*: `\r` sends, `\n` (Ctrl+J's byte)
+    // inserts a newline. The old decode named both `enter`, which made the composer's own table unreachable from a real
+    // terminal — main.test.ts's end-to-end Ctrl-J test is the assertion of record, and this one now agrees with it.
     assert.deepEqual(key("\r"), { kind: "enter" });
-    assert.deepEqual(key("\n"), { kind: "enter" });
+    assert.deepEqual(key("\n"), { kind: "ctrl", letter: "j" });
   });
 
   it("reads Tab, backspace and the arrows", () => {

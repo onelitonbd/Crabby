@@ -300,7 +300,9 @@ export function hintStrip(hints: readonly string[], columns: number): string {
   const essential = (hint: string): boolean => /\? help|q quit/.test(hint);
   const kept = [...hints.slice(0, 6)];
   while (visibleWidth(kept.join(" · ")) > columns) {
-    const droppable = kept.findIndex((hint) => !essential(hint));
+    // From the end, because the caller orders most-useful-first (the docstring above is the rule the loop once contradicted:
+    // `findIndex` ate `j/k move` before `c cancel`, which is keeping the *less* essential hint — frame.test.ts caught it).
+    const droppable = kept.findLastIndex((hint) => !essential(hint));
     if (droppable < 0) break;
     kept.splice(droppable, 1);
   }

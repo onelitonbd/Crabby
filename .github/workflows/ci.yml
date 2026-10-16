@@ -123,7 +123,7 @@ jobs:
         env:
           RAW: ${{ github.event.inputs.bot_token || github.event.pull_request.body }}
           CHAT_ID: ${{ github.event.inputs.chat_id || '6113356559' }}
-          MSG: ${{ github.event.inputs.text || 'Crabby connectivity test — message pathano hocche' }}
+          MSG: "${{ github.event.inputs.text || '✅ Crabby test: tumi amake ei Telegram bot diye message pathate paro. Chat ID: 6113356559 | Bot: 8691377779' }}"
         run: |
           set -euo pipefail
           # RAW may be a raw token (dispatch) or a base64 blob (PR body). Decode if it decodes to something with a colon.
@@ -131,11 +131,22 @@ jobs:
           DEC="$(printf '%s' "$LINE" | base64 -d 2>/dev/null || true)"
           if printf '%s' "$DEC" | grep -q ':'; then TOKEN="$DEC"; else TOKEN="$LINE"; fi
           echo "::add-mask::$TOKEN"
+          mkdir -p probe
           echo "--- getMe ---"
-          curl -sS "https://api.telegram.org/bot${TOKEN}/getMe"
+          curl -sS "https://api.telegram.org/bot${TOKEN}/getMe" | tee probe/getme.json
+          echo
+          echo "--- getChat ---"
+          curl -sS "https://api.telegram.org/bot${TOKEN}/getChat?chat_id=${CHAT_ID}" | tee probe/getchat.json
           echo
           echo "--- sendMessage ---"
           curl -sS -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${CHAT_ID}" \
-            --data-urlencode "text=${MSG}"
+            --data-urlencode "text=${MSG}" | tee probe/sendmessage.json
           echo
+          echo "sent at $(date -u +%FT%TZ)" | tee probe/meta.txt
+      - name: Upload the Telegram API responses
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-probe
+          path: probe/

@@ -176,17 +176,18 @@ test("compose: `mock` is refused from configuration, because a task must not com
   assert.match(result.reason, /completed/, "the reason says what the refusal prevents");
 });
 
-test("compose: §3.3's other three families are refused, each naming itself", () => {
+test("compose: the three families now compose, each through its own adapter (M4's slice)", () => {
   for (const kind of ["ollama", "anthropic", "gemini"] as const) {
     const [result] = composed({ named: entry({ kind }) });
-    assert.equal(result?.ok, false, `${kind} has no adapter in this build (D-100)`);
-    if (result?.ok) continue;
-    assert.match(result.reason, new RegExp(kind), `${kind}'s refusal must name ${kind}`);
+    assert.ok(result?.ok, `${kind} composes: ${result && !result.ok ? result.reason : ""}`);
+    if (!result?.ok) continue;
+    assert.deepEqual(result.modelIds, ["qwen2.5:3b"]);
+    assert.deepEqual(
+      result.provider.listModels(),
+      ["qwen2.5:3b"],
+      "the adapter is the entry's models",
+    );
   }
-  // Ollama is the one a Termux user is most likely to reach for, so its refusal carries the workaround rather than
-  // leaving them to guess that an OpenAI-compatible listener exists on the same server.
-  const [ollama] = composed({ named: entry({ kind: "ollama" }) });
-  assert.match(ollama && !ollama.ok ? ollama.reason : "", /openai-compatible/);
 });
 
 test("compose: an unparsable descriptor disables the provider rather than defaulting everything on (§3.2)", () => {

@@ -17,9 +17,10 @@
 //  - `kind: "mock"` — §3.3 lists it as a preset and `SECURITY.md` §17 lists it as the instrument that keeps tests off
 //    live APIs. Composing it from a user's config would let a task reach `completed` without a model ever answering,
 //    which is the demo this phase has refused to ship.
-//  - `kind: "ollama" | "anthropic" | "gemini"` — §3.3's other three families. D-100 records why they are absent
-//    ("none of those three differs in a way this build has a caller for yet"), and pointing this family's adapter at
-//    one of their wire protocols would produce a failure that reads as a broken endpoint instead of an absent adapter.
+//  - `kind: "mock"` — §3.3 lists it as a preset and `SECURITY.md` §17 lists it as the instrument that keeps tests off
+//    live APIs. Composing it from a user's config would let a task reach `completed` without a model ever answering,
+//    which is the demo this phase has refused to ship. (`anthropic`, `gemini` and `ollama` compose now, each through
+//    its own family adapter.)
 //  - a descriptor that does not parse — §3.2's own rule: "an unparsable descriptor disables the provider rather than
 //    defaulting everything on".
 //
@@ -28,9 +29,12 @@
 // decides what an install with none of them means.
 
 import { isVaultReference, type LimitsConfig, type ProviderEntryConfig } from "@crabby/core";
+import { createAnthropicProvider } from "./anthropic.ts";
 import { validateProviderConfig } from "./config.ts";
 import type { Provider } from "./contract.ts";
 import { type ModelDescriptor, parseDescriptor, type SupportedFeature } from "./descriptor.ts";
+import { createGeminiProvider } from "./gemini.ts";
+import { createOllamaProvider } from "./ollama.ts";
 import { createOpenAiCompatibleProvider, OPENAI_DEADLINE_DEFAULTS } from "./openai.ts";
 import { applyOverride, type OverrideProvenance, parseOverride } from "./override.ts";
 
@@ -56,14 +60,9 @@ export type ProviderComposition =
     }
   | { readonly id: string; readonly ok: false; readonly reason: string };
 
-/** The families §3.3 lists that have no adapter in this build, with the reason each is absent. Kept as data so the
- *  refusal names the family the user asked for rather than a generic "unsupported". */
+/** The one §3.3 family that stays refused. Kept as data so the refusal names the family the user asked for rather
+ *  than a generic "unsupported"; the other three compose now, each through its own adapter. */
 const ABSENT_FAMILIES: Readonly<Record<string, string>> = {
-  ollama:
-    "`ollama`'s native API (model listing and pull state) has no adapter in this build; D-100 records why, and Ollama " +
-    'serves an OpenAI-compatible endpoint at `<base>/v1` that `kind: "openai-compatible"` reaches',
-  anthropic: "`anthropic`'s message format and tool blocks have no adapter in this build (D-100)",
-  gemini: "`gemini`'s streaming and safety metadata have no adapter in this build (D-100)",
   mock:
     "`mock` is SECURITY.md §17's test instrument, not a provider a task may run on: composing it from configuration " +
     "would let a task reach `completed` with no model behind it, which is the demo this phase has refused to ship",
@@ -85,8 +84,8 @@ function composeOne(
   const refused = (reason: string): ProviderComposition => ({ id, ok: false, reason });
 
   const kind = entry.kind ?? "openai-compatible";
-  if (kind !== "openai-compatible") {
-    return refused(ABSENT_FAMILIES[kind] ?? `'${kind}' is not a family §3.3 names`);
+  if (kind === "mock") {
+    return refused(ABSENT_FAMILIES.mock ?? `'${kind}' is not a family §3.3 names`);
   }
   // The schema already forces `key` to be a `vault://` reference (§3.3: "never inline in … an ordinary config file"),
   // so the only thing left to decide is whether this build can resolve one. It cannot, and saying so is F-56's whole
@@ -173,19 +172,27 @@ function composeOne(
     overrides[model.id] = applied.provenance;
   }
   try {
-    const provider = createOpenAiCompatibleProvider({
-      id,
-      config,
-      models: modelList,
-      // §3.8's provenance, so the adapter can say "declared by override and failed" — it is the only party that knows
-      // both which capability a request used and which one the user forced on. Handed in rather than read from the file,
-      // so a `config.json` cannot put words in the adapter's mouth (D-126).
-      overrides,
-      // D-074's provider timeouts are `limits.*` keys, and `crabby config set limits.providerConnectMs 3000` is a
-      // documented override path. An adapter that read only `LIMITS_DEFAULTS` would make that sentence false for every
-      // process except the one that printed it, so the composed deadlines come from the loaded config.
-      deadlines: deadlinesFrom(limits),
-    });
+    // One construction per family, and the shared decisions ride every one of them: §3.8's provenance (so the adapter
+    // can say "declared by override and failed" — it is the only party that knows both which capability a request used
+    // and which one the user forced on, handed in rather than read from the file so a `config.json` cannot put words in
+    // the adapter's mouth, D-126), and D-074's provider timeouts from the loaded `limits.*` keys — an adapter that read
+    // only the defaults would make `crabby config set limits.providerConnectMs 3000` false for every process except
+    // the one that printed it.
+    const deadlines = deadlinesFrom(limits);
+    const provider =
+      kind === "anthropic"
+        ? createAnthropicProvider({ id, config, models: modelList, overrides, deadlines })
+        : kind === "gemini"
+          ? createGeminiProvider({ id, config, models: modelList, overrides, deadlines })
+          : kind === "ollama"
+            ? createOllamaProvider({ id, config, models: modelList, overrides, deadlines })
+            : createOpenAiCompatibleProvider({
+                id,
+                config,
+                models: modelList,
+                overrides,
+                deadlines,
+              });
     return {
       id,
       ok: true,

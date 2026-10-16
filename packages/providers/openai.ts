@@ -56,8 +56,22 @@ import {
   type Usage,
 } from "./contract.ts";
 import { type ModelDescriptor, parseDescriptor, type SupportedFeature } from "./descriptor.ts";
-import { ProviderError, type ProviderErrorClass, translateProviderError } from "./errors.ts";
+import { ProviderError, translateProviderError } from "./errors.ts";
 import type { OverrideProvenance } from "./override.ts";
+import {
+  asNumber,
+  asString,
+  createInFlightTable,
+  type DeadlineName,
+  type Guard,
+  guardFor,
+  type InFlight,
+  isRecord,
+  retryAfterFrom,
+  translateFailure,
+  WIRE_DEADLINE_DEFAULTS,
+  type WireDeadlines,
+} from "./wire.ts";
 
 export const OPENAI_COMPATIBLE_PROVIDER_ID = "openai-compatible";
 /** Appended to the configured base URL, which §3.3 makes the user's responsibility: "Base URL + key + model name". The
@@ -73,19 +87,9 @@ export interface OpenAiModelSpec {
   readonly descriptor: unknown;
 }
 
-export interface OpenAiDeadlines {
-  readonly connectMs: number;
-  readonly firstTokenMs: number;
-  readonly idleStreamMs: number;
-}
-
-/** D-074's three adapter-observable provider deadlines, read from `packages/core` rather than copied: a second copy of a
- *  decided number is a number that drifts from the one `crabby config get limits` prints. */
-export const OPENAI_DEADLINE_DEFAULTS: OpenAiDeadlines = {
-  connectMs: LIMITS_DEFAULTS.providerConnectMs,
-  firstTokenMs: LIMITS_DEFAULTS.providerFirstTokenMs,
-  idleStreamMs: LIMITS_DEFAULTS.providerIdleStreamMs,
-};
+/** The deadline grammar is shared (`wire.ts`); the name stays because D-100's record and the preset table use it. */
+export type OpenAiDeadlines = WireDeadlines;
+export const OPENAI_DEADLINE_DEFAULTS: OpenAiDeadlines = WIRE_DEADLINE_DEFAULTS;
 
 export interface OpenAiProviderOptions {
   readonly config: ProviderConfig;
@@ -103,108 +107,6 @@ export interface OpenAiProviderOptions {
    *  so it is the party that can say "declared by override and failed" — and a provenance field on a descriptor would be a
    *  field §3.2's parser rejects (D-126). Composition is the only caller, so this cannot be forged from a document. */
   readonly overrides?: Readonly<Record<string, OverrideProvenance>> | undefined;
-}
-
-type DeadlineName = "connect" | "first-token" | "stall" | "absolute";
-
-/** The classes that mean *the endpoint answered and the answer was not usable* — see `withOverrideNote` for why this is
- *  an allow-list and why `overloaded`, `timeout`, `context-overflow` and `cancelled` are not in it. */
-const CAPABILITY_FAILURE_CLASSES: ReadonlySet<ProviderErrorClass> = new Set([
-  "unsupported-capability",
-  "invalid-response",
-  "content-filter",
-  "billing",
-  "auth",
-]);
-
-interface InFlight {
-  readonly controller: AbortController;
-  /** Set by `cancel(handle)`, and the only way this adapter can tell its own abort from a deadline that tripped: both
-   *  arrive as an aborted signal, but §3.5 gives them different classes and different retry stories. */
-  cancelledByAdapter: boolean;
-}
-
-interface Guard {
-  readonly signal: AbortSignal;
-  /** Which deadline tripped, when one did — as distinct from the caller's own abort, which is a cancellation. */
-  readonly tripped: () => DeadlineName | undefined;
-  readonly connected: () => void;
-  readonly firstToken: () => void;
-  readonly progress: () => void;
-  readonly dispose: () => void;
-}
-
-/** One abort controller per request, armed with the deadlines that only the socket can observe. A timer that fires
- *  records *which* deadline it was before aborting, so the resulting `ProviderError` carries §3.5's distinction instead
- *  of a generic timeout, and a caller's abort is never mistaken for one. */
-function guardFor(
-  ctx: ProviderContext,
-  deadlines: OpenAiDeadlines,
-  mode: "generate" | "stream",
-): Guard {
-  const controller = new AbortController();
-  const phases: Partial<Record<DeadlineName, ReturnType<typeof setTimeout>>> = {};
-  let tripped: DeadlineName | undefined;
-
-  const disarm = (name: DeadlineName): void => {
-    const timer = phases[name];
-    if (timer !== undefined) clearTimeout(timer);
-    delete phases[name];
-  };
-  const arm = (ms: number, name: DeadlineName): void => {
-    disarm(name);
-    phases[name] = setTimeout(() => {
-      tripped = name;
-      controller.abort();
-    }, ms);
-  };
-  const onOuterAbort = (): void => {
-    controller.abort();
-  };
-
-  if (ctx.signal.aborted) controller.abort();
-  else ctx.signal.addEventListener("abort", onOuterAbort, { once: true });
-  arm(deadlines.connectMs, "connect");
-  // §3.1: "Timeouts are enforced by the runtime wrapper". The runtime supplies the absolute number and the loop wraps the
-  // call with it as well; arming it here too means the adapter stops reading a socket the runtime has already given up
-  // on, and the label says which of the two fired.
-  if (ctx.timeoutMs !== undefined) arm(ctx.timeoutMs, "absolute");
-
-  return {
-    signal: controller.signal,
-    tripped: () => tripped,
-    connected: () => {
-      disarm("connect");
-      // A non-streaming answer arrives as one body, so "first token" and "response complete" are the same instant and
-      // arming a first-token deadline would only ever measure the connect deadline twice.
-      if (mode === "stream") arm(deadlines.firstTokenMs, "first-token");
-    },
-    firstToken: () => {
-      disarm("first-token");
-      arm(deadlines.idleStreamMs, "stall");
-    },
-    progress: () => {
-      // Re-armed rather than extended: §3.5's stall is silence *between* deltas, so a stream that keeps talking is a
-      // stream that is not stalling, however long it runs.
-      if (phases.stall !== undefined) arm(deadlines.idleStreamMs, "stall");
-    },
-    dispose: () => {
-      for (const name of Object.keys(phases) as DeadlineName[]) disarm(name);
-      ctx.signal.removeEventListener("abort", onOuterAbort);
-    },
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 /** `finish_reason` → §3.1's four terminal states. The mapping is a table because the family is not perfectly uniform
@@ -459,32 +361,17 @@ export function createOpenAiCompatibleProvider(options: OpenAiProviderOptions): 
   const doFetch = options.fetch ?? globalThis.fetch;
   const endpoint = endpointFor(options.config);
 
-  /** Requests this adapter has in flight, by the runtime's request id, so `cancel(handle)` can reach one. A map rather
-   *  than a flag because §4.2's controlled parallelism means more than one call can be open at once. */
-  const inFlight = new Map<string, InFlight>();
-
-  /** Tie one request's socket to its guard and remember it under the runtime's request id. The propagation lives for the
-   *  *whole* request rather than only for the wait on headers, and that is the difference between a deadline and a hang:
-   *  a stall or an absolute deadline fires while the body is still streaming, and if the guard's abort stopped reaching
-   *  the socket at that point the read would wait forever on a server that has gone quiet. */
+  // Requests this adapter has in flight, by the runtime's request id — the shared table (`wire.ts`), so `cancel(handle)`
+  // reaches the right socket under §4.2's controlled parallelism. The propagation lives for the *whole* request rather
+  // than only for the wait on headers, and that is the difference between a deadline and a hang: a stall or an absolute
+  // deadline fires while the body is still streaming, and if the guard's abort stopped reaching the socket at that point
+  // the read would wait forever on a server that has gone quiet.
+  const flights = createInFlightTable();
   function beginRequest(
     ctx: ProviderContext,
     guard: Guard,
   ): { readonly entry: InFlight; readonly dispose: () => void } {
-    const entry: InFlight = { controller: new AbortController(), cancelledByAdapter: false };
-    inFlight.set(ctx.requestId, entry);
-    const onGuardAbort = (): void => entry.controller.abort();
-    if (guard.signal.aborted) entry.controller.abort();
-    else guard.signal.addEventListener("abort", onGuardAbort, { once: true });
-    return {
-      entry,
-      dispose: () => {
-        guard.signal.removeEventListener("abort", onGuardAbort);
-        // Compared by identity before deleting: a late `dispose` must not remove the entry a *later* request under the
-        // same id just registered, which would leave that one unreachable to `cancel()`.
-        if (inFlight.get(ctx.requestId) === entry) inFlight.delete(ctx.requestId);
-      },
-    };
+    return flights.begin(ctx, guard);
   }
 
   function descriptorFor(modelId: string): ModelDescriptor {
@@ -516,10 +403,8 @@ export function createOpenAiCompatibleProvider(options: OpenAiProviderOptions): 
     }
   }
 
-  /** The shared failure translation: an abort is a cancellation, a tripped deadline names itself, a transport error is
-   *  `overloaded` because §3.5 has no "unreachable" class and a refused connection is the retryable-and-escalating kind
-   *  of failure — D-043's ladder bounds it, and `invalid-response` would put a dead endpoint in the same bucket as a
-   *  malformed body, which the ladder treats differently. */
+  /** The shared failure translation (`wire.ts`), with this adapter's endpoint and §3.8 provenance bound in. The
+   *  parameter shape is the call sites' shape, so a call site reads the same before and after the extraction. */
   function failure(input: {
     ctx: ProviderContext;
     guard: Guard;
@@ -528,99 +413,9 @@ export function createOpenAiCompatibleProvider(options: OpenAiProviderOptions): 
     status?: number | undefined;
     body?: string | undefined;
     retryAfterMs?: number | undefined;
-    /** The request, when the call site has it. §3.8's failure sentence can only be produced by the party that knows both
-     *  halves of the claim — which capability the call used, and which capability the user forced on — so the call sites
-     *  that have the request pass it and the one that does not simply gets no sentence. */
     request?: ProviderRequest | undefined;
   }): ProviderError {
-    if (input.adapterCancelled || input.ctx.signal.aborted) {
-      return translateProviderError({ aborted: true, attempt: input.ctx.attempt });
-    }
-    const tripped = input.guard.tripped();
-    if (tripped !== undefined) {
-      return translateProviderError({ deadline: tripped, attempt: input.ctx.attempt });
-    }
-    if (input.status !== undefined) {
-      return withOverrideNote(
-        translateProviderError({
-          status: input.status,
-          ...(input.body === undefined ? {} : { body: input.body }),
-          ...(input.retryAfterMs === undefined ? {} : { retryAfterMs: input.retryAfterMs }),
-          attempt: input.ctx.attempt,
-        }),
-        input.request,
-      );
-    }
-    const message = input.error instanceof Error ? input.error.message : String(input.error);
-    return new ProviderError(
-      "overloaded",
-      `the endpoint at ${endpoint} could not be reached: ${message}`,
-      { raw: message, attempt: input.ctx.attempt },
-    );
-  }
-
-  /** §3.8: "when a forced-on capability fails, Crabby must report `toolCalling` was declared by override and failed
-   *  rather than fall back silently". Two conditions, and the second is the one that keeps the sentence honest.
-   *
-   *  **Only for a capability the call actually used** — the adapter knows what it sent, and attributing a failure to a
-   *  capability the request never exercised would blame an override for something else entirely.
-   *
-   *  **Only for a non-retryable class.** `overloaded` and `timeout` are the endpoint being busy, which is no evidence at
-   *  all about whether a declared capability works; printing the sentence there would report a broken capability on every
-   *  slow Tuesday, and a sentence that fires often enough to be ignored is worse than none. §3.5's retry table is the
-   *  authority on which classes are transient.
-   *
-   *  The original error's class, `raw` and attempt are carried through, so the ladder's retry decision and the audit
-   *  record are unchanged — this is a message about *why*, added to the same failure rather than a new failure. */
-  function withOverrideNote(
-    error: ProviderError,
-    request: ProviderRequest | undefined,
-  ): ProviderError {
-    if (request === undefined) return error;
-    // An **allow-list**, because the question is not "is this retryable" but "does this class mean the endpoint answered
-    // and the answer was not usable". `overloaded` and `timeout` are the endpoint being busy; `cancelled` is this
-    // process's own doing; `context-overflow` is a ceiling the user may have raised by hand (a *limits* override, not a
-    // capability one) and says nothing about whether the capability works. A deny-list would have to be updated every
-    // time a class was added, and the failure mode of forgetting is blaming an override for an outage.
-    if (!CAPABILITY_FAILURE_CLASSES.has(error.class)) return error;
-    const provenance = options.overrides?.[request.modelId];
-    if (provenance === undefined) return error;
-    for (const feature of featuresUsedBy(request)) {
-      const move = provenance.supports?.[feature];
-      // `to: true` is the forced-on half. A capability the user forced **off** cannot be the reason a request failed,
-      // because nothing was sent that needed it — and §3.8 is explicit that forcing off is never argued about.
-      if (move === undefined || move.to !== true) continue;
-      return new ProviderError(
-        error.class,
-        `${error.message} — \`${feature}\` was declared by override and failed (§3.8: the endpoint reported ${String(
-          move.from,
-        )}, the user declared true, and the call that used it did not succeed); that feeds §3.5's \`unsupported-capability\``,
-        { ...(error.raw === undefined ? {} : { raw: error.raw }), attempt: error.attempt },
-      );
-    }
-    return error;
-  }
-
-  /** What this request exercised, in §3.2's vocabulary, read off the request rather than kept in a list beside the wire
-   *  builder — a capability list that can drift from the code that sends the request is the same second-opinion problem
-   *  as a parallel descriptor. **It covers the capabilities `ProviderRequest` can currently express**, which is tools and
-   *  the system role: the contract's `content` is a string and it has no `responseFormat`, so image input and structured
-   *  output are not expressible yet and this function does not pretend to know about them. When they arrive, this is the
-   *  one place that learns it. */
-  function featuresUsedBy(request: ProviderRequest): readonly SupportedFeature[] {
-    const used: SupportedFeature[] = [];
-    if (request.tools !== undefined && request.tools.length > 0) used.push("toolCalling");
-    if (request.messages.some((message) => message.role === "system")) used.push("systemRole");
-    return used;
-  }
-
-  function retryAfterFrom(response: Response): number | undefined {
-    const header = response.headers.get("retry-after");
-    if (header === null) return undefined;
-    const seconds = Number(header);
-    if (Number.isFinite(seconds)) return Math.max(0, Math.round(seconds * 1000));
-    const date = Date.parse(header);
-    return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+    return translateFailure({ ...input, endpoint, overrides: options.overrides });
   }
 
   /** Both aborts reach this one socket: the runtime's signal and every deadline, through the guard, and an adapter-side
@@ -943,10 +738,7 @@ export function createOpenAiCompatibleProvider(options: OpenAiProviderOptions): 
       // Best-effort by declaration: this closes our side of the socket and stops the task waiting. It cannot stop a
       // remote server generating the tokens it has already been asked for, which is why the descriptor says
       // `best-effort` rather than `supported`.
-      const entry = inFlight.get(handle.requestId);
-      if (entry === undefined) return;
-      entry.cancelledByAdapter = true;
-      entry.controller.abort();
+      flights.cancel(handle.requestId);
     },
   };
 }

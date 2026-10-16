@@ -118,3 +118,26 @@ TUI-র সব কাজ আগেই শেষ (ধাপ ১-এর ৫ ব্
 (message format + tool blocks), `gemini` (streaming + safety metadata) — প্রত্যেকে conformance suite পাস করবে
 (§7: no live APIs; scripted transports)। বর্তমান ভিত্তি পড়া হয়েছে: conformance.ts (৫ area-র case-জেনারেটর),
 contract.ts, fake.ts (reference), openai.ts (D-100), compose.ts-এর ABSENT_FAMILIES (৩টা কমবে; `mock` refused থাকবে)।
+
+## করলাম (M4 slice 1 — তিন পরিবারের adapter + conformance)
+
+**wire.ts:** guardFor/Guard/WireDeadlines/WIRE_DEADLINE_DEFAULTS/createInFlightTable/translateFailure/retryAfterFrom/
+isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.ts এখন এর ওপর দাঁড়িয়ে (43/43 অক্ষত)।
+
+- **anthropic.ts + টেস্ট 13/13:** Messages API — system টপ-লেভেল, max_tokens ডেসক্রিপ্টর থেকে, tool_use/tool_result
+  ব্লক, typed SSE, STOP_REASONS (অজানা→invalid-response), x-api-key কী। ২-ফেল-রহস্যের মূল-কারণ: স্টাবের handle()
+  mode-ভিত্তিক ডিসপ্যাচ (conformance plain-text-ও stream করে) + টাইমার-লাইনে `type` অনুপস্থিত → স্টাব wire-ভিত্তিক
+  (`body.stream===true`) → পাস। **শিক্ষা: স্টাব request যা চেয়েছে সে-ভিত্তিক হোক, টেস্ট-মুড-ভিত্তিক নয়।**
+- **gemini.ts + টেস্ট 12/12:** generateContent/streamGenerateContent?alt=sse — parts grammar, functionResponse-এ tool-এর
+  নাম (proposing-turn থেকে রেজলভ), SAFETY/RECITATION→content-filter, কী x-goog-api-key-তে (?key= কখনো নয়, G1-03)।
+- **ollama.ts + টেস্ট 10/10:** native /api/chat NDJSON, done_reason টেবিল, options.num_predict, tool ফলে tool_name।
+  **ডিজাইন-সংশোধন:** প্রথম খসড়া listModels-এ installed∪declared দেখাত; §7-এর নিজের কেস D-100-এর বাক্য কার্যকর করে —
+  ডেসক্রিপ্টর-হীন নাম = অজানা সীমা = ফেল → `listModels()` ঘোষিত-প্রাইসড সেট; /api/tags স্ক্রিন + pull state
+  (/api/pull, /api/ps) D-133-এর remainder-এ নাম-ধরে রেকর্ড (contract change, এক adapter-এ পঞ্চম মেথড নয়)।
+- **compose.ts:** তিন কাইন্ড এখন রাউট হয় (anthropic/gemini/ollama-র নিজ নিজ কনস্ট্রাক্টর, overrides+deadlines সবার
+  সাথে); ABSENT_FAMILIES-এ শুধু `mock` (§17: task মডেল-ছাড়া completed হতে পারে না)। compose.test এখন পজিটিভ — তিন
+  পরিবারই কম্পোজ হয়।
+- **ডক:** PROVIDERS_AND_TOOLS.md — "remain absent" বাক্য সরে "Implemented in M4 (D-133)" প্যারাগ্রাফ এসেছে (তিন
+  পরিবারের wire-সার + /api/tags non-goal + pull-state remainder)।
+- **গেট:** providers 145/145 (openai 43 + anthropic 13 + gemini 12 + ollama 10 + compose/fake/conformance বাকিটা),
+  tsc শূন্য, biome শূন্য, parity ✔, docs:check ✔ (133 accepted)। ফুল sweep কমিটের আগে।

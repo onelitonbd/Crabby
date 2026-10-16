@@ -120,9 +120,24 @@ part no endpoint in this family serves: `GET /models` returns ids and nothing el
 what the conformance suite refuses — a model `listModels()` names whose limits are unknowable. What the adapter does with
 a call is §3.1's contract and §3.5's taxonomy, and what it does with a configuration is the "Custom-provider
 requirements" list below, implemented once in `packages/providers/config.ts` and called by the fake too, so the reference
-adapter and the product adapter cannot drift apart on the rules a user's endpoint is checked against. `ollama`'s native
-API, `anthropic`'s message format and `gemini`'s streaming metadata remain absent for the reason this section gives: each
-differs genuinely, and none of them has a caller in this build yet.
+adapter and the product adapter cannot drift apart on the rules a user's endpoint is checked against.
+
+**Implemented in M4: `anthropic`, `gemini`, `ollama` (D-133).** The other three families now compose, each because it
+differs genuinely and each passing §7's conformance suite over a scripted loopback server — no live key anywhere, per
+§7's own rule. `anthropic` (Messages API): `system` hoisted to a top-level field, `max_tokens` defaulted from the
+descriptor the user already declared, tool calls as `tool_use` blocks with results as `tool_result` in a user turn,
+typed SSE events, a `stop_reason` table whose unknown values are `invalid-response` rather than a guessed terminal, and
+the key on `x-api-key`, never a URL. `gemini` (`generateContent`): `parts` grammar with `user`/`model` roles, a tool
+result as a `functionResponse` carrying the tool's **name** resolved from the proposing turn, `SAFETY`/`RECITATION` →
+`content-filter`, and the key on `x-goog-api-key` even though the quickstart puts `?key=` on the URL — a credential in a
+URL is a credential in access logs (G1-03). `ollama` (native `/api/chat`): NDJSON streaming, `done_reason` table,
+`num_predict` from the descriptor, a `tool_name` on each result. **The native listing (`/api/tags`) is a named
+non-goal**: §7's suite asserts D-100's rule — a model `listModels()` names with no descriptor has unknowable limits —
+and `/api/tags` names models without pricing them, so `listModels()` is the declared, priced set; surfacing the
+machine's installed names is a contract change (a discovery row on `Provider` or a screen beside the descriptor store),
+recorded in D-133's remainder, as is pull state (`/api/pull`, `/api/ps`), for the reason a fifth method bolted onto one
+adapter is a second opinion about what the boundary is. `mock` stays refused at composition (§17): a task must not
+reach `completed` with no model behind it.
 
 Two distinct things, deliberately separated:
 

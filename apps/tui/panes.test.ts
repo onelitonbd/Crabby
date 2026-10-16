@@ -67,9 +67,12 @@ function context(overrides: Partial<PaneContext> = {}): PaneContext {
 describe("the tasks pane", () => {
   it("prints three lines per card, clipped by the frame rather than wrapped", () => {
     const body = tasksPane(context(), TASKS);
-    // T6-02: three lines per card. A card that grows is how a task list becomes a wall of text on a phone.
-    assert.equal(body.filter((line) => line.startsWith("> ")).length, 3);
+    // T6-02: three lines per card. A card that grows is how a task list becomes a wall of text on a phone. The `>` is
+    // T6's selection cursor — exactly one, on the card Enter would open — so the count of marked cards is one, not one
+    // per card; the card count is read off the state lines each card prints.
+    assert.equal(body.filter((line) => line.startsWith("> ")).length, 1);
     assert.equal(body.length, 9);
+    assert.ok(body[1]?.startsWith("  "), "the unselected card has no cursor");
   });
 
   it("says progress is measured, and says what it was measured from", () => {

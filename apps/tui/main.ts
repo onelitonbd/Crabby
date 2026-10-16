@@ -14,8 +14,17 @@
 // **capped** repaint (P-011's 4 fps). The repaint cap lives in `FrameRenderer`, not here, because the pane that streams
 // fastest is the pane that would forget it.
 
-import { EXIT, type ExitCode, type JobRow, type JobRunRecord } from "@crabby/api-contracts";
+import {
+  type Event,
+  EXIT,
+  type ExitCode,
+  type JobRow,
+  type JobRunRecord,
+  type TaskCheckpoint,
+  type TaskRecord,
+} from "@crabby/api-contracts";
 import { loadConfig } from "@crabby/core";
+import { GatewayFailure } from "@crabby/gateway";
 import { dataLayout, terminalFacts } from "@crabby/platform";
 import { SUPPORTED_FEATURES } from "@crabby/providers";
 import { findUnsafeShapes, writeDiagnosticsArtifact } from "../cli/commands/diagnostics.ts";
@@ -80,6 +89,12 @@ import {
 import { FrameRenderer, type Terminal } from "./render.ts";
 import { followEvents, type StreamHandle } from "./stream.ts";
 import {
+  emptyTaskDetail,
+  readEventItems,
+  type TaskDetailState,
+  taskDetailLines,
+} from "./task-detail.ts";
+import {
   applyEvent,
   commitStreaming,
   emptyTranscript,
@@ -137,6 +152,9 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   let pane: Pane = "chat";
   let help = false;
   let tasks: readonly TaskSummary[] = [];
+  /** T6's selection. The hint strip has said `j/k move` since the frame slice; the index it moves is wired now that
+   *  Enter has somewhere to go (T7's detail). */
+  let taskIndex = 0;
   let approvals: readonly ApprovalSummary[] = [];
   let jobs: readonly JobRow[] = [];
   /** The jobs pane's modes (T17): the detail T17-04 draws, T17-07's backlog prompt and its `each` walk, T17-06's edit
@@ -157,6 +175,10 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
    *  applied to a form the way it is applied to a modal). */
   let modelEdit: ModelEditForm | undefined;
   let modelResetPending = false;
+  /** T7's detail: open over one task, fed by three reads, live-tailed while visible (T7-13 — on when the pane shows,
+   *  off otherwise, because battery is a real constraint on a phone). */
+  let taskDetail: TaskDetailState | undefined;
+  let taskDetailScroll = 0;
   /** T15's three views. `decisions` is T15-04's data — every state of `GET /approvals`, because the view's subject is
    *  every prompt *and its answer*, `expired` included. */
   let logsView: LogsView = "log";
@@ -196,6 +218,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     if (client === undefined) return;
     try {
       tasks = readTaskItems((await client.listTasks({ limit: 20 })).body);
+      if (taskIndex >= tasks.length) taskIndex = Math.max(0, tasks.length - 1);
     } catch (error) {
       // T1-10's rule again: the reason in words, never a spinner. A failed poll leaves the last good list on screen with a
       // line saying it is stale, because a stale list labelled stale is more useful than an empty pane.
@@ -238,6 +261,52 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       decisions = rows;
     } catch (error) {
       message = `approval decisions failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  /** T7's three reads, into one state. The checkpoint read may answer 404 *with* D-065's verdict in `details` — that
+   *  is an answer ("no saved state"), not a failure, and it becomes the panel's note rather than an error line. */
+  const readTaskDetail = async (id: string): Promise<void> => {
+    if (client?.getTask === undefined) return;
+    try {
+      const record = (await client.getTask(id)).body as TaskRecord;
+      let checkpoint: TaskCheckpoint | undefined;
+      let checkpointNote: string | undefined;
+      if (client.taskCheckpoint !== undefined) {
+        try {
+          checkpoint = (await client.taskCheckpoint(id)).body as TaskCheckpoint;
+        } catch (error) {
+          // A 404 with D-065's verdict in `details` is an answer — "no saved state" — not a failure of the read; the
+          // Gateway says what the absence means (D-092's discipline) and the panel repeats it rather than inventing one.
+          if (error instanceof GatewayFailure && error.status === 404) {
+            const details = (error.envelope.error.details ?? {}) as {
+              readonly verdict?: string;
+              readonly reason?: string;
+            };
+            checkpointNote =
+              details.verdict !== undefined
+                ? `no boundary (${details.verdict}${details.reason === undefined ? "" : ` — ${details.reason}`})`
+                : "no boundary was committed — a resume would start from the beginning of the conversation";
+          } else {
+            checkpointNote = `checkpoint read failed: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        }
+      }
+      let events: readonly Event[] = [];
+      if (client.taskEvents !== undefined) {
+        events = readEventItems((await client.taskEvents(id)).body);
+      }
+      const pending = approvals
+        .filter((approval) => approval.request.taskId === id)
+        .map((approval) => ({ id: approval.id, summary: approval.request.summary }));
+      const previous = taskDetail;
+      taskDetail = {
+        ...emptyTaskDetail(record, checkpoint, checkpointNote),
+        events,
+        approvalsPending: pending,
+        tail: previous?.tail ?? true,
+      };
+    } catch (error) {
+      message = `task detail failed: ${error instanceof Error ? error.message : String(error)}`;
     }
   };
   const readModels = (): void => {
@@ -393,6 +462,9 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       );
     }
     const descriptor = descriptorFor(pane);
+    if (pane === "tasks" && taskDetail !== undefined) {
+      return taskDetailLines(taskDetail, columns, rows - CHROME);
+    }
     if (pane === "approvals") {
       return approvalsPane(context(), approvals);
     }
@@ -422,7 +494,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       return body;
     }
     return descriptor.built === true
-      ? tasksPane(context(), tasks)
+      ? tasksPane(context(), tasks, taskIndex)
       : plannedPane(
           pane,
           descriptor.milestone ?? "M3",
@@ -440,6 +512,22 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       rows,
     );
     renderer.draw(lines, now());
+  };
+
+  /** The uncapped repaint, for **key-driven** frames. P-011's cap exists so a streaming answer cannot repaint the world
+   *  at token speed; a keypress is already at human speed, and a key that draws nothing until the next poll is a phone
+   *  that feels dead. The frozen-clock tests are what found this: a cap driven by an injected `now` swallowed every
+   *  frame after the first, which is the cap protecting the user into the opposite failure. */
+  const drawNow = (): void => {
+    const descriptor = descriptorFor(pane);
+    const lines0 = [...body()];
+    if (message !== undefined) lines0.push(`! ${message}`);
+    const lines = frameLines(
+      paneState(context(), descriptor, lines0, statusFrom(context(), tasks, jobs), help),
+      columns,
+      rows,
+    );
+    renderer.drawNow(lines);
   };
 
   // The stream, opened once and kept. **It is not opened per pane switch**: a socket per switch is a socket per keypress,
@@ -500,7 +588,10 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         quit = true;
         return;
       }
-      draw();
+      // The key echo is uncapped (drawNow): P-011 throttles streaming repaints, not a person's keystrokes — and with the
+      // tests' frozen clock a capped path here swallowed every frame after the first, which is how the Tab and typing
+      // tests exposed it.
+      drawNow();
     }
   };
 
@@ -597,6 +688,69 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     if (key.kind === "char" && key.char === "q" && !help) {
       quit = true;
       return true;
+    }
+    // T7's detail keys, over the tasks pane. Esc/q back, c cancels through the same route the tasks pane uses, r
+    // resumes through `POST /tasks/{id}/resume`'s default (no body continues on the model the run was using), j/k page
+    // the failure history (T7-09), t toggles the live tail (T7-13).
+    if (pane === "tasks" && taskDetail !== undefined) {
+      const id = taskDetail.record.id;
+      if (key.kind === "escape" || (key.kind === "char" && key.char === "q")) {
+        taskDetail = undefined;
+        taskDetailScroll = 0;
+        return false;
+      }
+      if (key.kind === "char" && key.char === "t") {
+        taskDetail = { ...taskDetail, tail: !taskDetail.tail };
+        return false;
+      }
+      if (key.kind === "char" && key.char === "c") {
+        message = "cancelling — press Ctrl-C to confirm (T7-12: destructive asks first)";
+        return false;
+      }
+      if (key.kind === "char" && key.char === "r") {
+        if (client?.resumeTask === undefined) return false;
+        void client
+          .resumeTask(id)
+          .then((response) => {
+            const body = response.body as { note?: string } | null;
+            message = body?.note ?? "the resume was asked for";
+            return readTaskDetail(id).then(draw);
+          })
+          .catch(
+            (error: unknown) =>
+              (message = `resume refused: ${error instanceof Error ? error.message : String(error)}`),
+          );
+        return false;
+      }
+      if (key.kind === "char" && (key.char === "j" || key.char === "k")) {
+        taskDetailScroll = Math.max(0, taskDetailScroll + (key.char === "j" ? 5 : -5));
+        return false;
+      }
+      return false;
+    }
+    if (pane === "tasks" && taskDetail === undefined) {
+      if (
+        key.kind === "up" ||
+        key.kind === "down" ||
+        (key.kind === "char" && (key.char === "j" || key.char === "k"))
+      ) {
+        const down = key.kind === "down" || (key.kind === "char" && key.char === "j");
+        taskIndex = down ? Math.min(tasks.length - 1, taskIndex + 1) : Math.max(0, taskIndex - 1);
+        return false;
+      }
+    }
+    // The tasks pane: Enter opens T7's detail over the selected task (T7-13's tail turns on with it).
+    if (
+      pane === "tasks" &&
+      key.kind === "enter" &&
+      tasks.length > 0 &&
+      client?.getTask !== undefined
+    ) {
+      const selected = tasks[Math.min(taskIndex, tasks.length - 1)];
+      if (selected !== undefined) {
+        void readTaskDetail(selected.id).then(draw);
+      }
+      return false;
     }
     // The jobs pane's keyboard (T17). A mode that is open owns the keys the way T1-07's modal does; the row keys act on
     // the selected job otherwise. Every act goes through the same routes `crabby job` uses — a keypress is a request to
@@ -1023,11 +1177,11 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
           (sent) => {
             composer = emptyComposer();
             message = sent;
-            draw();
+            drawNow();
           },
           (error: unknown) => {
             message = `send failed: ${error instanceof Error ? error.message : String(error)}`;
-            draw();
+            drawNow();
           },
         );
       }
@@ -1070,6 +1224,11 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         readModels();
       })
       .then(() => (pane === "logs" ? readDecisions() : Promise.resolve()))
+      .then(() =>
+        pane === "tasks" && taskDetail !== undefined && taskDetail.tail
+          ? readTaskDetail(taskDetail.record.id)
+          : Promise.resolve(),
+      )
       .then(draw);
   }, POLL_MS);
   const shutdown = (): void => {

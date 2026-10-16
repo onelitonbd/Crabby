@@ -51,3 +51,24 @@ function positive(value: number | undefined): number | undefined {
 export function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
 }
+
+/** Word-wrapped to a width, whole words kept. The pane-shaped sibling of `clip`: a notice that *must* be read whole
+ *  (a rule, a state word, a required disclosure) wraps onto the next drawn line instead of losing its tail to the
+ *  ellipsis, because T17-03's protection of the state word is the inventory's own precedent for never clipping the
+ *  point away. Lives beside `clip` for the same reason `clip` does — two interfaces, one 40-column design case. */
+export function wrapText(text: string, width: number, indent = "  "): readonly string[] {
+  const usable = Math.max(8, width - indent.length);
+  if (text.length <= usable) return [`${indent}${text}`];
+  const lines: string[] = [];
+  let current = "";
+  for (const word of text.split(" ")) {
+    if (current.length === 0) current = word;
+    else if (`${current} ${word}`.length <= usable) current = `${current} ${word}`;
+    else {
+      lines.push(`${indent}${current}`);
+      current = word;
+    }
+  }
+  if (current.length > 0) lines.push(`${indent}${current}`);
+  return lines;
+}

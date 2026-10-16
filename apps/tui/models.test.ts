@@ -6,6 +6,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { ModelView } from "./models.ts";
 import {
   capabilityMatrix,
   choiceOf,
@@ -25,7 +26,6 @@ import {
   typedInt,
   unparsableFields,
 } from "./models.ts";
-import type { ModelView } from "./models.ts";
 import type { PaneContext } from "./panes.ts";
 
 const descriptor = (over: Record<string, unknown> = {}): Record<string, unknown> => ({

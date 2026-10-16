@@ -48,6 +48,15 @@ export interface TaskReader {
     readonly limit?: number;
     readonly state?: string;
   }): Promise<Response<unknown>>;
+  /** T7's detail: the record, the run's own event tail and D-065's checkpoint view — the three reads the pane is a
+   *  projection of. All three are client methods that already exist; naming them here keeps the pane's dependency the
+   *  dependency's shape (D-131's rule). */
+  getTask?(id: string): Promise<Response<unknown>>;
+  taskEvents?(id: string, cursor?: number): Promise<Response<unknown>>;
+  taskCheckpoint?(id: string): Promise<Response<unknown>>;
+  /** T7-12's resume, over the same route `crabby task resume` uses. The pin body is the pane's business only when the
+   *  person names one; the default (no body) continues on the model the run was using. */
+  resumeTask?(id: string, body?: { readonly model?: string }): Promise<Response<unknown>>;
   /** T6-04: cancelling needs no modal in the TUI, the same as Web W5-03. It goes through the route the CLI's
    *  `task cancel` uses, so D-090's record is written by the Gateway either way — a keypress is not a second implementation
    *  of a cancellation, it is a request for one. */
@@ -164,7 +173,13 @@ const CARD_LINES = 3;
 
 /** The tasks pane's body. T6-01's filter row is a later slice; what is here is the list itself and the empty state, because
  *  an empty state is the first thing a new user sees and T6-06 makes it a teaching moment rather than a blank row. */
-export function tasksPane(context: PaneContext, tasks: readonly TaskSummary[]): readonly string[] {
+export function tasksPane(
+  context: PaneContext,
+  tasks: readonly TaskSummary[],
+  /** T6's cursor. Optional so existing callers keep compiling; the `>` marker is how a phone knows which card Enter
+   *  will open (T7's detail), and a marker that moved invisibly would be worse than none. */
+  selected = 0,
+): readonly string[] {
   if (context.offline) {
     // T1-10: the exact restart command, never a spinner pretending freshness.
     return [
@@ -182,8 +197,10 @@ export function tasksPane(context: PaneContext, tasks: readonly TaskSummary[]): 
   const height = Math.max(1, context.rows - 3);
   const shown = tasks.slice(0, Math.max(1, Math.floor(height / CARD_LINES)));
   const lines: string[] = [];
-  for (const task of shown) {
-    lines.push(`> ${task.objective}`);
+  for (let index = 0; index < shown.length; index += 1) {
+    const task = shown[index] as TaskSummary;
+    const cursor = index === selected ? ">" : " ";
+    lines.push(`${cursor} ${task.objective}`);
     // T6-03: measured and estimated progress are different claims, so the fallback text says which one it is rather than
     // drawing a bar that looks like a measurement.
     const progress =
@@ -195,6 +212,7 @@ export function tasksPane(context: PaneContext, tasks: readonly TaskSummary[]): 
         ? ""
         : ` · ${task.pendingApprovals} approval(s) waiting`;
     lines.push(`  ${task.state} · ${progress}${approvals}`);
+    // T2-09's rule lives here too: the id is on its own line, so long-press selection lands on it whole.
     lines.push(`  ${task.model ?? "the install default"} · ${task.id}`);
   }
   if (shown.length < tasks.length) {

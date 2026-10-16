@@ -13,6 +13,7 @@
 // `crabby model list` composes with (D-125's "composes in-process" rule), so this pane and the CLI cannot hold two
 // opinions about what a model's effective descriptor is.
 
+import { wrapText } from "@crabby/platform";
 import {
   type ApplyResult,
   applyOverride,
@@ -27,6 +28,8 @@ import type { OverrideAnswers } from "../cli/commands/model-edit.ts";
 import { type ComposerState, composerView, emptyComposer } from "./composer.ts";
 import type { PaneContext } from "./panes.ts";
 import { clip } from "./render.ts";
+
+export { wrapText };
 
 /** One model as the pane reads it: what was reported, what the user wrote, and what the two compose to — with the
  *  problems kept in words rather than swallowed, the §3.2 rule that a descriptor that does not parse *disables* rather
@@ -101,28 +104,6 @@ export function modelViewsFrom(
   return views;
 }
 
-/** One notice rendered as whole clauses rather than one clipped line. T11-09 sizes its notice at "one line" and the
- *  40-column design case cannot carry 74 characters of it: a clipped `…cannot widen its` is a rule half-stated, and
- *  T17-03's protection of the state word is the inventory's own precedent for never clipping the point away. At the
- *  design case the notice wraps to a second drawn line; wide terminals see the one line the row describes. */
-export function wrapNotice(text: string, columns: number, indent = "  "): readonly string[] {
-  const width = Math.max(8, columns - indent.length);
-  if (text.length <= width) return [`${indent}${text}`];
-  const words = text.split(" ");
-  const lines: string[] = [];
-  let current = "";
-  for (const word of words) {
-    if (current.length === 0) current = word;
-    else if (`${current} ${word}`.length <= width) current = `${current} ${word}`;
-    else {
-      lines.push(`${indent}${current}`);
-      current = word;
-    }
-  }
-  if (current.length > 0) lines.push(`${indent}${current}`);
-  return lines;
-}
-
 /** T11-01's row: `provider/model` + context at the design case, "the rest on the detail line" — output cap and cost
  *  class. A descriptor that does not parse prints its reason instead of a line of numbers (§3.2: disabled, not broken),
  *  and an override that does not parse is named on the row, because the CLI's `model edit` says why and a silent
@@ -135,7 +116,7 @@ export function modelLines(view: ModelView, selected: boolean, columns: number):
     // `…does not parse` tells a phone less than the same words spread over a second line.
     return [
       `${cursor}${clip(head, columns - 2)}`,
-      ...wrapNotice(
+      ...wrapText(
         `disabled, §3.2 — the descriptor does not parse: ${view.reportedProblem ?? "unknown problem"}`,
         columns,
       ),
@@ -232,9 +213,9 @@ export function modelsPane(
   if (view !== undefined) {
     block.push("  reported → effective (T11-02):");
     block.push(...capabilityMatrix(view, context.columns));
-    block.push(...forcedOnLines(view).flatMap((line) => wrapNotice(line, context.columns)));
-    block.push(...wrapNotice(t3GateLine(), context.columns));
-    block.push(...wrapNotice(probeGapLine(view), context.columns));
+    block.push(...forcedOnLines(view).flatMap((line) => wrapText(line, context.columns)));
+    block.push(...wrapText(t3GateLine(), context.columns));
+    block.push(...wrapText(probeGapLine(view), context.columns));
   }
   const height = Math.max(1, context.rows - 3);
   const room = Math.max(0, height - block.length - 1);
@@ -338,8 +319,8 @@ export function formLines(form: ModelEditForm, columns: number): readonly string
     index += 1;
   }
   const forced = forcedOnLines(form.view);
-  lines.push(...(forced.length === 0 ? [] : forced.flatMap((line) => wrapNotice(line, columns))));
-  lines.push(...wrapNotice(t3GateLine(), columns));
+  lines.push(...(forced.length === 0 ? [] : forced.flatMap((line) => wrapText(line, columns))));
+  lines.push(...wrapText(t3GateLine(), columns));
   return lines;
 }
 

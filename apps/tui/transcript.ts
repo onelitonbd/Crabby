@@ -68,6 +68,12 @@ export function emptyTranscript(columns: number, tier: CharsetTier): TranscriptS
   return { rows: [], held: 0, tier, columns };
 }
 
+/** One system line added from *outside* the event fold — T16-07's switch note is the user's own act, not an event the
+ *  Gateway streamed, but it belongs in the same subtle, in-order channel the fold uses (T4-10). Pure, like the fold. */
+export function addSystem(state: TranscriptState, text: string): TranscriptState {
+  return { ...state, rows: [...state.rows, { kind: "system", text }] };
+}
+
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }

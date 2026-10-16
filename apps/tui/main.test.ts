@@ -58,6 +58,7 @@ interface Run {
   readonly stdin: FakeStdin;
   readonly created: { objective: string; key: string }[];
   readonly cancelled: string[];
+  readonly patched: { id: string; title: string | undefined; ifMatch: number }[];
   readonly finish: () => Promise<void>;
   /** Resolves once the app has written its first frame. Every test waits for this rather than a tick, because `runTui`
    *  awaits `connect` and the first read before it attaches its `end` listener — so a test that ends the stream too early
@@ -68,6 +69,12 @@ interface Run {
 function harness(
   options: {
     readonly tasks?: readonly TaskSummary[];
+    readonly sessions?: readonly {
+      readonly id: string;
+      readonly titleShown: string;
+      readonly stateWord: string;
+      readonly revision: number;
+    }[];
     readonly columns?: number;
     readonly rows?: number;
   } = {},
@@ -88,6 +95,7 @@ function harness(
   const stdin = new FakeStdin();
   const created: { objective: string; key: string }[] = [];
   const cancelled: string[] = [];
+  const patched: { id: string; title: string | undefined; ifMatch: number }[] = [];
   const tasks = options.tasks ?? [];
   const client: TaskReader = {
     listTasks: async () => ({ ok: true, status: 200, body: { items: tasks } }),
@@ -99,6 +107,16 @@ function harness(
       created.push({ objective: body.objective, key });
       return { ok: true, status: 201, body: { id: "tsk_sent" } };
     },
+    // T16's reads and writes, as envelopes like every other fake here.
+    sessions: async () => ({ ok: true, status: 200, body: { items: options.sessions ?? [] } }),
+    createSession: async () => ({ ok: true, status: 201, body: { session: {}, note: "created" } }),
+    patchSession: async (id: string, body: { readonly title?: string }, ifMatch: number) => {
+      patched.push({ id, title: body.title, ifMatch });
+      return { ok: true, status: 200, body: { session: {}, note: "renamed" } };
+    },
+    sessionContext: async () => ({ ok: true, status: 200, body: {} }),
+    compactSession: async () => ({ ok: true, status: 200, body: { note: "compacted" } }),
+    pinMessages: async () => ({ ok: true, status: 200, body: { note: "pinned" } }),
   };
   const code = runTui({
     dataDir: dir,
@@ -118,6 +136,7 @@ function harness(
     stdin,
     created,
     cancelled,
+    patched,
     finish: async () => {
       stdin.end();
       await code;
@@ -228,6 +247,60 @@ describe("crabby tui, driven by bytes", () => {
     run.stdin.type("1");
     await new Promise((resolve) => setImmediate(resolve));
     assert.match(plain(run.out()), />cha /, "and a number jumps");
+    await run.finish();
+  });
+
+  it("`s` opens the session switcher, Enter switches, `t` renames through PATCH (T16)", async () => {
+    const run = harness({
+      sessions: [
+        { id: "ses_a", titleShown: "first conversation", stateWord: "idle", revision: 2 },
+        { id: "ses_b", titleShown: "second conversation", stateWord: "running", revision: 5 },
+      ],
+    });
+    await run.ready();
+    run.stdin.type("\t"); // to tasks, where `s` is the switcher and not a literal (T16-01)
+    await new Promise((resolve) => setImmediate(resolve));
+    run.stdin.type("s");
+    // The overlay draws open, then the list read lands and draws again — the same two-frame pattern the tasks poll has.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.match(
+      plain(run.out()),
+      /Enter switch/,
+      "the overlay is up, with its own hint line (T16-04)",
+    );
+    assert.match(
+      plain(run.out()),
+      /ses_a/,
+      "and the highlighted session's id is on its own line (T16-08)",
+    );
+    run.stdin.type("j"); // down to the running one
+    run.stdin.type("\r"); // switch
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    run.stdin.type("1"); // to chat, where the switch note went
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(
+      plain(run.out()),
+      /session ses_b/,
+      "the composer now points at the switched conversation",
+    );
+    assert.match(
+      plain(run.out()),
+      /now in second conversation/,
+      "T16-07: switching away from a running task says so, in words (clipped at 40 columns)",
+    );
+    run.stdin.type("\t"); // tasks
+    run.stdin.type("s"); // overlay again
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    run.stdin.type("t"); // rename the highlighted row
+    await new Promise((resolve) => setImmediate(resolve));
+    run.stdin.type("renamed");
+    run.stdin.type("\r");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(
+      run.patched,
+      [{ id: "ses_b", title: "renamed", ifMatch: 5 }],
+      "T16-05: one write path, carrying the row's revision as If-Match",
+    );
     await run.finish();
   });
 

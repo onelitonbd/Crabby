@@ -77,6 +77,23 @@ export interface TaskReader {
     body: { readonly decision: "approve" | "deny"; readonly scope?: string },
     idempotencyKey?: string,
   ): Promise<Response<unknown>>;
+  /** T16's switcher reads the session list, starts a conversation and renames one — all through the client's own
+   *  methods, because a second session reader in the TUI would be a second opinion about what a session row is. */
+  sessions?(options?: { readonly origin?: string }): Promise<Response<unknown>>;
+  createSession?(body?: { readonly title?: string }): Promise<Response<unknown>>;
+  patchSession?(
+    id: string,
+    body: { readonly title?: string },
+    ifMatch: number,
+  ): Promise<Response<unknown>>;
+  /** T8's context view over `GET /sessions/{id}/context`, and its one write — the force compact T8-07 shares with
+   *  Web W7-07 — plus the pin write T8-04 names. */
+  sessionContext?(id: string): Promise<Response<unknown>>;
+  compactSession?(id: string): Promise<Response<unknown>>;
+  pinMessages?(
+    id: string,
+    range: { readonly from: number; readonly through: number },
+  ): Promise<Response<unknown>>;
   listJobs?(options?: { readonly state?: string }): Promise<Response<unknown>>;
   /** `GET /jobs/{id}` — T17-04's detail reads the row, the bounded run history and the unacknowledged backlog rows from
    *  one answer, so a user deciding what to do about missed runs is not made to ask twice. */

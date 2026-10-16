@@ -20,6 +20,8 @@ import {
   type ExitCode,
   type JobRow,
   type JobRunRecord,
+  type SessionContextBody,
+  type SessionRow,
   type TaskCheckpoint,
   type TaskRecord,
 } from "@crabby/api-contracts";
@@ -31,6 +33,7 @@ import { findUnsafeShapes, writeDiagnosticsArtifact } from "../cli/commands/diag
 import { nextOverride, writeOverrideRecord } from "../cli/commands/model-edit.ts";
 import { connect } from "../cli/connect.ts";
 import { actionFor, applyAction, type ComposerState, emptyComposer } from "./composer.ts";
+import { contextLines } from "./context.ts";
 import {
   FRAME_CHROME_ROWS as CHROME,
   frameLines,
@@ -87,6 +90,7 @@ import {
   walkPromptLines,
 } from "./panes.ts";
 import { FrameRenderer, type Terminal } from "./render.ts";
+import { switcherLines, switchNote } from "./sessions.ts";
 import { followEvents, type StreamHandle } from "./stream.ts";
 import {
   emptyTaskDetail,
@@ -95,6 +99,7 @@ import {
   taskDetailLines,
 } from "./task-detail.ts";
 import {
+  addSystem,
   applyEvent,
   commitStreaming,
   emptyTranscript,
@@ -179,6 +184,19 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
    *  off otherwise, because battery is a real constraint on a phone). */
   let taskDetail: TaskDetailState | undefined;
   let taskDetailScroll = 0;
+  /** T16's switcher overlay. The rows are the Gateway's own (`SessionRow`), the selection is overlay-local, and the
+   *  rename/delete flows hold their words here rather than in a second dialog — the overlay is the dialog. */
+  let sessionOverlay = false;
+  let sessionRows: readonly SessionRow[] = [];
+  let sessionIndex = 0;
+  let sessionDeleteNote: string | undefined;
+  let renameFor: string | undefined;
+  let renameBuffer = "";
+  /** T8's context view over the current conversation, with the force-compact confirm and the pin input it owns. */
+  let contextOpen = false;
+  let contextBody: SessionContextBody | undefined;
+  let contextConfirm = false;
+  let pinBuffer = "";
   /** T15's three views. `decisions` is T15-04's data — every state of `GET /approvals`, because the view's subject is
    *  every prompt *and its answer*, `expired` included. */
   let logsView: LogsView = "log";
@@ -307,6 +325,31 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       };
     } catch (error) {
       message = `task detail failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  const readSessions = async (): Promise<void> => {
+    if (client?.sessions === undefined) return;
+    try {
+      const body = (await client.sessions()).body as { readonly items?: readonly SessionRow[] };
+      sessionRows = body.items ?? [];
+      if (sessionIndex >= sessionRows.length) sessionIndex = Math.max(0, sessionRows.length - 1);
+    } catch (error) {
+      message = `sessions read failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  const readContext = async (): Promise<void> => {
+    const id = lastSession(transcript);
+    if (id === undefined) {
+      message =
+        "no conversation to show context of — send one message first, or switch sessions with s";
+      return;
+    }
+    if (client?.sessionContext === undefined) return;
+    try {
+      contextBody = (await client.sessionContext(id)).body as SessionContextBody;
+    } catch (error) {
+      contextOpen = false;
+      message = `context read failed: ${error instanceof Error ? error.message : String(error)}`;
     }
   };
   const readModels = (): void => {
@@ -448,6 +491,17 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         rows: rows - CHROME,
         conflict: approvalConflict,
       });
+    }
+    if (sessionOverlay) {
+      return switcherLines(sessionRows, lastSession(transcript), sessionIndex, columns, {
+        now: now(),
+        deleteNote: sessionDeleteNote,
+        renameFor,
+        renameBuffer,
+      });
+    }
+    if (contextOpen && contextBody !== undefined) {
+      return contextLines(contextBody, columns, contextConfirm);
     }
     if (pane === "chat") {
       return chatPane(
@@ -657,6 +711,196 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       }
       return false;
     }
+    // T16's switcher keys. The overlay owns its letters (T16-04 names them), `d` says the T3 gap rather than faking a
+    // confirm, and `t`'s rename is typed inline with the row's own revision as the If-Match (T16-05's one write path).
+    if (sessionOverlay) {
+      if (key.kind === "escape") {
+        sessionOverlay = false;
+        sessionDeleteNote = undefined;
+        renameFor = undefined;
+        return false;
+      }
+      if (renameFor !== undefined) {
+        if (key.kind === "char") {
+          renameBuffer = renameBuffer + key.char;
+          return false;
+        }
+        if (key.kind === "backspace") {
+          renameBuffer = renameBuffer.slice(0, -1);
+          return false;
+        }
+        if (key.kind === "enter") {
+          const row = sessionRows[sessionIndex];
+          const title = renameBuffer.trim();
+          if (client?.patchSession === undefined || row === undefined) return false;
+          if (title.length === 0) {
+            renameFor = undefined;
+            return false;
+          }
+          void client
+            .patchSession(renameFor, { title }, row.revision)
+            .then(() => readSessions().then(drawNow))
+            .then(() => {
+              renameFor = undefined;
+              renameBuffer = "";
+              message = "renamed — the status line reads the same row, so it cannot disagree";
+            })
+            .catch((error: unknown) => {
+              renameFor = undefined;
+              renameBuffer = "";
+              message = `rename refused: ${error instanceof Error ? error.message : String(error)}`;
+              draw();
+            });
+          return false;
+        }
+        return false;
+      }
+      if (
+        key.kind === "up" ||
+        key.kind === "down" ||
+        (key.kind === "char" && (key.char === "j" || key.char === "k"))
+      ) {
+        const down = key.kind === "down" || (key.kind === "char" && key.char === "j");
+        sessionIndex = down
+          ? Math.min(sessionRows.length - 1, sessionIndex + 1)
+          : Math.max(0, sessionIndex - 1);
+        return false;
+      }
+      if (key.kind === "char" && key.char === "n") {
+        if (client?.createSession === undefined) return false;
+        void client
+          .createSession({})
+          .then(() => readSessions().then(drawNow))
+          .catch((error: unknown) => {
+            message = `create refused: ${error instanceof Error ? error.message : String(error)}`;
+            draw();
+          });
+        return false;
+      }
+      if (key.kind === "char" && key.char === "t") {
+        const row = sessionRows[sessionIndex];
+        if (row !== undefined) {
+          renameFor = row.id;
+          renameBuffer = "";
+        }
+        return false;
+      }
+      if (key.kind === "char" && key.char === "d") {
+        // No `DELETE /sessions/{id}` exists in this build, and that is a decision the Gateway records (T3 keeps the one
+        // confirmed path). The overlay says so instead of drawing a confirmation a route could not honour.
+        sessionDeleteNote =
+          "deleting waits for `crabby history delete` (T3's one confirmed path) — this overlay will not fake a confirm";
+        return false;
+      }
+      if (key.kind === "enter") {
+        const row = sessionRows[sessionIndex];
+        if (row === undefined) return false;
+        sessionOverlay = false;
+        sessionDeleteNote = undefined;
+        // T16-07: switching re-points the composer; the work in motion is told about, in words.
+        transcript = addSystem(
+          transcript,
+          row.id === lastSession(transcript) ? `already in ${row.titleShown}` : `session ${row.id}`,
+        );
+        const note = switchNote(row);
+        if (note !== undefined) transcript = addSystem(transcript, note);
+        void readTasks().then(drawNow);
+        return false;
+      }
+      return false;
+    }
+    // T8's context view. `c` confirms itself (the sections on screen are the preview T8-07 asks for), `p` takes a
+    // typed turn range, and Esc leaves.
+    if (contextOpen) {
+      if (key.kind === "escape") {
+        contextOpen = false;
+        contextConfirm = false;
+        pinBuffer = "";
+        return false;
+      }
+      if (pinBuffer !== "") {
+        if (key.kind === "char") {
+          pinBuffer = pinBuffer + key.char;
+          return false;
+        }
+        if (key.kind === "backspace") {
+          pinBuffer = pinBuffer.slice(0, -1);
+          return false;
+        }
+        if (key.kind === "enter") {
+          const id = lastSession(transcript);
+          const match = /^(\d+)-(\d+)$/.exec(pinBuffer.trim());
+          pinBuffer = "";
+          if (client?.pinMessages === undefined || id === undefined || match === null) return false;
+          const from = Number(match[1]);
+          const through = Number(match[2]);
+          if (from < 1 || through < from) {
+            message = "a pin range is `from-through`, like 3-5";
+            return false;
+          }
+          void client
+            .pinMessages(id, { from, through })
+            .then(() => readContext().then(drawNow))
+            .catch((error: unknown) => {
+              message = `pin refused: ${error instanceof Error ? error.message : String(error)}`;
+              draw();
+            });
+          return false;
+        }
+        return false;
+      }
+      if (key.kind === "char" && key.char === "p") {
+        pinBuffer = "";
+        return false;
+      }
+      if (key.kind === "char" && key.char === "c") {
+        if (client?.compactSession === undefined) return false;
+        if (!contextConfirm) {
+          contextConfirm = true;
+          return false;
+        }
+        contextConfirm = false;
+        const id = lastSession(transcript);
+        if (id === undefined) return false;
+        void client
+          .compactSession(id)
+          .then((response) => {
+            const note = (response.body as { readonly note?: string }).note;
+            message = note ?? "compaction asked for";
+            return readContext().then(drawNow);
+          })
+          .catch((error: unknown) => {
+            message = `compact refused: ${error instanceof Error ? error.message : String(error)}`;
+            draw();
+          });
+        return false;
+      }
+      return false;
+    }
+    // T16-01: `s` opens the switcher from any pane — except chat, where T3-04 gives every printable key to the
+    // composer and `s` stays a literal. From tasks, jobs, approvals, logs or models, it is the switcher's key.
+    if (key.kind === "char" && key.char === "s" && !help && pane !== "chat") {
+      if (client?.sessions === undefined) {
+        message = "no gateway to list conversations from — start one with: crabby gateway start";
+        return false;
+      }
+      sessionOverlay = true;
+      sessionDeleteNote = undefined;
+      void readSessions().then(drawNow);
+      return false;
+    }
+    // T8's view is Ctrl+O — the one key the composer never claims in any pane, because C0 controls are not text. It
+    // reads the conversation the composer would send into.
+    if (key.kind === "ctrl" && key.letter === "o" && !help && !sessionOverlay) {
+      if (client?.sessionContext === undefined) {
+        message = "no gateway to read context from — start one with: crabby gateway start";
+        return false;
+      }
+      contextOpen = true;
+      contextConfirm = false;
+      void readContext().then(drawNow);
+      return false;
+    }
     if (key.kind === "char" && key.char === "a" && !help) {
       if (approvals.length > 0) {
         approvalOpen = true;
@@ -714,7 +958,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
           .then((response) => {
             const body = response.body as { note?: string } | null;
             message = body?.note ?? "the resume was asked for";
-            return readTaskDetail(id).then(draw);
+            return readTaskDetail(id).then(drawNow);
           })
           .catch(
             (error: unknown) =>
@@ -748,7 +992,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     ) {
       const selected = tasks[Math.min(taskIndex, tasks.length - 1)];
       if (selected !== undefined) {
-        void readTaskDetail(selected.id).then(draw);
+        void readTaskDetail(selected.id).then(drawNow);
       }
       return false;
     }
@@ -760,7 +1004,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       const refreshJobs = (): Promise<void> =>
         readJobs()
           .then(() => readJobDetailIntoState())
-          .then(draw);
+          .then(drawNow);
       const say = (text: string): void => {
         message = text;
       };
@@ -978,7 +1222,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
               jobBacklog = true;
               return undefined;
             })
-            .then(draw)
+            .then(drawNow)
             .catch((error: unknown) =>
               say(`job detail failed: ${error instanceof Error ? error.message : String(error)}`),
             );
@@ -994,7 +1238,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
             jobDetail = jobDetailPane(detail, columns);
             return undefined;
           })
-          .then(draw)
+          .then(drawNow)
           .catch((error: unknown) =>
             say(`job detail failed: ${error instanceof Error ? error.message : String(error)}`),
           );
@@ -1007,7 +1251,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       // "what may a paste contain".
       if (key.kind === "char" && key.char === "v") {
         logsView = nextLogsView(logsView);
-        if (logsView === "decisions") void readDecisions().then(draw);
+        if (logsView === "decisions") void readDecisions().then(drawNow);
         return false;
       }
       if (key.kind === "char" && key.char === "d") {

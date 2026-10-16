@@ -10,6 +10,7 @@
 // objective, its state with progress, and its model with an approval mark. At 40 columns each line is clipped by the frame,
 // so nothing here wraps: a wrapped card is how a task list turns into a wall of text on a phone.
 
+import type { Response } from "@crabby/gateway";
 import {
   actionFor,
   applyAction,
@@ -36,14 +37,58 @@ export interface PaneContext {
   readonly lastConfirmed?: string | undefined;
 }
 
+/**
+ * The reader the TUI asks of a Gateway, and its shape is the **client's own**: `Response<T>`, i.e. `{ ok, status, body }`.
+ * The first version of this interface promised `{ items }` directly and the app crashed on its first frame against a real
+ * Gateway, because the cast that let the pane compile was also the cast that hid the envelope. So the interface says what
+ * the client returns, and the pane reads `body.items` — where a missing field is a *message*, not a `TypeError`.
+ */
 export interface TaskReader {
-  listTasks(options?: { readonly limit?: number; readonly state?: string }): Promise<{
-    items: readonly TaskSummary[];
-  }>;
+  listTasks(options?: {
+    readonly limit?: number;
+    readonly state?: string;
+  }): Promise<Response<unknown>>;
   /** T6-04: cancelling needs no modal in the TUI, the same as Web W5-03. It goes through the route the CLI's
    *  `task cancel` uses, so D-090's record is written by the Gateway either way — a keypress is not a second implementation
    *  of a cancellation, it is a request for one. */
   cancelTask(id: string): Promise<unknown>;
+  /** T5-07's send is a **task start**, not a conversation write: the TUI sends through the same `POST /tasks` the CLI's
+   *  `crabby chat` calls (D-123), so a chat is a run in every interface and there is no second writer of conversation
+   *  history. The idempotency key is supplied by the caller because its meaning belongs to the Gateway's handoff. */
+  createTask(
+    body: { readonly objective: string; readonly sessionId?: string | undefined },
+    idempotencyKey: string,
+  ): Promise<Response<unknown>>;
+}
+
+/** `items` out of a Gateway list body, or a thrown sentence. **A client of a document is not entitled to assume the field is
+ *  there**: an older Gateway, a proxy that rewrote the body, or a future route that renames the key would each produce a
+ *  `TypeError` inside a pane, and a crash is the worst possible answer to "the list came back different". */
+export function readTaskItems(body: unknown): readonly TaskSummary[] {
+  if (typeof body !== "object" || body === null)
+    throw new Error("the task list answer was not an object");
+  const record = body as Record<string, unknown>;
+  const items = record.items;
+  if (!Array.isArray(items)) {
+    throw new Error(
+      `the task list answer has no \`items\` list (keys: ${Object.keys(record).join(", ") || "none"}) — this TUI speaks the ` +
+        "Gateway's own body shape and will not invent a list from a document it does not recognise",
+    );
+  }
+  return items as readonly TaskSummary[];
+}
+
+/** The id out of a task-creation answer, or a thrown sentence. Same reason as `readTaskItems`. */
+export function readTaskId(body: unknown): string {
+  if (typeof body !== "object" || body === null)
+    throw new Error("the task answer was not an object");
+  const id = (body as Record<string, unknown>).id;
+  if (typeof id !== "string" || id.length === 0) {
+    throw new Error(
+      "the gateway accepted the message but answered without a task id, so nothing can be followed",
+    );
+  }
+  return id;
 }
 
 export interface TaskSummary {

@@ -287,18 +287,24 @@ export function statusLine(status: StatusState, columns: number): string {
   return fit(kept.map((segment) => segmentText(segment)).join(" · "), columns);
 }
 
-/** T3-01's hint strip: up to six hints at 40 columns, and every key the pane can actually act on is in it. The strip is
- *  truncated rather than wrapped, because a wrapped strip costs a line of the pane and a wrapped key list is unreadable. */
+/** T3-01's hint strip, and the one rule that makes it safe to truncate. The row caps the strip at six hints and one line,
+ *  and at 40 columns only two of a pane's six fit — so the strip **drops the least essential hints and keeps the essential
+ *  ones**, the same way the status line keeps its protected fields (T2-08). The protected two are `?` (help) and `q`
+ *  (quit), because **a person who cannot see how to leave the app is stuck**: the strip is the app's only always-visible
+ *  key list on a narrow screen, and dropping its exit because six other keys were more interesting is how a TUI becomes
+ *  something a person force-kills with the phone's own controls.
+ *
+ *  The rest go from the end, since a pane orders them most-useful-first — which is T3-01's "the keys for what is actually
+ *  possible right now", read as an ordering the truncation can act on. */
 export function hintStrip(hints: readonly string[], columns: number): string {
-  const picked: string[] = [];
-  let text = "";
-  for (const hint of hints.slice(0, 6)) {
-    const candidate = picked.length === 0 ? hint : `${text} · ${hint}`;
-    if (visibleWidth(candidate) > columns) break;
-    picked.push(hint);
-    text = candidate;
+  const essential = (hint: string): boolean => /\? help|q quit/.test(hint);
+  const kept = [...hints.slice(0, 6)];
+  while (visibleWidth(kept.join(" · ")) > columns) {
+    const droppable = kept.findIndex((hint) => !essential(hint));
+    if (droppable < 0) break;
+    kept.splice(droppable, 1);
   }
-  return text;
+  return fit(kept.join(" · "), columns);
 }
 
 /** The whole frame, top to bottom: pane row, body, status line, hint strip. **The order is the inventory's**: T1-02's row is

@@ -17,20 +17,38 @@
 import { EXIT, type ExitCode } from "@crabby/api-contracts";
 import { dataLayout, terminalFacts } from "@crabby/platform";
 import { connect } from "../cli/connect.ts";
-import { frameLines, nextPane, PANE_ORDER, type Pane } from "./frame.ts";
+import { type ComposerState, emptyComposer } from "./composer.ts";
+import {
+  FRAME_CHROME_ROWS as CHROME,
+  frameLines,
+  nextPane,
+  PANE_ORDER,
+  type Pane,
+} from "./frame.ts";
 import { decodeKey, dumbTerminalNotice, type Key, unknownKeyLine } from "./input.ts";
 import type { PaneDescriptor } from "./panes.ts";
 import {
+  chatKey,
+  chatPane,
   PANE_DESCRIPTORS,
   type PaneContext,
   paneState,
   plannedPane,
+  readTaskId,
+  readTaskItems,
   statusFrom,
   type TaskReader,
   type TaskSummary,
   tasksPane,
 } from "./panes.ts";
 import { FrameRenderer, type Terminal } from "./render.ts";
+import { followEvents, type StreamHandle } from "./stream.ts";
+import {
+  applyEvent,
+  commitStreaming,
+  emptyTranscript,
+  type TranscriptState,
+} from "./transcript.ts";
 
 export interface TuiOptions {
   readonly dataDir: string;
@@ -43,6 +61,12 @@ export interface TuiOptions {
   readonly now?: () => number;
   /** Injected so a test can end the loop; production leaves it unset and `q` ends it. */
   readonly quitAfterKeys?: number;
+  /** Injected so the app itself can be tested without a Gateway — the same reason `openai.ts` takes a `fetch`. **The
+   *  fake is a whole `TaskReader`, not a patch of one method**, because a test that stubs only the call it exercises
+   *  cannot see the pane crash on the call it does not. This seam is what found the two bugs a pty could not reach here:
+   *  `listTasks` answering an envelope rather than a bare list, and the start pane making Tab the wrong key for the pane a
+   *  person wants. */
+  readonly client?: TaskReader | undefined;
 }
 
 /** The poll interval for a pane's data. Long enough that a phone is not woken for nothing, short enough that the status
@@ -64,14 +88,35 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   // either would be a second opinion about whether a Gateway exists (C7-12's "a local CLI invocation is the owner
   // identity" — the TUI is a local invocation too).
   const connection = await connect(layout);
+  // The client is narrowed to what the TUI actually asks of it, rather than exposed whole: the panes depend on a reader with
+  // three methods, and a fourth one arriving later is then a decision somebody makes in a pane instead of by accident.
   const client: TaskReader | undefined =
-    connection.state === "paired" ? (connection.client as unknown as TaskReader) : undefined;
+    options.client ??
+    (connection.state === "paired" ? (connection.client as unknown as TaskReader) : undefined);
 
-  let pane: Pane = "tasks";
+  // **The TUI opens on chat**, not on tasks. §4's pane list starts with chat and `docs/review/TUI.md`'s switch row is
+  // `chat · tasks · jobs · approvals · logs · models`; the tasks pane is the *second* thing a person looks at. Opening on
+  // tasks also made Tab the wrong key for reaching the pane you wanted — Tab cycles forward, so from tasks it goes to jobs,
+  // which is a fact a run on this device showed and no unit test could.
+  let pane: Pane = "chat";
   let help = false;
   let tasks: readonly TaskSummary[] = [];
   let message: string | undefined;
   let quit = false;
+  // The chat pane's two states. Both are plain data and both are drawn from, which is what lets the whole pane be tested
+  // without a stream (and what would let a reconnect rebuild them from `GET /tasks/{id}` rather than from a replay).
+  let transcript: TranscriptState = emptyTranscript(
+    columns,
+    facts.color === "none" ? "none" : facts.color,
+  );
+  let composer: ComposerState = emptyComposer();
+  /** The stream handle, kept for its lifetime. Nothing consults it — closing it *is* the shutdown, so the shutdown closes it
+   *  rather than the loop asking whether it is still there. */
+  let stream: StreamHandle | undefined;
+  /** T5-09's input history, per session. Held here rather than in the composer because the composer is handed one entry at a
+   *  time — a buffer that owns its own history would have to survive the pane switch, and a TUI that keeps two copies of what
+   *  a person typed is a TUI with two answers to "what did I send". */
+  const previousInputs: string[] = [];
 
   // T1-09: the first line is never blank, and when the Gateway is not running it names the command rather than showing a
   // spinner that pretends something is happening.
@@ -87,7 +132,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   const readTasks = async (): Promise<void> => {
     if (client === undefined) return;
     try {
-      tasks = (await client.listTasks({ limit: 20 })).items;
+      tasks = readTaskItems((await client.listTasks({ limit: 20 })).body);
     } catch (error) {
       // T1-10's rule again: the reason in words, never a spinner. A failed poll leaves the last good list on screen with a
       // line saying it is stale, because a stale list labelled stale is more useful than an empty pane.
@@ -106,25 +151,65 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     ...(connection.state === "paired" ? {} : { lastConfirmed: undefined }),
   });
 
+  /** The pane's own body. The chat pane is the transcript plus the composer (T4/T5); every other pane is whatever it draws
+   *  itself. Kept here rather than in `frameLines` so that "which pane am I in" is answered once, and the frame stays a
+   *  function of (pane, body) with no knowledge of any pane's content. */
+  const body = (): readonly string[] => {
+    if (pane === "chat") {
+      return chatPane(
+        transcript,
+        composer,
+        // T5-06's capability line. **These come from what the Gateway composed for this identity**, and until the chat pane
+        // reads that route they are the documented defaults — printed as they are, because a wrong "shell: on" is a wrong
+        // promise about what a run may do, and the defaults here are the conservative ones.
+        { fs: "workspace", net: false, shell: false },
+        columns,
+        rows - CHROME,
+      );
+    }
+    const descriptor = descriptorFor(pane);
+    return descriptor.built === true
+      ? tasksPane(context(), tasks)
+      : plannedPane(
+          pane,
+          descriptor.milestone ?? "M3",
+          descriptor.equivalent ?? "crabby diagnostics",
+        );
+  };
+
   const draw = (): void => {
     const descriptor = descriptorFor(pane);
-    const body = [
-      ...(descriptor.built === true
-        ? tasksPane(context(), tasks)
-        : plannedPane(
-            pane,
-            descriptor.milestone ?? "M3",
-            descriptor.equivalent ?? "crabby diagnostics",
-          )),
-    ];
-    if (message !== undefined) body.push(`! ${message}`);
+    const lines0 = [...body()];
+    if (message !== undefined) lines0.push(`! ${message}`);
     const lines = frameLines(
-      paneState(context(), descriptor, body, statusFrom(context(), tasks), help),
+      paneState(context(), descriptor, lines0, statusFrom(context(), tasks), help),
       columns,
       rows,
     );
     renderer.draw(lines, now());
   };
+
+  // The stream, opened once and kept. **It is not opened per pane switch**: a socket per switch is a socket per keypress,
+  // and the Gateway's connection count is not the place a TUI should be discovering its bounds. The pane that draws it
+  // changes; the stream does not.
+  const pairedUrl =
+    options.client === undefined && connection.state === "paired" ? connection.url : undefined;
+  if (client !== undefined && pairedUrl !== undefined) {
+    stream = followEvents({
+      url: pairedUrl,
+      layout,
+      onFrame: (frame) => {
+        transcript = applyEvent(commitStreaming(transcript), frame);
+        draw();
+      },
+      onClosed: (reason) => {
+        // T1-10's rule and T4-13's: the reason in words, and the transcript keeps what it had rather than emptying itself —
+        // a conversation that vanishes when a socket hiccups is worse than one that is visibly stale.
+        message = `stream: ${reason}`;
+        draw();
+      },
+    });
+  }
 
   if (facts.isTTY === false) {
     // T3-05: a terminal that cannot report keys gets the list once and then a stream of frames it cannot act on — so it gets
@@ -138,7 +223,17 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   stdin.setRawMode?.(true);
   renderer.hideCursor();
   stdin.resume();
-  draw();
+
+  // **The `end` promise is created before the first frame**, and that is a product rule rather than a test convenience.
+  // Android freezes and kills this process whenever it feels like it, a pipe runs out, and a terminal window can close —
+  // so a stdin that ends before the app finished drawing must *end the app*, not be missed by a listener that had not been
+  // attached yet. The first version attached both listeners after the first draw, which meant a stream that ended early
+  // left the app waiting forever: a hang on the exact platform whose process death the whole of `AGENTS.md` §8 is about.
+  let stop = (): void => undefined;
+  const ended = new Promise<void>((resolve) => {
+    stop = resolve;
+  });
+  stdin.once("end", () => stop());
 
   const onData = (chunk: Buffer | string): void => {
     let buffer = typeof chunk === "string" ? chunk : chunk.toString("utf8");
@@ -180,6 +275,38 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       quit = true;
       return true;
     }
+    // The composer owns every printable key when the chat pane is up (T3-04), and the pane's own bindings are read *after*
+    // it — so a letter can never be swallowed by a pane binding and a pane binding can never eat a half-typed word.
+    if (pane === "chat" && isComposerKey(key)) {
+      const handled = chatKey(
+        composer,
+        composerHistory(previousInputs),
+        key as ComposerKey,
+        undefined,
+      );
+      composer = handled.composer;
+      if (handled.unbound !== undefined) {
+        message = `${handled.unbound} is not bound here — this terminal has no Shift+Enter (D-061 measured that); use Ctrl+J for a newline`;
+      }
+      if (handled.action === "send") {
+        message = undefined;
+        // The history records what was typed, not what was sent, and it records it before the send is attempted: a send that
+        // fails must not erase the words a person just typed.
+        if (composer.buffer.trim().length > 0) previousInputs.push(composer.buffer.trim());
+        void send(client, composer, transcript).then(
+          (sent) => {
+            composer = emptyComposer();
+            message = sent;
+            draw();
+          },
+          (error: unknown) => {
+            message = `send failed: ${error instanceof Error ? error.message : String(error)}`;
+            draw();
+          },
+        );
+      }
+      return false;
+    }
     if (key.kind === "tab") {
       pane = nextPane(pane);
       return false;
@@ -205,34 +332,111 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     return false;
   };
 
+  // The first frame, after the listeners exist — so a keystroke or an `end` arriving during the first draws is not lost.
+  draw();
+
   stdin.on("data", onData);
   const poll = setInterval(() => {
     void readTasks().then(draw);
   }, POLL_MS);
-
-  await new Promise<void>((resolve) => {
-    const stop = (): void => {
-      clearInterval(poll);
-      stdin.off("data", onData);
-      stdin.setRawMode?.(false);
-      stdin.pause();
-      renderer.showCursor();
-      resolve();
-    };
-    stdin.once("end", stop);
-    const tick = setInterval(() => {
-      if (quit) {
-        clearInterval(tick);
-        stop();
-      }
-    }, 50);
-  });
+  const shutdown = (): void => {
+    clearInterval(poll);
+    // The socket closes with the app: a reader nobody cancels is a socket nobody closes, and Termux backgrounds this process
+    // the moment the person switches away (D-066's drain is the other end of the same rule).
+    stream?.close();
+    stdin.off("data", onData);
+    stdin.setRawMode?.(false);
+    stdin.pause();
+    renderer.showCursor();
+    stop();
+  };
+  // The 50 ms tick is what turns a `quit` flag into a shutdown. **A `setInterval` rather than a busy loop**, because a
+  // phone charging a frame per turn of the event loop is a phone that gets warm (§4 of `docs/DESIGN_SYSTEM.md`, and the
+  // reason P-011 caps repaints at all).
+  const tick = setInterval(() => {
+    if (quit) {
+      clearInterval(tick);
+      shutdown();
+    }
+  }, 50);
+  await ended;
+  clearInterval(tick);
+  shutdown();
   return EXIT.success;
 }
 
 /** The descriptor for a pane. A `find` with a fallback would let a pane name in the switch row exist without a descriptor,
  *  and the switch row is the frame's own address — an address with nothing at it is the defect T6-06 names. So the lookup
  *  falls back to a *descriptor*, never to `undefined`, and the fallback says which pane it is standing in for. */
+/** The composer's key type, which is a subset of the decoder's. Narrowing here rather than widening the composer's signature
+ *  is the point: the composer must never be handed a `tab` and must never be told to handle one. */
+type ComposerKey = Parameters<typeof chatKey>[2];
+
+/** The most recent input, which is what `↑` restores. The newest last, so the last element is the previous message. */
+function composerHistory(inputs: readonly string[]): string | undefined {
+  return inputs.at(-1);
+}
+
+/** The keys the composer claims when the chat pane is up. T3-04's rule is that a pane's bindings and the composer cannot
+ *  overlap: `a` is an approve in the approvals pane and a letter here, so the composer's claim is checked *first* and the
+ *  pane's bindings only see what the composer did not take. Tab, `?`, Ctrl-C and Ctrl-Q stay with the pane — a person must
+ *  always be able to leave the pane and stop the run, whatever they are typing. */
+function isComposerKey(key: Key): boolean {
+  if (key.kind === "char") return true;
+  if (key.kind === "ctrl") return key.letter === "j";
+  return (
+    key.kind === "enter" || key.kind === "backspace" || key.kind === "left" || key.kind === "right"
+  );
+}
+
+/** Sending is **starting a task**, which is D-123's shape and not a second writer of conversation history: the same
+ * `POST /tasks` the CLI's `crabby chat` calls, with the session id when the pane is continuing one. The reply is the task id,
+ *  and the pane prints it rather than hiding it — a person who wants to watch the run from a shell has the id, which is the
+ *  same reasoning C11-06 gives for printing a conversation id. */
+async function send(
+  client: TaskReader | undefined,
+  draft: ComposerState,
+  from: TranscriptState,
+): Promise<string | undefined> {
+  if (client === undefined) return "no gateway to send to — start one with: crabby gateway start";
+  const text = draft.buffer.trim();
+  if (text.length === 0) return undefined;
+  if (text.startsWith("/"))
+    return `slash commands are not wired in the TUI yet — ${text} works in the CLI`;
+  const session = lastSession(from);
+  const created = readTaskId(
+    (
+      await client.createTask(
+        { objective: text, ...(session === undefined ? {} : { sessionId: session }) },
+        // An idempotency key derived from the words, so a retried send on a phone that lost its network does not start the task
+        // twice. The Gateway owns what that key means (D-084's handoff); the TUI only has to supply one.
+        `tui-${hash(text)}`,
+      )
+    ).body,
+  );
+  return `sent as task ${created} — \`crabby task watch ${created}\` follows it from a shell`;
+}
+
+/** A stable-enough key from the words themselves. `Date.now()` would make every send unique, which is the opposite of what an
+ *  idempotency key is for: a retry after a dropped connection must carry the *same* key. This is not a security primitive and
+ *  is not used as one — it only has to be equal for equal text. */
+function hash(text: string): string {
+  let value = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    value = (value * 31 + (text.charCodeAt(index) | 0)) | 0;
+  }
+  return Math.abs(value).toString(36);
+}
+
+/** The conversation this transcript belongs to, when the frames said. Read from the transcript rather than held beside it, so
+ *  there is one place that knows and a reconnect rebuilds it. */
+function lastSession(state: TranscriptState): string | undefined {
+  for (const row of state.rows) {
+    if (row.kind === "system" && row.text.startsWith("session ")) return row.text.slice(8).trim();
+  }
+  return undefined;
+}
+
 function descriptorFor(pane: Pane): PaneDescriptor {
   const found = PANE_DESCRIPTORS.find((entry) => entry.pane === pane);
   if (found !== undefined) return found;

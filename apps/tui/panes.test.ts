@@ -18,6 +18,8 @@ import {
   type PaneContext,
   paneState,
   plannedPane,
+  readTaskId,
+  readTaskItems,
   statusFrom,
   type TaskSummary,
   tasksPane,
@@ -46,7 +48,13 @@ const TASKS: readonly TaskSummary[] = [
 
 function context(overrides: Partial<PaneContext> = {}): PaneContext {
   return {
-    client: { listTasks: async () => ({ items: TASKS }), cancelTask: async () => undefined },
+    // The reader speaks the Gateway's envelope (`{ ok, status, body }`), because the pane reads `body.items` — see the
+    // interface's own comment and the two tests below that hold what happens when the field is missing.
+    client: {
+      listTasks: async () => ({ ok: true, status: 200, body: { items: TASKS } }),
+      cancelTask: async () => ({ ok: true, status: 202, body: {} }),
+      createTask: async () => ({ ok: true, status: 201, body: { id: "tsk_new" } }),
+    },
     pane: "tasks",
     rows: 24,
     columns: 40,
@@ -328,5 +336,24 @@ describe("the chat pane", () => {
       lines.filter((line) => line === "").length >= body - lines.length - 1,
       "the empty transcript is padded, not missing",
     );
+  });
+});
+
+describe("reading the Gateway's own body shape", () => {
+  it("takes the items list out of the envelope", () => {
+    assert.equal(readTaskItems({ items: TASKS }).length, 3);
+  });
+
+  it("throws a sentence when the list has no `items`, rather than a TypeError", () => {
+    // The first version of this interface promised `{ items }` and the app crashed on its first frame against a real
+    // Gateway — the cast that let it compile was the cast that hid the envelope. A client of a document that does not
+    // recognise the document must say so in words.
+    assert.throws(() => readTaskItems({ tasks: [] }), /no `items` list/);
+    assert.throws(() => readTaskItems(undefined), /not an object/);
+  });
+
+  it("throws when a created task has no id, because nothing can be followed", () => {
+    assert.equal(readTaskId({ id: "tsk_x" }), "tsk_x");
+    assert.throws(() => readTaskId({ ok: true }), /without a task id/);
   });
 });

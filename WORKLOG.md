@@ -38,17 +38,14 @@
   টেস্ট: web.test.ts 30/30, ফুল sweep **1202/1202**, tsc শূন্য, biome 270 ফাইল ✔, parity ✔, docs:check ✔; jsdom
   smoke (throwaway) ১২/১২ সবুজ। push ✔।
 
+## করলাম (সর্বশেষ নির্দেশ অনুযায়ী)
 
-
-TUI-র বাকি সব কাজ শেষ: ধাপ ১-এর ৫ ব্যাচই (T7; T16+T8; composer; T12+T13+T14; T1/T3 polish) সম্পূর্ণ। ধাপ ২-র
-route-নির্ভর row (GET /logs, GET /audit, model probe, job delete) TUI-তে যা সম্ভব তাই আগেই হয়েছে — ভিউগুলো তাদের
-route-gap নিজেই নাম করে দেখায় (logs.ts, models.ts, jobs.ts); ধাপ ৩-র milestone-বাঁধা row (tunnel/vault, T9/T-E)
-accessLines-এর gap-তালিকায় নাম-সহ রেকর্ডেড। **TUI build এখানেই শেষ — থামলাম।**
+TUI-র সব কাজ আগেই শেষ (ধাপ ১-এর ৫ ব্যাচ, ধাপ ২-৩ gap-note-সহ)। এরপরের নির্দেশ ছিল "সব web implementation শেষ করো এবং
+আমাকে জানাও" — **Web UI (D-068) সম্পূর্ণ**, cbf5ccc-এ push; রিপোর্ট ও বাকি-হিসাব চ্যাটে। এখানেই এই স্তর শেষ — থামলাম।
 
 ## পরের কাজ (বাকি-হিসাব)
 
-1. **Web UI** (D-068: custom elements, no SPA) — ব্যবহারকারীর স্কোপে আছে, TUI শেষ হয়েছে বলে এরপর শুরু করার কথা।
-2. **Telegram bot** — tunnel লাগবে; টোকেন পেলে নোটিশ পুনরায় চালু।
-3. Route-নির্ভর বাকি অংশ (ধাপ ২): `GET /logs`, `GET /audit`, `POST /models/…/probe`, job-delete-র history-path —
-   Gateway-র route + store ছাড়া TUI/Web-এ আর ভাবনাই নেই; gap-note সব জায়গায় আছে।
-4. খোলা সিদ্ধান্ত: D-066 vault-secrets (T12-08), O-তালিকা HANDOVER §7-এ।
+1. **Telegram bot** — tunnel লাগবে; টোকেন পেলে নোটিশ পুনরায় চালু। Web-এর access screen-এও telegram gap-note আছে।
+2. Route-নির্ভর বাকি অংশ (ধাপ ২): `GET /logs`, `GET /audit`, `POST /models/…/probe`, job-delete, providers (W9),
+   extensions/memory — Gateway route ছাড়া TUI/Web-এ ভাবনা নেই; দুই ক্লায়েন্টেই নাম-সহ gap-note আছে।
+3. খোলা সিদ্ধান্ত: D-066 vault-secrets (milestone-বাঁধা), O-তালিকা HANDOVER §7-এ।

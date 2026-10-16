@@ -19,6 +19,7 @@ import {
   nextFire,
   occurrencesBetween,
   parseCron,
+  scheduleInWords,
   utcOffsetMinutesOf,
   wallMinuteExists,
   wallMinuteOf,
@@ -327,4 +328,36 @@ test("occurrences between two instants are counted, and the cap says it was hit"
     true,
     "a capped count is reported as capped rather than passed off as a total",
   );
+});
+
+test("a schedule as words: W16-01's register, one renderer for every interface", () => {
+  // The example W16-01 writes in its own row, asserted first: if this pair drifts, the Web and the TUI read the same
+  // schedule differently and a phone review of a standing authority is a review of the wrong thing.
+  assert.equal(scheduleInWords("30 7 * * 1-5"), "every weekday 07:30");
+  assert.equal(scheduleInWords("* * * * *"), "every minute");
+  assert.equal(scheduleInWords("*/5 * * * *"), "every 5 minutes");
+  assert.equal(scheduleInWords("15 * * * *"), "every hour at :15");
+  // `0,30` and `*/30` are the same schedule, and the words describe the schedule rather than its spelling: both are
+  // "every 30 minutes", which is the reviewable claim a phone reads.
+  assert.equal(scheduleInWords("0,30 * * * *"), "every 30 minutes");
+  assert.equal(scheduleInWords("*/30 * * * *"), "every 30 minutes");
+  assert.equal(scheduleInWords("0,20,40 * * * *"), "every 20 minutes");
+  assert.equal(scheduleInWords("5,35 * * * *"), "every hour at :05 and :35");
+  assert.equal(scheduleInWords("0 7 * * *"), "every day 07:00");
+  assert.equal(scheduleInWords("30 7,19 * * *"), "every day 07:30, 19:30");
+  assert.equal(scheduleInWords("0 7 * * 1"), "every Monday 07:00");
+  assert.equal(scheduleInWords("0 9 * * 0,6"), "every weekend 09:00");
+  assert.equal(scheduleInWords("0 7 * * 1,3,5"), "every Monday, Wednesday and Friday 07:00");
+  assert.equal(scheduleInWords("30 7 1 * *"), "every month on the 1st 07:30");
+  assert.equal(scheduleInWords("30 7 1,15 * *"), "every month on the 1st and 15th 07:30");
+  assert.equal(scheduleInWords("0 0 1 1 *"), "on the 1st in Jan 00:00");
+  assert.equal(scheduleInWords("0 7 * Jan *"), "every day in Jan 07:00");
+  // Both day fields restricted is this parser's OR rule, so the sentence names both halves rather than one of them.
+  assert.equal(scheduleInWords("0 7 1 * 1"), "every Monday and on the 1st 07:00");
+  // A step that does not divide the hour is not "every N minutes"; `*/29` fires at :00, :29 and :58, and the words say
+  // that instead of describing a cadence the schedule does not have.
+  assert.equal(scheduleInWords("*/29 * * * *"), "every hour at :00, :29 and :58");
+  // An expression this grammar cannot read has no words, and inventing some would describe a schedule nobody wrote.
+  assert.equal(scheduleInWords("every weekday at seven"), "every weekday at seven");
+  assert.equal(scheduleInWords(""), "");
 });

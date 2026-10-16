@@ -20,7 +20,14 @@
 //   - A feature that is not in the data model is refused here, not stored. `parseOverride` in the providers package is
 //     the authority and is called on the result before anything is written, so this verb cannot be the one place a bad
 //     record reaches `config.json`.
-import { type ModelOverride, parseOverride, SUPPORTED_FEATURES } from "@crabby/providers";
+import { type ConfigFile, writeConfig } from "@crabby/core";
+import type { DataLayout } from "@crabby/platform";
+import {
+  composeProviders,
+  type ModelOverride,
+  parseOverride,
+  SUPPORTED_FEATURES,
+} from "@crabby/providers";
 
 /** One answer, however it was given. `supports` holds `true`, `false` or `auto` as the person typed it — this shape is
  *  the hand-off point between the two interaction shapes and the stored record. */
@@ -207,4 +214,73 @@ export function describeOverride(
     }
   }
   return lines;
+}
+
+/** The storage step, one implementation for every writer — `crabby model edit` and the TUI's T11 editor both land here.
+ *  D-064's claim ("both paths must reach the same stored value") is about the *record*, and this is the rest of it: two
+ *  writers that each cloned the document, set the sibling key and called `writeConfig` would agree until the day one of
+ *  them learned the empty-`overrides`-map rule the other had not. The rules are: the record is a sibling of `models`
+ *  (D-126), an absent record is `delete` and not `{}`, an empty `overrides` map is removed with it, and the write is
+ *  CAS-guarded by the token the read handed over (`If-Match`'s shape, §2's concurrency row).
+ *
+ *  The composition is re-run here — the same pure function on the same document a Gateway composes at startup — so the
+ *  report is what the next process will use rather than a second opinion about the file. */
+export interface OverrideWriteReport {
+  readonly ok: boolean;
+  readonly message?: string;
+  readonly code?: string;
+  /** What was stored: the record, or `undefined` for a clear. */
+  readonly override: ModelOverride | undefined;
+  /** `describeOverride`'s report over the composed provenance — what actually moved, not what was typed. */
+  readonly changes: readonly string[];
+  readonly composed: boolean;
+  readonly composeReason?: string;
+  /** The composed provenance object itself, for `--json`. */
+  readonly provenance?: unknown;
+}
+
+export function writeOverrideRecord(
+  layout: DataLayout,
+  loaded: { readonly file: ConfigFile; readonly token: string },
+  providerId: string,
+  modelId: string,
+  override: ModelOverride | undefined,
+): OverrideWriteReport {
+  const file = structuredClone(loaded.file) as Record<string, unknown>;
+  const providers = { ...((file.provider ?? {}) as Record<string, unknown>) };
+  const entry0 = { ...((providers[providerId] ?? {}) as Record<string, unknown>) };
+  const overrides = { ...((entry0.overrides ?? {}) as Record<string, unknown>) };
+  if (override === undefined) delete overrides[modelId];
+  else overrides[modelId] = override;
+  if (Object.keys(overrides).length === 0) delete entry0.overrides;
+  else entry0.overrides = overrides;
+  providers[providerId] = entry0;
+  file.provider = providers;
+
+  const written = writeConfig(layout, file as ConfigFile, undefined, { token: loaded.token });
+  if (!written.ok) {
+    return {
+      ok: false,
+      message: written.message,
+      ...(written.code === undefined ? {} : { code: written.code }),
+      override,
+      changes: [],
+      composed: false,
+    };
+  }
+  const composed = composeProviders((file as ConfigFile).provider);
+  const entry1 = composed.find((row) => row.id === providerId);
+  const provenance = entry1?.ok ? entry1.overrides[modelId] : undefined;
+  return {
+    ok: true,
+    override,
+    changes: describeOverride(provenance),
+    composed: provenance !== undefined,
+    ...(provenance !== undefined
+      ? { provenance }
+      : {
+          composeReason:
+            entry1 !== undefined && !entry1.ok ? entry1.reason : "the provider did not compose",
+        }),
+  };
 }

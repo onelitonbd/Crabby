@@ -31,7 +31,7 @@ and pins.
 | Workstream | State |
 | --- | --- |
 | CLI | **Largely done.** 30 commands live; the registry (`apps/cli/registry.ts`) is the authority on what is `ready`. |
-| TUI | **Frame + chat pane + stream wiring.** Runs, draws, switches panes, quits. Approvals modal, jobs pane, logs pane and models pane are declared but not built — they print their milestone and the CLI equivalent that reaches the same place. |
+| TUI | **All six panes draw real content.** `chat`, `tasks`, `approvals` (T-A's modal), `jobs` (T17), `models` (T11, editor included) and `logs` (T15's decisions + diagnostics). The log/audit *views* inside logs name their route gaps (see §7) and `model probe` names its own (T11-07). |
 | Web UI | **Not started.** D-068 decided custom elements, no SPA framework, so nothing here gates it. |
 | Telegram | **Not started.** Needs the tunnel. |
 
@@ -105,10 +105,11 @@ log is the only place the answer is.
 
 ## 6. What to do next, in this order
 
-1. **TUI approvals modal** (region T-A) — the one pane that steals focus, and the only modal in the product. Rows are in
-   `docs/review/TUI.md`. Answering must go through `POST /approvals/{id}/decision` and must print `conflict` when another
-   interface answered first (W-A10).
-2. **TUI jobs / logs / models panes** — small, and each one is a route that already exists.
+1. ~~**TUI approvals modal** (region T-A)~~ — **built** (one card, `n`/`p` walk, typed yes/no, `Esc` refused on a
+   blocking approval, `conflict` printed when another interface answered first).
+2. ~~**TUI jobs / logs / models panes**~~ — **built** (T17/T11 complete; T15's decisions + diagnostics wired). The
+   remaining gaps are routes, not panes: `GET /logs`, `GET /audit` (T15-01/03's views) and `POST /models/…/probe`
+   (T11-07) — see §7. T11-04's `reserve` input is drawn and reported as not-stored (F-62 refused the field).
 3. **`model probe`** (C7-09) — deliberately unbuilt: it needs a credential a Gateway holds, so it wants a **route**, not a
    CLI verb. D-125 says where it stands.
 4. **Web UI** — unblocked by D-068 (custom elements). Check `docs/UI_UX_SPEC.md` §2 and the W-rows in
@@ -116,6 +117,23 @@ log is the only place the answer is.
 5. **Telegram** — needs the tunnel, which is its own phase.
 
 ## 7. Things that are open and belong to the owner
+
+- **T17-07's backlog answer `each`** — three of the accepted rows (T17-07, W16-08, C12-06) offer `latest / each / skip`
+  and `JobBacklogBody` carries only `latest | skip`. The TUI prompt shows three answers and `each` is built as a
+  per-occurrence walk over `run-now` (D-103's one-run-at-a-time makes N simultaneous fires impossible, and §4.5 forbids a
+  burst). If the owner wants `each` as one recorded action, the contract and the scheduler need the third action.
+- **`GET /logs` and `GET /audit`** — T15-01/03/02/06 price a log view and an audit view; the routes are documented
+  (`docs/INTERFACES_AND_API.md` §4.4) and the registry's `logs`/`audit` verbs are `planned` on them. The logs pane names the
+  gap per view; building the views means building the routes (a log store and §14's audit fields are the real work).
+- **T11-04's `reserve` input** — the row prices three typed limits including `reserve`; F-62 closed `reserveForOutput`
+  as derived (D-064) and the record has no column for it. The TUI draws the input (the row, as written) and reports
+  `reserve is derived … (F-62)` on save without storing it. If the owner wants it stored, §3.8's schema and D-064
+  revisit; if the row should drop it, D-076 reopens T11-04.
+- **T17-05/W16-11's delete** — there is no `DELETE /jobs/{id}` route and no delete in the scheduler. The TUI's typed-name
+  confirmation runs and then reports the gap by name; the job stands. Needs a route or an accepted limitation.
+- **T17-06/C12-05/W16-06's objective edit** — a material change is re-approval (§4.5) and nothing here can open one
+  (D-084). The form collects both fields and the save prints the notice and writes nothing for an objective change; the
+  schedule half lands through `PATCH /jobs/{id}`. Same decision the CLI made in leaving `job edit` planned.
 
 - **O-006 / O-051, and P-010 / P-011.** The TUI's renderer is the `node:readline` **control** that `docs/ROADMAP.md` M0 P5
   names, chosen because Ink 8 (P-010) is *Proposed — Needs Validation* pending a phone measurement. **That measurement has

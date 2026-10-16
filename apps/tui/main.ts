@@ -14,10 +14,14 @@
 // **capped** repaint (P-011's 4 fps). The repaint cap lives in `FrameRenderer`, not here, because the pane that streams
 // fastest is the pane that would forget it.
 
-import { EXIT, type ExitCode } from "@crabby/api-contracts";
+import { EXIT, type ExitCode, type JobRow, type JobRunRecord } from "@crabby/api-contracts";
+import { loadConfig } from "@crabby/core";
 import { dataLayout, terminalFacts } from "@crabby/platform";
+import { SUPPORTED_FEATURES } from "@crabby/providers";
+import { findUnsafeShapes, writeDiagnosticsArtifact } from "../cli/commands/diagnostics.ts";
+import { nextOverride, writeOverrideRecord } from "../cli/commands/model-edit.ts";
 import { connect } from "../cli/connect.ts";
-import { type ComposerState, emptyComposer } from "./composer.ts";
+import { actionFor, applyAction, type ComposerState, emptyComposer } from "./composer.ts";
 import {
   FRAME_CHROME_ROWS as CHROME,
   frameLines,
@@ -28,18 +32,50 @@ import {
 import { decodeKey, dumbTerminalNotice, type Key, unknownKeyLine } from "./input.ts";
 import type { PaneDescriptor } from "./panes.ts";
 import {
+  type ApprovalSummary,
+  approvalsModal,
+  approvalsPane,
+  backlogPromptLines,
   chatKey,
   chatPane,
+  cycleChoice,
+  deleteGapLine,
+  deletePromptLines,
+  diagnosticsLine,
+  editFormLines,
+  formAnswers,
+  formLines,
+  type JobDeleteConfirm,
+  type JobEditForm,
+  jobDetailPane,
+  jobsPane,
+  type LogsView,
+  logsPane,
+  type ModelEditForm,
+  type ModelView,
+  modelsPane,
+  modelViewsFrom,
+  nextLogsView,
+  openDeleteConfirm,
+  openEditForm,
+  openModelForm,
+  overrideFieldCount,
   PANE_DESCRIPTORS,
   type PaneContext,
   paneState,
   plannedPane,
+  readApprovalItems,
+  readJobDetail,
+  readJobItems,
   readTaskId,
   readTaskItems,
+  resetNoticeLine,
   statusFrom,
   type TaskReader,
   type TaskSummary,
   tasksPane,
+  unparsableFields,
+  walkPromptLines,
 } from "./panes.ts";
 import { FrameRenderer, type Terminal } from "./render.ts";
 import { followEvents, type StreamHandle } from "./stream.ts";
@@ -101,6 +137,33 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   let pane: Pane = "chat";
   let help = false;
   let tasks: readonly TaskSummary[] = [];
+  let approvals: readonly ApprovalSummary[] = [];
+  let jobs: readonly JobRow[] = [];
+  /** The jobs pane's modes (T17): the detail T17-04 draws, T17-07's backlog prompt and its `each` walk, T17-06's edit
+   *  form and T17-05's typed delete confirm. One is open at a time and each takes the keyboard while it is — the same
+   *  focus rule T1-07 writes for the approvals modal. */
+  let jobIndex = 0;
+  let jobDetail: readonly string[] | undefined;
+  let jobMissed: readonly JobRunRecord[] = [];
+  let jobBacklog = false;
+  let jobWalk: number | undefined;
+  let jobEdit: JobEditForm | undefined;
+  let jobDelete: JobDeleteConfirm | undefined;
+  /** The models pane's read half (T11-01/02): `loadConfig`'s document composed by the same functions `crabby model list`
+   *  uses, so the pane and the CLI cannot answer differently about an effective descriptor (D-125). */
+  let modelViews: readonly ModelView[] = [];
+  let modelIndex = 0;
+  /** T11-03/04/08's editor and T11-06's reset confirmation. Both take the keyboard while they are open (T1-07's rule,
+   *  applied to a form the way it is applied to a modal). */
+  let modelEdit: ModelEditForm | undefined;
+  let modelResetPending = false;
+  /** T15's three views. `decisions` is T15-04's data — every state of `GET /approvals`, because the view's subject is
+   *  every prompt *and its answer*, `expired` included. */
+  let logsView: LogsView = "log";
+  let decisions: readonly ApprovalSummary[] = [];
+  let approvalOpen = false;
+  let approvalIndex = 0;
+  let approvalConflict = false;
   let message: string | undefined;
   let quit = false;
   // The chat pane's two states. Both are plain data and both are drawn from, which is what lets the whole pane be tested
@@ -139,7 +202,158 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       message = `task list failed: ${error instanceof Error ? error.message : String(error)}`;
     }
   };
+  const readApprovals = async (): Promise<void> => {
+    if (client?.listApprovals === undefined) return;
+    try {
+      approvals = readApprovalItems(
+        (await client.listApprovals({ state: "pending" })).body,
+      ) as readonly ApprovalSummary[];
+      if (approvalIndex >= approvals.length) approvalIndex = Math.max(0, approvals.length - 1);
+      if (approvals.length === 0) approvalOpen = false;
+    } catch (error) {
+      message = `approval list failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  const readJobs = async (): Promise<void> => {
+    if (client?.listJobs === undefined) return;
+    try {
+      jobs = readJobItems((await client.listJobs()).body);
+      if (jobIndex >= jobs.length) jobIndex = Math.max(0, jobs.length - 1);
+    } catch (error) {
+      message = `job list failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  /** T15-04's data: the queue is per-state (`GET /approvals?state=`), and the view asks for every one of the five —
+   *  a decisions list that skipped `expired` would render expiry as silence. */
+  const readDecisions = async (): Promise<void> => {
+    const listApprovals = client?.listApprovals;
+    if (listApprovals === undefined) return;
+    try {
+      const states = ["pending", "approved", "denied", "expired", "consumed"] as const;
+      const pages = await Promise.all(states.map((state) => listApprovals({ state })));
+      const rows: ApprovalSummary[] = [];
+      for (const page of pages)
+        rows.push(...(readApprovalItems(page.body) as readonly ApprovalSummary[]));
+      rows.sort((a, b) => (b.requestedAt ?? 0) - (a.requestedAt ?? 0));
+      decisions = rows;
+    } catch (error) {
+      message = `approval decisions failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  const readModels = (): void => {
+    try {
+      const config = loadConfig(layout);
+      modelViews = modelViewsFrom(
+        config.config.provider as Record<string, Record<string, unknown>> | undefined,
+      );
+      if (modelIndex >= modelViews.length) modelIndex = Math.max(0, modelViews.length - 1);
+    } catch (error) {
+      message = `config read failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  /** Re-read the detail the pane is showing, so an act that changed the job redraws T17-04's rows from the Gateway
+   *  rather than from the answer this app happened to hold. */
+  const readJobDetailIntoState = async (): Promise<void> => {
+    if (client?.job === undefined || jobDetail === undefined) return;
+    const job = jobs[jobIndex];
+    if (job === undefined) return;
+    try {
+      const detail = readJobDetail((await client.job(job.id)).body);
+      jobMissed = detail.missedUnacknowledged;
+      jobDetail = jobDetailPane(detail, columns);
+    } catch (error) {
+      message = `job detail failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  /** T17-06's save. `schedule` is the non-material half `PATCH /jobs/{id}` carries; `objective` is §4.5's material half
+   *  and the row's re-approval notice is what the save prints — a material change cannot ride on the old authorization
+   *  and nothing in this build can open a new one (D-084), so an objective change lands as the notice and no write. */
+  const saveJobEdit = async (job: JobRow, schedule: string, objective: string): Promise<string> => {
+    const scheduleChanged = schedule !== job.schedule;
+    const objectiveChanged = objective !== job.objective;
+    if (!scheduleChanged && !objectiveChanged) return "nothing changed";
+    if (objectiveChanged) {
+      return (
+        "the objective is what the job *does*, and changing it crosses into re-approval (§4.5) — no route in this " +
+        "build can open one (D-084), so nothing was written; the schedule field can still be saved on its own"
+      );
+    }
+    if (client?.patchJob === undefined) return "this Gateway client cannot edit jobs";
+    const response = await client.patchJob(job.id, { schedule });
+    await readJobs();
+    await readJobDetailIntoState();
+    void draw();
+    return (response.body as { note?: string } | null)?.note ?? "the schedule was written";
+  };
+  /** T11-03/04/08's save, through the one stored-value path: `nextOverride` (D-064's rules) then `writeOverrideRecord`
+   *  (the CAS write `crabby model edit` makes). T11-04's `reserve` is collected and reported as not-stored — F-62
+   *  closed `reserveForOutput` as derived, and the record has no column to put it in. */
+  const saveModelEdit = async (form: ModelEditForm): Promise<string> => {
+    const bad = unparsableFields(form);
+    if (bad.length > 0) return `${bad.join(", ")} must be a whole number — nothing was written`;
+    const next = nextOverride(form.view.override, formAnswers(form));
+    if (!next.ok) return next.reason;
+    const loaded = loadConfig(layout);
+    const report = writeOverrideRecord(
+      layout,
+      loaded,
+      form.view.provider,
+      form.view.model,
+      next.override,
+    );
+    readModels();
+    void draw();
+    if (!report.ok) return report.message ?? "nothing was written";
+    const reserveNote =
+      form.reserve.buffer.trim().length === 0
+        ? ""
+        : " — reserve is derived from the budget rules and is not stored per model (F-62)";
+    return report.changes.length === 0
+      ? `effective unchanged — every value you set is what the endpoint already reported${reserveNote}`
+      : `${report.changes.join("; ")}${reserveNote}`;
+  };
+  /** The walk's end: every missed row was decided one at a time, and the rows are acknowledged so none waits in silence.
+   *  The recorded action is `skip` — the wire's way to acknowledge without firing — with each fired run's own `run-now`
+   *  record beside it, which is the truth of "each" over a body that has only `latest | skip`. */
+  const finishWalk = async (): Promise<string> => {
+    const job = jobs[jobIndex];
+    jobWalk = undefined;
+    if (job === undefined || client?.jobBacklog === undefined) return "the walk is over";
+    try {
+      const response = await client.jobBacklog(job.id, { action: "skip" });
+      await readJobs();
+      void draw();
+      return `${(response.body as { note?: string } | null)?.note ?? "rows acknowledged"} — the walk decided each one`;
+    } catch (error) {
+      return `the walk is over, but the rows could not be acknowledged: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+    }
+  };
+  /** The composer's key table, reused for the edit form and the typed confirm: one table for "what does a key mean while
+   *  typing", so the form and the composer cannot disagree about where the cursor is. `send` is mapped by the caller. */
+  const actionForKey = (key: Key): ReturnType<typeof actionFor> | undefined => {
+    const typed =
+      key.kind === "char" ||
+      key.kind === "enter" ||
+      key.kind === "backspace" ||
+      key.kind === "left" ||
+      key.kind === "right" ||
+      key.kind === "up" ||
+      key.kind === "down" ||
+      key.kind === "ctrl" ||
+      key.kind === "unknown";
+    return typed ? actionFor(key, false) : undefined;
+  };
+  const applyComposerAction = (
+    state: ComposerState,
+    action: ReturnType<typeof actionFor>,
+  ): ComposerState => applyAction(state, action, undefined);
+
   await readTasks();
+  await readApprovals();
+  await readJobs();
+  readModels();
 
   const context = (): PaneContext => ({
     client: client as TaskReader,
@@ -155,6 +369,17 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
    *  itself. Kept here rather than in `frameLines` so that "which pane am I in" is answered once, and the frame stays a
    *  function of (pane, body) with no knowledge of any pane's content. */
   const body = (): readonly string[] => {
+    if (approvalOpen && approvals.length > 0) {
+      const currentApproval = approvals[approvalIndex];
+      if (currentApproval === undefined) return [];
+      return approvalsModal(currentApproval, {
+        index: approvalIndex,
+        total: approvals.length,
+        columns,
+        rows: rows - CHROME,
+        conflict: approvalConflict,
+      });
+    }
     if (pane === "chat") {
       return chatPane(
         transcript,
@@ -168,6 +393,34 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       );
     }
     const descriptor = descriptorFor(pane);
+    if (pane === "approvals") {
+      return approvalsPane(context(), approvals);
+    }
+    if (pane === "jobs") {
+      // The modes draw over the list, and each is a projection of state this app holds: the form T17-06 sizes at 4–6
+      // lines, the delete confirm T17-05 prices with the typed name, the walk T17-07's third answer takes, the prompt
+      // itself, and T17-04's detail. The list is what is underneath all of them.
+      if (jobEdit !== undefined) return editFormLines(jobEdit, columns);
+      if (jobDelete !== undefined) return deletePromptLines(jobDelete, columns);
+      if (jobWalk !== undefined) return walkPromptLines(jobMissed, jobWalk);
+      if (jobBacklog) return backlogPromptLines(jobMissed);
+      if (jobDetail !== undefined) return jobDetail;
+      return jobsPane(context(), jobs, jobIndex);
+    }
+    if (pane === "logs") {
+      return logsPane(context(), logsView, decisions);
+    }
+    if (pane === "models") {
+      if (modelEdit !== undefined) return formLines(modelEdit, columns);
+      const body = [...modelsPane(context(), modelViews, modelIndex)];
+      if (modelResetPending) {
+        const current = modelViews[modelIndex] ?? modelViews[0];
+        if (current !== undefined) {
+          body.push(`! ${resetNoticeLine(overrideFieldCount(current))}`);
+        }
+      }
+      return body;
+    }
     return descriptor.built === true
       ? tasksPane(context(), tasks)
       : plannedPane(
@@ -182,7 +435,7 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     const lines0 = [...body()];
     if (message !== undefined) lines0.push(`! ${message}`);
     const lines = frameLines(
-      paneState(context(), descriptor, lines0, statusFrom(context(), tasks), help),
+      paneState(context(), descriptor, lines0, statusFrom(context(), tasks, jobs), help),
       columns,
       rows,
     );
@@ -252,6 +505,76 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   };
 
   const handle = (key: Key): boolean => {
+    if (approvalOpen && approvals.length > 0) {
+      if (key.kind === "char" && key.char === "a") {
+        void (async () => {
+          if (client?.decideApproval === undefined) return;
+          const current = approvals[approvalIndex];
+          if (current === undefined) return;
+          try {
+            await client.decideApproval(current.id, { decision: "approve", scope: "once" });
+            approvals = approvals.filter((item) => item.id !== current.id);
+            if (approvalIndex >= approvals.length)
+              approvalIndex = Math.max(0, approvals.length - 1);
+            approvalConflict = false;
+            if (approvals.length === 0) approvalOpen = false;
+            message = `approval ${current.id} approved`;
+          } catch (error) {
+            approvalConflict = true;
+            message = error instanceof Error ? error.message : String(error);
+          }
+          draw();
+        })();
+        return false;
+      }
+      if (key.kind === "char" && key.char === "d") {
+        void (async () => {
+          if (client?.decideApproval === undefined) return;
+          const current = approvals[approvalIndex];
+          if (current === undefined) return;
+          try {
+            await client.decideApproval(current.id, { decision: "deny", scope: "once" });
+            approvals = approvals.filter((item) => item.id !== current.id);
+            if (approvalIndex >= approvals.length)
+              approvalIndex = Math.max(0, approvals.length - 1);
+            approvalConflict = false;
+            if (approvals.length === 0) approvalOpen = false;
+            message = `approval ${current.id} denied`;
+          } catch (error) {
+            approvalConflict = true;
+            message = error instanceof Error ? error.message : String(error);
+          }
+          draw();
+        })();
+        return false;
+      }
+      if (key.kind === "char" && key.char === "n") {
+        if (approvals.length > 0) approvalIndex = (approvalIndex + 1) % approvals.length;
+        return false;
+      }
+      if (key.kind === "char" && key.char === "p") {
+        if (approvals.length > 0)
+          approvalIndex = (approvalIndex - 1 + approvals.length) % approvals.length;
+        return false;
+      }
+      if (key.kind === "escape") {
+        return false;
+      }
+      if (key.kind === "char" && key.char === "?") {
+        message = "rule and tier shown in the card above";
+        return false;
+      }
+      return false;
+    }
+    if (key.kind === "char" && key.char === "a" && !help) {
+      if (approvals.length > 0) {
+        approvalOpen = true;
+        approvalIndex = 0;
+        approvalConflict = false;
+        draw();
+        return false;
+      }
+    }
     if (key.kind === "ctrl" && key.letter === "c") {
       // T1-08: Ctrl-C cancels the task and does not quit. A second Ctrl-C is the way out, and it says so.
       if (running(tasks) === undefined) {
@@ -275,6 +598,404 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       quit = true;
       return true;
     }
+    // The jobs pane's keyboard (T17). A mode that is open owns the keys the way T1-07's modal does; the row keys act on
+    // the selected job otherwise. Every act goes through the same routes `crabby job` uses — a keypress is a request to
+    // the Gateway, never a second implementation of a pause.
+    if (pane === "jobs") {
+      const job = jobs[jobIndex];
+      const refreshJobs = (): Promise<void> =>
+        readJobs()
+          .then(() => readJobDetailIntoState())
+          .then(draw);
+      const say = (text: string): void => {
+        message = text;
+      };
+      // T17-06's form: single-line fields, Enter advances and saves. The composer's table types the field; `send` is
+      // this form's "next", because a form with two fields has two "done"s and one key.
+      if (jobEdit !== undefined) {
+        if (key.kind === "escape") {
+          jobEdit = undefined;
+          message = "edit cancelled — nothing written";
+          return false;
+        }
+        if (key.kind === "enter") {
+          if (jobEdit.field === "schedule") {
+            jobEdit = { ...jobEdit, field: "objective" };
+            return false;
+          }
+          const form = jobEdit;
+          jobEdit = undefined;
+          const newSchedule = form.schedule.buffer.trim();
+          const newObjective = form.objective.buffer.trim();
+          void saveJobEdit(form.job, newSchedule, newObjective).then(say, (error: unknown) =>
+            say(`edit failed: ${error instanceof Error ? error.message : String(error)}`),
+          );
+          return false;
+        }
+        const action = actionForKey(key);
+        if (action !== undefined) {
+          const current = jobEdit[jobEdit.field];
+          const next = applyComposerAction(current, action);
+          jobEdit = { ...jobEdit, [jobEdit.field]: next };
+        }
+        return false;
+      }
+      // T17-05's delete: the name typed back is the confirmation, and nothing else is.
+      if (jobDelete !== undefined) {
+        if (key.kind === "escape") {
+          jobDelete = undefined;
+          message = "delete cancelled";
+          return false;
+        }
+        if (key.kind === "enter") {
+          const typed = jobDelete.typed.buffer.trim();
+          if (typed === jobDelete.job.name) {
+            say(deleteGapLine(jobDelete.job));
+            jobDelete = undefined;
+          } else {
+            say("the name does not match — nothing was deleted");
+          }
+          return false;
+        }
+        const action = actionForKey(key);
+        if (action !== undefined) {
+          jobDelete = { ...jobDelete, typed: applyComposerAction(jobDelete.typed, action) };
+        }
+        return false;
+      }
+      // T17-07's `each` walk: one missed occurrence per decision, y runs it (a fresh `run-now`), n skips it. When the
+      // walk ends the rows are acknowledged so none is dropped silently — the recorded answer is `skip` with the
+      // run-now records beside it, which is the truth of "each was decided" over a wire that has no `each`.
+      if (jobWalk !== undefined) {
+        if (key.kind === "escape") {
+          jobWalk = undefined;
+          say(
+            "the walk stopped — the missed rows are still unacknowledged and will be asked about again",
+          );
+          return false;
+        }
+        if (key.kind === "char" && key.char === "n") {
+          jobWalk += 1;
+          if (jobWalk >= jobMissed.length)
+            void finishWalk().then(say, (error: unknown) => say(String(error)));
+          return false;
+        }
+        if (key.kind === "char" && key.char === "y") {
+          if (client?.runJob === undefined || job === undefined) return false;
+          void client
+            .runJob(job.id)
+            .then((response) => {
+              const note = (response.body as { note?: string } | null)?.note ?? "run started";
+              say(note);
+              jobWalk = (jobWalk ?? 0) + 1;
+              if (jobWalk >= jobMissed.length) return finishWalk().then(say);
+              return undefined;
+            })
+            .catch((error: unknown) => {
+              // D-103's one-run-at-a-time rule refuses a second open run; the occurrence is not lost — the walk stays
+              // on it and the refusal is on the line rather than in a log.
+              say(`run refused: ${error instanceof Error ? error.message : String(error)}`);
+            })
+            .then(() => {
+              void refreshJobs();
+            });
+          return false;
+        }
+        return false;
+      }
+      // T17-07's prompt: three answers, and Esc answers nothing (the rows stay).
+      if (jobBacklog) {
+        if (key.kind === "escape") {
+          jobBacklog = false;
+          say("no answer recorded — the missed rows stay until one is");
+          return false;
+        }
+        if (key.kind === "char" && (key.char === "l" || key.char === "s")) {
+          if (client?.jobBacklog === undefined || job === undefined) return false;
+          const action = key.char === "l" ? "latest" : "skip";
+          jobBacklog = false;
+          void client
+            .jobBacklog(job.id, { action })
+            .then((response) => {
+              const body = response.body as {
+                note?: string;
+                taskId?: string;
+                acknowledged?: number;
+              } | null;
+              say(
+                `${body?.note ?? "backlog answered"}${body?.taskId === undefined ? "" : ` (task ${body.taskId})`}`,
+              );
+              return refreshJobs();
+            })
+            .catch((error: unknown) =>
+              say(
+                `backlog answer failed: ${error instanceof Error ? error.message : String(error)}`,
+              ),
+            );
+          return false;
+        }
+        if (key.kind === "char" && key.char === "e") {
+          if (jobMissed.length === 0) {
+            say("nothing is missed, so there is nothing to walk");
+            jobBacklog = false;
+            return false;
+          }
+          jobBacklog = false;
+          jobWalk = 0;
+          return false;
+        }
+        return false;
+      }
+      // T17-04's detail: Esc closes it; the row keys still act (the detail is the same job).
+      if (jobDetail !== undefined && key.kind === "escape") {
+        jobDetail = undefined;
+        return false;
+      }
+      if (job !== undefined && (key.kind === "up" || key.kind === "down")) {
+        jobIndex =
+          key.kind === "down" ? Math.min(jobs.length - 1, jobIndex + 1) : Math.max(0, jobIndex - 1);
+        jobDetail = undefined;
+        return false;
+      }
+      if (job !== undefined && key.kind === "char") {
+        if (key.char === "j" || key.char === "k") {
+          jobIndex =
+            key.char === "j" ? Math.min(jobs.length - 1, jobIndex + 1) : Math.max(0, jobIndex - 1);
+          jobDetail = undefined;
+          return false;
+        }
+        if (key.char === "p") {
+          if (client?.pauseJob === undefined || client.resumeJob === undefined) return false;
+          const resuming = job.state === "paused";
+          void (resuming ? client.resumeJob(job.id) : client.pauseJob(job.id))
+            .then((response) => {
+              say(
+                (response.body as { note?: string } | null)?.note ??
+                  (resuming ? "resumed" : "paused"),
+              );
+              return refreshJobs();
+            })
+            .catch((error: unknown) =>
+              say(
+                `${resuming ? "resume" : "pause"} failed: ${error instanceof Error ? error.message : String(error)}`,
+              ),
+            );
+          return false;
+        }
+        if (key.char === "n") {
+          // T17-05's `n` runs now. A run-now is a fresh policy evaluation (§4.5) — a T2 or T3 step inside it asks at run
+          // time exactly as a scheduled run would (W16-05's note, which the row shares).
+          if (client?.runJob === undefined) return false;
+          void client
+            .runJob(job.id)
+            .then((response) => {
+              const body = response.body as { note?: string; taskId?: string } | null;
+              say(
+                `${body?.note ?? "ran once"}${body?.taskId === undefined ? "" : ` (task ${body.taskId})`}`,
+              );
+              return refreshJobs();
+            })
+            .catch((error: unknown) =>
+              say(`run refused: ${error instanceof Error ? error.message : String(error)}`),
+            );
+          return false;
+        }
+        if (key.char === "e") {
+          jobEdit = openEditForm(job);
+          return false;
+        }
+        if (key.char === "d") {
+          jobDelete = openDeleteConfirm(job);
+          return false;
+        }
+        if (key.char === "b") {
+          // The prompt needs the *rows* of the backlog (the walk names each due time), and they ride on the detail
+          // answer — one request, which is why `GET /jobs/{id}` carries them (the contract's own reason).
+          if (client?.job === undefined) return false;
+          void client
+            .job(job.id)
+            .then((response) => {
+              const detail = readJobDetail(response.body);
+              jobMissed = detail.missedUnacknowledged;
+              if (jobMissed.length === 0 && job.missed === 0) {
+                say("no occurrence of this job passed while nothing was watching");
+                return undefined;
+              }
+              jobBacklog = true;
+              return undefined;
+            })
+            .then(draw)
+            .catch((error: unknown) =>
+              say(`job detail failed: ${error instanceof Error ? error.message : String(error)}`),
+            );
+          return false;
+        }
+      }
+      if (key.kind === "enter" && job !== undefined && client?.job !== undefined) {
+        void client
+          .job(job.id)
+          .then((response) => {
+            const detail = readJobDetail(response.body);
+            jobMissed = detail.missedUnacknowledged;
+            jobDetail = jobDetailPane(detail, columns);
+            return undefined;
+          })
+          .then(draw)
+          .catch((error: unknown) =>
+            say(`job detail failed: ${error instanceof Error ? error.message : String(error)}`),
+          );
+        return false;
+      }
+    }
+    if (pane === "logs") {
+      // T15's views cycle on `v` and T15-05's artifact is `d`: the same `findUnsafeShapes` refusal and the same
+      // 0600 file `crabby diagnostics` writes, because a second writer of the bundle would be a second answer to
+      // "what may a paste contain".
+      if (key.kind === "char" && key.char === "v") {
+        logsView = nextLogsView(logsView);
+        if (logsView === "decisions") void readDecisions().then(draw);
+        return false;
+      }
+      if (key.kind === "char" && key.char === "d") {
+        const diagnostics = client?.diagnostics;
+        if (diagnostics === undefined) return false;
+        void (async () => {
+          try {
+            const text = JSON.stringify((await diagnostics()).body, null, 2);
+            const unsafe = findUnsafeShapes(text);
+            if (unsafe.length > 0) {
+              message =
+                `refused — the report carries ${unsafe.join(", ")} (§4's promise is to refuse rather than ` +
+                "redact after the fact)";
+            } else {
+              const written = writeDiagnosticsArtifact(text);
+              message = diagnosticsLine(written.file, written.bytes);
+            }
+          } catch (error) {
+            message = `diagnostics failed: ${error instanceof Error ? error.message : String(error)}`;
+          }
+          draw();
+        })();
+        return false;
+      }
+    }
+    if (pane === "models") {
+      const view = modelViews[modelIndex];
+      // T11-03/04/08's editor: the typed fields use the composer's own key table (one answer to "where is the cursor"),
+      // Space cycles a capability's three positions, Enter saves through `nextOverride` + `writeOverrideRecord` — the
+      // same stored-value rules and the same storage path `crabby model edit` uses (D-064).
+      if (modelEdit !== undefined) {
+        if (key.kind === "escape") {
+          modelEdit = undefined;
+          message = "edit cancelled — nothing written";
+          return false;
+        }
+        if (key.kind === "enter") {
+          const form = modelEdit;
+          modelEdit = undefined;
+          void saveModelEdit(form).then(
+            (text) => {
+              message = text;
+              draw();
+            },
+            (error: unknown) => {
+              message = `edit failed: ${error instanceof Error ? error.message : String(error)}`;
+              draw();
+            },
+          );
+          return false;
+        }
+        if (key.kind === "up" || key.kind === "down") {
+          const fields = 4 + SUPPORTED_FEATURES.length;
+          modelEdit = {
+            ...modelEdit,
+            field:
+              key.kind === "down"
+                ? (modelEdit.field + 1) % fields
+                : (modelEdit.field + fields - 1) % fields,
+          };
+          return false;
+        }
+        if (key.kind === "char" && key.char === " " && modelEdit.field >= 4) {
+          const feature = SUPPORTED_FEATURES[
+            modelEdit.field - 4
+          ] as (typeof SUPPORTED_FEATURES)[number];
+          modelEdit = {
+            ...modelEdit,
+            supports: {
+              ...modelEdit.supports,
+              [feature]: cycleChoice(
+                modelEdit.supports[feature] as "auto" | "force on" | "force off",
+              ),
+            },
+          };
+          return false;
+        }
+        const field = modelEdit.field;
+        const action = actionForKey(key);
+        if (action !== undefined && field < 4) {
+          const name = (["context", "maxOutput", "reserve", "notes"] as const)[field] as
+            | "context"
+            | "maxOutput"
+            | "reserve"
+            | "notes";
+          modelEdit = { ...modelEdit, [name]: applyComposerAction(modelEdit[name], action) };
+        }
+        return false;
+      }
+      // T11-06's reset: one line naming what will be lost, and a second `r` is the only thing that removes it (W-O4's
+      // destructive-never-pre-focused, in a terminal's shape).
+      if (modelResetPending) {
+        if (key.kind === "char" && key.char === "r" && view !== undefined) {
+          modelResetPending = false;
+          if (client === undefined) return false;
+          void (async () => {
+            const loaded = loadConfig(layout);
+            const report = writeOverrideRecord(
+              layout,
+              loaded,
+              view.provider,
+              view.model,
+              undefined,
+            );
+            readModels();
+            message = report.ok
+              ? "cleared — the reported descriptor is in force"
+              : (report.message ?? "nothing was written");
+            draw();
+          })();
+          return false;
+        }
+        modelResetPending = false;
+        message = "kept — the overrides stand";
+        return false;
+      }
+      if (
+        key.kind === "up" ||
+        key.kind === "down" ||
+        (key.kind === "char" && (key.char === "j" || key.char === "k"))
+      ) {
+        const down = key.kind === "down" || (key.kind === "char" && key.char === "j");
+        modelIndex = down
+          ? Math.min(modelViews.length - 1, modelIndex + 1)
+          : Math.max(0, modelIndex - 1);
+        return false;
+      }
+      if (view !== undefined && key.kind === "char") {
+        if (key.char === "e") {
+          modelEdit = openModelForm(view);
+          return false;
+        }
+        if (key.char === "r") {
+          if (overrideFieldCount(view) === 0) {
+            message = "this model has no override record — nothing to reset";
+            return false;
+          }
+          modelResetPending = true;
+          return false;
+        }
+      }
+    }
     // The composer owns every printable key when the chat pane is up (T3-04), and the pane's own bindings are read *after*
     // it — so a letter can never be swallowed by a pane binding and a pane binding can never eat a half-typed word.
     if (pane === "chat" && isComposerKey(key)) {
@@ -284,7 +1005,12 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         key as ComposerKey,
         undefined,
       );
-      composer = handled.composer;
+      const draft = composer;
+      if (handled.action === "send") {
+        composer = emptyComposer();
+      } else {
+        composer = handled.composer;
+      }
       if (handled.unbound !== undefined) {
         message = `${handled.unbound} is not bound here — this terminal has no Shift+Enter (D-061 measured that); use Ctrl+J for a newline`;
       }
@@ -292,8 +1018,8 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         message = undefined;
         // The history records what was typed, not what was sent, and it records it before the send is attempted: a send that
         // fails must not erase the words a person just typed.
-        if (composer.buffer.trim().length > 0) previousInputs.push(composer.buffer.trim());
-        void send(client, composer, transcript).then(
+        if (draft.buffer.trim().length > 0) previousInputs.push(draft.buffer.trim());
+        void send(client, draft, transcript).then(
           (sent) => {
             composer = emptyComposer();
             message = sent;
@@ -337,7 +1063,14 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
 
   stdin.on("data", onData);
   const poll = setInterval(() => {
-    void readTasks().then(draw);
+    void readTasks()
+      .then(() => readApprovals())
+      .then(() => readJobs())
+      .then(() => {
+        readModels();
+      })
+      .then(() => (pane === "logs" ? readDecisions() : Promise.resolve()))
+      .then(draw);
   }, POLL_MS);
   const shutdown = (): void => {
     clearInterval(poll);

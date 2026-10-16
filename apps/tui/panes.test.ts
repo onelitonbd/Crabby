@@ -153,10 +153,10 @@ describe("the panes that are not built", () => {
     }
   });
 
-  it("exactly one pane is built in this slice, and it is the tasks list", () => {
+  it("the built set is the slice's truth: every pane draws real content now (logs' log/audit views name their route gaps)", () => {
     assert.deepEqual(
       PANE_DESCRIPTORS.filter((entry) => entry.built).map((entry) => entry.pane),
-      ["tasks"],
+      ["chat", "tasks", "jobs", "approvals", "logs", "models"],
     );
   });
 });

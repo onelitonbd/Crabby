@@ -59,6 +59,32 @@ export interface TaskReader {
     body: { readonly objective: string; readonly sessionId?: string | undefined },
     idempotencyKey: string,
   ): Promise<Response<unknown>>;
+  listApprovals?(options?: { readonly state?: string }): Promise<Response<unknown>>;
+  /** `GET /diagnostics` — T15-05's artifact is the same document `crabby diagnostics` writes, so the pane and the verb
+   *  refuse the same secret shapes and print the same kind of path. */
+  diagnostics?(): Promise<Response<unknown>>;
+  decideApproval?(
+    id: string,
+    body: { readonly decision: "approve" | "deny"; readonly scope?: string },
+    idempotencyKey?: string,
+  ): Promise<Response<unknown>>;
+  listJobs?(options?: { readonly state?: string }): Promise<Response<unknown>>;
+  /** `GET /jobs/{id}` — T17-04's detail reads the row, the bounded run history and the unacknowledged backlog rows from
+   *  one answer, so a user deciding what to do about missed runs is not made to ask twice. */
+  job?(id: string): Promise<Response<unknown>>;
+  pauseJob?(id: string): Promise<Response<unknown>>;
+  resumeJob?(id: string): Promise<Response<unknown>>;
+  runJob?(id: string): Promise<Response<unknown>>;
+  /** T17-06's non-material half: `PATCH /jobs/{id}` takes a name and a schedule. `objective` is not a field of the body
+   *  at all — changing what a job does crosses into re-approval (§4.5) and no route in this build can open one (D-084). */
+  patchJob?(
+    id: string,
+    body: { readonly name?: string; readonly schedule?: string },
+  ): Promise<Response<unknown>>;
+  /** T17-07's answer over `POST /jobs/{id}/backlog`. The body's `action` is `latest | skip`; T17-07's third answer
+   *  (`each`) is the walk this TUI builds over `runJob` one decision at a time, because the wire has no `each` and a
+   *  burst is what §4.5 forbids outright. */
+  jobBacklog?(id: string, body: { readonly action: "latest" | "skip" }): Promise<Response<unknown>>;
 }
 
 /** `items` out of a Gateway list body, or a thrown sentence. **A client of a document is not entitled to assume the field is
@@ -103,11 +129,19 @@ export interface TaskSummary {
 
 /** The status the pane can derive for itself, and only for itself: a pane does not invent a connection word, it is told the
  *  one the Gateway last confirmed (T2-02's rule about a client-side clock being a second opinion). */
-export function statusFrom(context: PaneContext, tasks: readonly TaskSummary[]): StatusState {
+export function statusFrom(
+  context: PaneContext,
+  tasks: readonly TaskSummary[],
+  /** T17-08: a job whose run is waiting on a human raises the pending-approval count on the status line, so a stall that
+   *  began in a *timer* is visible from every pane and not only from the jobs list. */
+  jobs: readonly { readonly stateWord: string }[] = [],
+): StatusState {
   const running = tasks.find(
     (task) => task.state === "running" || task.state === "awaiting_approval",
   );
-  const pending = tasks.reduce((total, task) => total + (task.pendingApprovals ?? 0), 0);
+  const deferredRuns = jobs.filter((job) => job.stateWord === "waiting-approval").length;
+  const pending =
+    tasks.reduce((total, task) => total + (task.pendingApprovals ?? 0), 0) + deferredRuns;
   return {
     connection: context.offline ? "offline" : "live",
     ...(context.lastConfirmed === undefined ? {} : { lastConfirmed: context.lastConfirmed }),
@@ -273,11 +307,11 @@ export interface PaneDescriptor {
 
 export const PANE_DESCRIPTORS: readonly PaneDescriptor[] = [
   {
+    // Built: D-130's markdown/transcript/composer and D-131's stream + task-start send. The `built` flag is what the
+    // frame's fallback reads, and a flag that says `false` here would route a pane that exists to `plannedPane`.
     pane: "chat",
     hints: ["i compose", "Enter send", "Tab panes", "? help", "q quit"],
-    built: false,
-    milestone: "M3 chat pane (T4, T5)",
-    equivalent: "crabby chat",
+    built: true,
   },
   {
     pane: "tasks",
@@ -285,31 +319,43 @@ export const PANE_DESCRIPTORS: readonly PaneDescriptor[] = [
     built: true,
   },
   {
+    // T17-05 names the four row keys and says the hint line is the authority — so the hint line lists exactly those
+    // first, then the two affordances the region needs a key for and does not name (the detail T17-04 draws, and
+    // T17-07's backlog prompt). `p` is pause *and* resume on one key because the row writes one key and two acts.
     pane: "jobs",
-    hints: ["p pause", "r resume", "Tab panes", "? help", "q quit"],
-    built: false,
-    milestone: "M3 jobs pane (T17)",
-    equivalent: "crabby job ls / job pause / job resume",
+    hints: [
+      "p pause/resume",
+      "n run now",
+      "e edit",
+      "d delete",
+      "Enter detail",
+      "b backlog",
+      "j/k move",
+      "Tab panes",
+      "? help",
+      "q quit",
+    ],
+    built: true,
   },
   {
+    // Built: T-A's modal (one card, n/p walk, typed answers) and the queue pane over `GET /approvals`.
     pane: "approvals",
     hints: ["y approve once", "n deny", "Tab panes", "? help", "q quit"],
-    built: false,
-    milestone: "M3 approvals modal (T-A)",
-    equivalent: "crabby approval approve/deny",
+    built: true,
   },
   {
+    // T15-04 (decisions) and T15-05 (diagnostics) are wired; T15-01/03's log and audit views name their gap because
+    // `GET /logs` and `GET /audit` have no routes in this build. The hint line lists only the keys that do something.
     pane: "logs",
-    hints: ["Tab panes", "? help", "q quit"],
-    built: false,
-    milestone: "M3 logs pane",
-    equivalent: "crabby diagnostics",
+    hints: ["v view", "d diagnostics", "Tab panes", "? help", "q quit"],
+    built: true,
   },
   {
+    // T11-03/04/06/08's editor is wired (`e`, `r`), and the hint line lists only what is possible right now (T3-01):
+    // the probe (T11-07) is the row this build cannot act on and names its gap in the pane instead.
     pane: "models",
-    hints: ["e edit override", "Tab panes", "? help", "q quit"],
-    built: false,
-    milestone: "M3 models pane",
+    hints: ["e edit", "r reset", "j/k move", "Tab panes", "? help", "q quit"],
+    built: true,
     equivalent: "crabby model list / crabby model edit",
   },
 ];
@@ -332,5 +378,9 @@ export function paneState(
   };
 }
 
+export * from "./approvals.ts";
+export * from "./jobs.ts";
+export * from "./logs.ts";
+export * from "./models.ts";
 /** Re-exported so `main.ts` builds its frame through the same code path the tests do. */
 export { statusLine };

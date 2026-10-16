@@ -38,10 +38,10 @@ import { connect, reportFailure, reportNoGateway } from "../connect.ts";
 import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
 import {
-  describeOverride,
   nextOverride,
   type OverrideAnswers,
   parseSupports,
+  writeOverrideRecord,
 } from "./model-edit.ts";
 
 export type ProviderVerb = "add" | "list" | "remove";
@@ -656,35 +656,20 @@ async function editModel(
     renderer.line("model edit", next.reason);
     return EXIT.usage;
   }
-  const file = structuredClone(loaded.file) as Record<string, unknown>;
-  const providers = { ...((file.provider ?? {}) as Record<string, unknown>) };
-  const entry0 = { ...((providers[providerId] ?? {}) as Record<string, unknown>) };
-  const overrides = { ...((entry0.overrides ?? {}) as Record<string, unknown>) };
-  if (next.override === undefined) delete overrides[modelId];
-  else overrides[modelId] = next.override;
-  if (Object.keys(overrides).length === 0) delete entry0.overrides;
-  else entry0.overrides = overrides;
-  providers[providerId] = entry0;
-  file.provider = providers;
-
-  const written = writeConfig(layout, file as ConfigFile, undefined, { token: loaded.token });
-  if (!written.ok) {
-    renderer.line("refused", written.message);
+  // The write and the compose report come from the one storage path (`writeOverrideRecord`), which the TUI's editor
+  // uses too — so "both paths must reach the same stored value" is a fact about the code, not a promise about it.
+  const report = writeOverrideRecord(layout, loaded, providerId, modelId, next.override);
+  if (!report.ok) {
+    renderer.line("refused", report.message ?? "nothing was written");
     renderer.fix(
-      written.code === "stale"
+      report.code === "stale"
         ? "the file changed since this command read it — run it again"
         : "nothing was written",
     );
     return EXIT.usage;
   }
-
-  // Composed here rather than after a Gateway restart, and the reason is the same one `provider add` gives: this is the
-  // same pure function on the same document, so what this prints is what the next process will compose rather than a
-  // second opinion about it.
-  const composed = composeProviders((file as ConfigFile).provider);
-  const entry1 = composed.find((row) => row.id === providerId);
-  const provenance = entry1?.ok === true ? entry1.overrides[modelId] : undefined;
-  const changes = describeOverride(provenance);
+  const provenance = report.provenance;
+  const changes = report.changes;
   if (renderer.json) {
     renderer.done({
       model: target,
@@ -692,9 +677,9 @@ async function editModel(
         ? { override: null, cleared: true }
         : { override: next.override }),
       ...(provenance === undefined ? {} : { effective: provenance }),
-      ...(entry1 === undefined || !entry1.ok
-        ? { composed: false, reason: entry1?.reason ?? "unknown" }
-        : { composed: true }),
+      ...(report.composed
+        ? { composed: true }
+        : { composed: false, reason: report.composeReason ?? "unknown" }),
       changes,
     });
     return EXIT.success;
@@ -715,10 +700,10 @@ async function editModel(
   } else {
     for (const change of changes) renderer.line("  changed", change);
   }
-  if (entry1 === undefined || !entry1.ok) {
+  if (!report.composed) {
     renderer.line(
       "composed",
-      `no — ${entry1?.reason ?? "unknown"}, so this override is not in force until that is fixed`,
+      `no — ${report.composeReason ?? "unknown"}, so this override is not in force until that is fixed`,
     );
   }
   if (current?.notes !== undefined && next.override !== undefined) {

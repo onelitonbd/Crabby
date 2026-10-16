@@ -361,6 +361,126 @@ export function parseCron(expression: string): CronParse {
   };
 }
 
+/** W16-01's "written both ways" and T17-02's "schedule in words": a five-field expression as the sentence a phone can
+ *  review. `30 7 * * 1-5` is `every weekday 07:30` — the register W16-01's own example sets. **One renderer for four
+ *  interfaces**, the reason `packages/platform`'s `clip` is one: a words form each client derived would drift until a
+ *  schedule read differently in the TUI and the Web. Rendered beside the parser because the grammar is this module's own
+ *  (`localStamp` is here for the same reason), and the expression is what the detail line prints — the words are the
+ *  reviewable half, never the only representation (T17-02).
+ *
+ *  An expression this grammar cannot read is returned verbatim: there are no words to write for a string that is not a
+ *  five-field schedule, and inventing a description would be describing something other than what was stored. Every
+ *  schedule a job carries passed `parseCron` at creation, so that fallback is for foreign bodies, not for stored state. */
+export function scheduleInWords(expression: string): string {
+  const parsed = parseCron(expression);
+  if (!parsed.ok) return expression;
+  const schedule = parsed.schedule;
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  const list = (words: readonly string[]): string =>
+    words.length <= 1
+      ? (words[0] ?? "")
+      : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1] as string}`;
+  const WEEKDAY_WORDS = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ] as const;
+  const MONTH_WORDS = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ] as const;
+  const ordinal = (day: number): string => {
+    const suffix =
+      day % 100 >= 11 && day % 100 <= 13
+        ? "th"
+        : day % 10 === 1
+          ? "st"
+          : day % 10 === 2
+            ? "nd"
+            : day % 10 === 3
+              ? "rd"
+              : "th";
+    return `${day}${suffix}`;
+  };
+
+  const everyDayScope =
+    !schedule.dayOfMonthRestricted &&
+    !schedule.dayOfWeekRestricted &&
+    schedule.months.length === 12;
+  const everyMonthScope = !schedule.dayOfMonthRestricted && !schedule.dayOfWeekRestricted;
+
+  // The day scope: what the schedule is "every". A restricted day-of-week narrows it to those days; a restricted
+  // day-of-month narrows it to the month's days; both restricted means the occurrence matches either (this parser's
+  // recorded decision — Vixie's OR rule), so the sentence says both.
+  let scope: string;
+  if (schedule.dayOfWeekRestricted) {
+    const days = schedule.daysOfWeek.map((day) => WEEKDAY_WORDS[day] ?? String(day));
+    const set = new Set(schedule.daysOfWeek);
+    const isWeekday = [1, 2, 3, 4, 5].every((day) => set.has(day)) && set.size === 5;
+    const isWeekend = set.has(0) && set.has(6) && set.size === 2;
+    scope = isWeekday ? "every weekday" : isWeekend ? "every weekend" : `every ${list(days)}`;
+    if (schedule.dayOfMonthRestricted) {
+      const daysOfMonth = schedule.daysOfMonth.map(ordinal);
+      scope = `${scope} and on the ${list(daysOfMonth)}`;
+    }
+  } else if (schedule.dayOfMonthRestricted) {
+    scope = `every month on the ${list(schedule.daysOfMonth.map(ordinal))}`;
+    if (schedule.months.length < 12) {
+      // "every month on the 1st in Jan" contradicts itself; the months are the scope, the days are the qualifier.
+      scope = `on the ${list(schedule.daysOfMonth.map(ordinal))}`;
+    }
+  } else {
+    scope = "every day";
+  }
+  if (schedule.months.length < 12) {
+    const months = schedule.months.map((month) => MONTH_WORDS[month - 1] ?? String(month));
+    scope =
+      everyMonthScope && !schedule.dayOfMonthRestricted && !schedule.dayOfWeekRestricted
+        ? `every day in ${list(months)}`
+        : `${scope} in ${list(months)}`;
+  }
+
+  // The time half. A cross product of hours × minutes sorted by the clock, because `30 7,19 * * *` fires at 07:30 and
+  // 19:30 and that is two times, not "7,19 hours past 30".
+  const times = [
+    ...new Set(
+      schedule.hours.flatMap((hour) =>
+        schedule.minutes.map((minute) => `${pad(hour)}:${pad(minute)}`),
+      ),
+    ),
+  ].sort();
+
+  // Minute cadences say "every N minutes" and carry no clock time; `*/5` is not "every hour at :00, :05, …".
+  if (schedule.hours.length === 24 && schedule.minutes.length === 60) {
+    return everyDayScope ? "every minute" : `every minute ${scope}`;
+  }
+  if (schedule.hours.length === 24) {
+    const step = 60 / schedule.minutes.length;
+    const evenStep =
+      Number.isInteger(step) && schedule.minutes.every((minute, index) => minute === index * step);
+    if (evenStep) {
+      return everyDayScope ? `every ${step} minutes` : `every ${step} minutes ${scope}`;
+    }
+    const marks = schedule.minutes.map((minute) => `:${pad(minute)}`);
+    return everyDayScope ? `every hour at ${list(marks)}` : `every hour at ${list(marks)} ${scope}`;
+  }
+  return `${scope} ${times.join(", ")}`;
+}
+
 /** Does this wall minute satisfy the expression? The day rule is the only part with a branch, and the branch is the
  *  decision recorded above rather than an implementation detail. */
 export function matches(schedule: CronSchedule, wall: WallMinute): boolean {

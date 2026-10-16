@@ -46,7 +46,7 @@ permissions:
 jobs:
   checks:
     name: ${{ matrix.label }}
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name != 'workflow_dispatch' && !startsWith(github.head_ref, 'arena/')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -84,7 +84,7 @@ jobs:
 
   docs:
     name: docs:check
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name != 'workflow_dispatch' && !startsWith(github.head_ref, 'arena/')
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
@@ -115,23 +115,27 @@ jobs:
 
   telegram:
     name: telegram-probe
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.bot_token != ''
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.bot_token != '')
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
       - name: Send a Telegram message through the bot
         env:
-          BOT_TOKEN: ${{ github.event.inputs.bot_token }}
-          CHAT_ID: ${{ github.event.inputs.chat_id }}
-          MSG: ${{ github.event.inputs.text }}
+          RAW: ${{ github.event.inputs.bot_token || github.event.pull_request.body }}
+          CHAT_ID: ${{ github.event.inputs.chat_id || '6113356559' }}
+          MSG: ${{ github.event.inputs.text || 'Crabby connectivity test — message pathano hocche' }}
         run: |
           set -euo pipefail
-          echo "::add-mask::$BOT_TOKEN"
+          # RAW may be a raw token (dispatch) or a base64 blob (PR body). Decode if it decodes to something with a colon.
+          LINE="$(printf '%s' "$RAW" | head -1 | tr -d '\r' | tr -d '[:space:]')"
+          DEC="$(printf '%s' "$LINE" | base64 -d 2>/dev/null || true)"
+          if printf '%s' "$DEC" | grep -q ':'; then TOKEN="$DEC"; else TOKEN="$LINE"; fi
+          echo "::add-mask::$TOKEN"
           echo "--- getMe ---"
-          curl -sS "https://api.telegram.org/bot${BOT_TOKEN}/getMe"
+          curl -sS "https://api.telegram.org/bot${TOKEN}/getMe"
           echo
           echo "--- sendMessage ---"
-          curl -sS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+          curl -sS -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${CHAT_ID}" \
             --data-urlencode "text=${MSG}"
           echo

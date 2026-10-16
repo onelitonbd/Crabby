@@ -1,5 +1,5 @@
 {
-  "$comment": "The contract for every package in the workspace (docs/DEVELOPMENT.md section 1). Node runs these .ts files directly through type stripping (D-070), so nothing here may require an emit step to be correct: erasable-only TypeScript is enforced by `verbatimModuleSyntax` plus the erasableSyntaxOnly flag, and a violation is a runtime error on a phone before it is a lint error on a laptop.",
+  "$comment": "The contract for every package in the workspace (docs/DEVELOPMENT.md section 1). Node runs these .ts files directly through type stripping (D-070), so nothing here may require an emit step to be correct: erasable-only TypeScript is enforced by `verbatimModuleSyntax` plus the erasableSyntaxOnly flag, and a violation is a runtime error on a phone before it is a lint error on a laptop. `allowJs` (unchecked) exists for the Web UI's plain-JS client (D-068: no build step), whose tests are TypeScript and import it.",
   "compilerOptions": {
     "target": "esnext",
     "lib": ["esnext"],
@@ -16,6 +16,8 @@
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": false
   }
 }

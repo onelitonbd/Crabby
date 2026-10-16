@@ -263,6 +263,11 @@ export interface GatewayDeps {
    *  comes from `process.env` cannot be tested on both sides of the predicate — which is the half that matters, since
    *  the desktop CI run is exactly where a Termux-only row has to show up as unavailable rather than broken. */
   readonly platformFacts?: { isTermux: boolean };
+  /** D-067: where the Web UI's client files live (`apps/web`), served by this process on the same origin at `/web`.
+   *  Optional — a composition that names no directory simply has no web surface, and `/web/*` falls through to the
+   *  token guard like everything else. The assets answer without a token; why that is not a §13 violation is argued
+   *  at the top of `web.ts`, and held by `web.test.ts` on both sides (assets bare, `/api/v1/health` still 401). */
+  readonly webRoot?: string;
   /** What the composition root made of `config.json`'s `provider.*` entries — §3.3's "Configured through `crabby
    *  provider add` **or configuration**", the second half, composed by `packages/providers/compose.ts`. Handed in rather
    *  than read here for the reason `platformFacts` is injected: this file has no opinion about where configuration comes
@@ -324,6 +329,8 @@ export interface BuiltApp {
    *  instance, reachable from the party that composes the executor. */
   readonly cancellation: Cancellation;
 }
+
+import { isWebPath, serveWebAsset } from "./web.ts";
 
 const REDEEM_PATH = "/api/v1/auth/pair";
 const MINT_PATH = "/api/v1/auth/pair-codes";
@@ -562,6 +569,17 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
     request.crabbyRequestId = requestId;
 
     const route = request.url.split("?")[0] ?? request.url;
+    // D-067's same-origin client: GET/HEAD under `/web` is the Web UI's own files, answered from `webRoot` before the
+    // token guard — they are the client, not a capability. Only when a root was handed in; otherwise the path falls
+    // through and the guard's 401 is the honest answer, exactly as it was before this surface existed.
+    if (
+      deps.webRoot !== undefined &&
+      (request.method === "GET" || request.method === "HEAD") &&
+      isWebPath(route)
+    ) {
+      await serveWebAsset(request, reply, deps.webRoot, route);
+      return;
+    }
     if (route === REDEEM_PATH) return;
     if (route === MINT_PATH) {
       requireLoopback(request, "pairing");

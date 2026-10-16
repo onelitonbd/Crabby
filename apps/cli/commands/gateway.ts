@@ -419,7 +419,12 @@ async function runStart(
           limits: loopLimitsOf(loaded.config.limits),
         };
   const startedAt = new Date();
+  // D-067: the client the Gateway serves at `/web` ships beside this code. Its absence is not an error — a Gateway
+  // composed without the directory simply has no web surface, and `/web/*` answers like any other unauthenticated
+  // path (the guard's 401), which is the honest answer rather than a broken page.
+  const webRoot = path.resolve(new URL("../../../apps/web", import.meta.url).pathname);
   const built = await buildApp({
+    ...(existsSync(webRoot) ? { webRoot } : {}),
     db: handle.db,
     layout,
     log,

@@ -625,8 +625,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     verb: "open",
     summary: "the Web control UI's address and a pairing hint",
     flags: [],
-    status: "planned",
-    milestone: "M3 (the Web interface)",
+    status: "ready",
   },
   {
     noun: "telegram",

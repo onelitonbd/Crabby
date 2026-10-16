@@ -47,6 +47,7 @@ import { runTask, type TaskVerb } from "./commands/task.ts";
 import { runTools } from "./commands/tools.ts";
 import { runTuiCommand } from "./commands/tui.ts";
 import { readVersion, runVersion } from "./commands/version.ts";
+import { runWebOpen } from "./commands/web.ts";
 import { commandName, findCommand, helpText, suggest } from "./registry.ts";
 
 interface Parsed {
@@ -269,6 +270,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     case "model": {
       return runModel(verb as ModelVerb | undefined, rest, layout, renderer);
+    }
+    case "web": {
+      // C8-03: prints the Gateway-served URL and the pairing hint. It starts nothing (D-067) and takes no verb —
+      // the row is `web open`, and `crabby web` alone answers the same way rather than a usage error.
+      return runWebOpen(layout, renderer);
     }
     case "tui": {
       // The TUI is an application, not a verb, so it is answered here rather than from `registry.ts` — and the reason is

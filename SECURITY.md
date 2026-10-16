@@ -391,6 +391,7 @@ Default posture: **loopback only**. Requirements for the optional remote mode:
 - Tunnel lifecycle: URL changes on restart, so clients must discover rather than assume; the runtime must handle tunnel drops with clear state, and `crabby tunnel stop` must fully revoke exposure and close the listener.
 - Log the tunnel's active periods and any accepted remote auth failures.
 - LAN exposure (non-loopback bind) and reverse-proxy setups are separate, harder-to-secure modes; keep them out of the initial release unless requested, and never offer them implicitly.
+- Scope note for the served client (D-067/D-068): "every route" above is the **API** surface — the routes `printRoutes()` inventories and the sweep in `tests/security/` walks. The Web UI's static files under `/web` are the client itself, the code a person could equally `scp` and open from `file://`; they answer without a token because serving them changes only what the browser downloads, never what the Gateway does. Every capability stays behind the token, which the page obtains through `POST /api/v1/auth/pair` (§3.1's one unauthenticated route) and sends as a header. `packages/gateway/web.test.ts` holds both halves: assets answer bare, and `/api/v1/health` next door still refuses without one.
 
 ## 14. Audit Logging and Safe Telemetry
 

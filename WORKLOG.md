@@ -49,3 +49,35 @@ TUI-র সব কাজ আগেই শেষ (ধাপ ১-এর ৫ ব্
 2. Route-নির্ভর বাকি অংশ (ধাপ ২): `GET /logs`, `GET /audit`, `POST /models/…/probe`, job-delete, providers (W9),
    extensions/memory — Gateway route ছাড়া TUI/Web-এ ভাবনা নেই; দুই ক্লায়েন্টেই নাম-সহ gap-note আছে।
 3. খোলা সিদ্ধান্ত: D-066 vault-secrets (milestone-বাঁধা), O-তালিকা HANDOVER §7-এ।
+
+## করলাম (সর্বশেষ: Telegram bot-এর সব implementation)
+
+"tahole ekhon telegram bot er sob kaj ja ja implementation dorkar sob ses koro. erpor amake janao" — **Telegram bot
+(TELEGRAM.md-এর ১১ region, 129 element) সম্পূর্ণ**, এক কমিটে push।
+
+- **`packages/telegram` (২৩ ফাইল, D-132):** limit (4096/1024/64B, edit-floor 1100/3100ms, UPLOAD 50MB, MENU 10,
+  POLL 25s, SHED 12/min, TARGET_OWN 2000) · format (G2: escape, subset→plain, fence-সচেতন split, stamp, truncation) ·
+  commands (৩৬ row = ৩২+৪ refusal, menu ৭, parse +@bot, closest) · state (**telegram.json = D-078-এর ৬ষ্ঠ ফাইল**,
+  0600, corrupt→empty) · transport (grammY, 429 retry_after, is_bot→ignored G1-08) · outbound (per-chat pace, 429→
+  (retry_after+1)s→১ পুনঃপ্রয়াস→recordFailedSend G-T06, edit coalescer, approval bypass G-A13) · approvals
+  (`apr:<id>:<nonce>`, triple-verify G-A4, ≤2000 G-A10) · watch (SSE + Last-Event-ID + gap, reconnect 1.5s, terminal
+  নিজ মেসেজ G4-03, silence ≥30s G4-07, final>3800 G4-05) · surface (সব ৩২ কমান্ড + সৎ gap: /logs /export /delete
+  /tunnel /memory /ext /probe; config set→confirm→apply দুই-ধাপ, telegram.* refused G7-03) · bot (gate নীরব G1-01,
+  shed G-S10, pair redeem, ৩৬ কমান্ড রাউটিং, approval decide 409→conflict) · run (getUpdates offset+1, প্রতি update
+  শেষে setOffset G-S03, poll-ব্যর্থতায় backoff 2s→×2→60s) · index barrel।
+- **CLI:** `crabby telegram start` — টোকেন নেই→usage+fix-লাইন; `vault://`→vault-বাক্য+platformUnsupported (এই বিল্ডে
+  resolve নেই, F-56/M5); wiring `startTelegramLoop` exported (M5-এ বসবে)। core/config.ts-এ TelegramConfig
+  (allowUsers/allowChats regex)। gateway client-এ PUT method।
+- **ডকুমেন্ট:** DECISIONS.md **D-132** (adapter-প্যাকেজ + telegram.json ৬ষ্ঠ + token রানটাইমে, counter 132) +
+  docs/DATA_AND_MEMORY.md §4.1-এ telegram.json রো।
+- **যাচাই:** টেলিগ্রাম-প্যাকেজ টেস্ট **১০৪/১০৪** (১০ ফাইল), ফুল sweep **1308/1308**, tsc শূন্য, biome ✔, parity ✔
+  (32 routes), docs:check ✔ (24 docs)।
+- **যা হয়নি (সৎ):** লাইভ Telegram টোকেন নেই — প্রকৃত getUpdates পোল/setMyCommands চালানো যায়নি; টোকেন পেলে
+  `crabby config set telegram.token <token>` → `crabby telegram start`।
+
+## পরের কাজ (বাকি-হিসাব)
+
+1. M5 vault slice → `vault://telegram/bot-token` resolve হলে startTelegramLoop বসবে; লাইভ টোকেনে পোল-যাচাই।
+2. Route-নির্ভর বাকি (ধাপ ২): GET /logs, /audit, probe, job-delete, providers (W9), extensions/memory — তিন
+   ইন্টারফেসেই gap-note।
+3. খোলা সিদ্ধান্ত: D-066 vault-secrets (milestone-বাঁধা)।

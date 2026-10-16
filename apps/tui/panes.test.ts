@@ -287,7 +287,9 @@ describe("the chat pane", () => {
     // The menu line is the command and its about line now — a bare `/compact` teaches nothing, and the about is the
     // same sentence the pane's hints use, so the menu is never the only place the command's meaning lives.
     assert.ok(
-      lines.some((line) => line.trim().startsWith("/compact") && line.includes("compact this conversation")),
+      lines.some(
+        (line) => line.trim().startsWith("/compact") && line.includes("compact this conversation"),
+      ),
       lines.join(" | "),
     );
   });

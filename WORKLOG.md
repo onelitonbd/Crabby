@@ -22,7 +22,23 @@
   ক্লিয়ার)। HANDOVER.md §2/§3 হালনাগাদ; T5-06 gap-note ("which identity am I" route নেই)। ফুল sweep **1168/1168**,
   tsc শূন্য, biome 242 ফাইল ✔। push ✔।
 
-## করলাম (সর্বশেষ নির্দেশ অনুযায়ী)
+- **29d0413** — WORKLOG.md রিপো-মিরর শুরু; এ পর্যন্ত TUI build সম্পূর্ণ, রিপোর্ট ও বাকি-হিসাব চ্যাটে। push ✔।
+- **cbf5ccc** — **Web UI সম্পূর্ণ (D-068/D-067):** Gateway-ই `apps/web`-কে সার্ভ করে (`packages/gateway/web.ts` +
+  app.ts-এ webRoot hook, REDEEM-এর আগে; containment + content-type map + no-store)। Client: কোনো framework/build নেই —
+  custom elements; safe.js (template-ভিত্তিক escape, নেস্টেড template SafeString-এ বিনা double-escape-এ যায়), router.js
+  (hash → screen; `#/models` জাতীয় পুরনো টপ-লেভেল hash settings-subtab-এ normalize, অজানা → chat + W-O8 নোট), format.js
+  (W16-01 cron + words), store.js। ৮টা screen: connect (শুধু redeem, D-053), chat (messages/slash/streaming/stop —
+  W4-08 running ফ্রেম থেকে, stop-এ আলাদা ক্লাস যাতে send-এর সাথে কখনো bind না হয়), tasks (৯ ফিল্টার, detail =
+  events+checkpoint), approvals (A3 exact-target, A10 conflict banner, A12 why), sessions (rename = quoted If-Match,
+  delete = টাইটেল-টাইপ কনফার্ম W15-07), jobs (W16-01 দুইভাবে লেখা schedule, pause/resume/run-now), settings ৭ সাবট্যাব
+  (schema-driven config + W12-02 diff-before-apply + T3 মার্কার; access-এ loopback ব্যাখ্যা; logs-এ diagnostics + sk_/crt_
+  স্ক্যান W14-05)। Route-নেই জায়গায় নাম-সহ gap-block (logs/memory/extensions/vault/tunnel/lifecycle/telegram/jobDelete/
+  probe/onboarding)। CLI: `web open` (absent → বলে `gateway start` করো; stale → শেষ ঠিকানা)। SECURITY.md §13-এ
+  স্কোপ-নোট: asset হলে টোকেন লাগে না, প্রতিটা API route লাগে — প্রমাণ web.test.ts (4/4)। DECISIONS.md কাউন্টার 18।
+  টেস্ট: web.test.ts 30/30, ফুল sweep **1202/1202**, tsc শূন্য, biome 270 ফাইল ✔, parity ✔, docs:check ✔; jsdom
+  smoke (throwaway) ১২/১২ সবুজ। push ✔।
+
+
 
 TUI-র বাকি সব কাজ শেষ: ধাপ ১-এর ৫ ব্যাচই (T7; T16+T8; composer; T12+T13+T14; T1/T3 polish) সম্পূর্ণ। ধাপ ২-র
 route-নির্ভর row (GET /logs, GET /audit, model probe, job delete) TUI-তে যা সম্ভব তাই আগেই হয়েছে — ভিউগুলো তাদের

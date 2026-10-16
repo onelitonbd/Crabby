@@ -1,0 +1,18 @@
+name: tg-push
+on:
+  push:
+    branches: ['tg-push/*']
+jobs:
+  push:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "hello" > result.txt
+          git config user.email "t@t.com"
+          git config user.name "t"
+          git add result.txt
+          git commit -m "add result"
+          git push

@@ -149,13 +149,10 @@ log is the only place the answer is.
 
 ## 7. Things that are open and belong to the owner
 
-- **T17-07's backlog answer `each`** — three of the accepted rows (T17-07, W16-08, C12-06) offer `latest / each / skip`
-  and `JobBacklogBody` carries only `latest | skip`. The TUI prompt shows three answers and `each` is built as a
-  per-occurrence walk over `run-now` (D-103's one-run-at-a-time makes N simultaneous fires impossible, and §4.5 forbids a
-  burst). If the owner wants `each` as one recorded action, the contract and the scheduler need the third action.
-- **`GET /logs` and `GET /audit`** — T15-01/03/02/06 price a log view and an audit view; the routes are documented
-  (`docs/INTERFACES_AND_API.md` §4.4) and the registry's `logs`/`audit` verbs are `planned` on them. The logs pane names the
-  gap per view; building the views means building the routes (a log store and §14's audit fields are the real work).
+- **T17-07's backlog answer `each`** — **answered (D-133): `each` joins the contract**, and the scheduler's fire path
+  enqueues one run per occurrence; the per-occurrence walk note retires with the slice that lands it.
+- **`GET /logs` and `GET /audit`** — **answered (D-133): both enter M4**, with the log store and §14's audit fields
+  they need; the whoami route, `DELETE /jobs/{id}` and the model probe route enter with them.
 - **T11-04's `reserve` input** — the row prices three typed limits including `reserve`; F-62 closed `reserveForOutput`
   as derived (D-064) and the record has no column for it. The TUI draws the input (the row, as written) and reports
   `reserve is derived … (F-62)` on save without storing it. If the owner wants it stored, §3.8's schema and D-064

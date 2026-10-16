@@ -107,3 +107,14 @@ TUI-র সব কাজ আগেই শেষ (ধাপ ১-এর ৫ ব্
   (D-126-এর নাম-ধরা বাকি) → memory (D-065 FTS5) → skills (D-035) → MCP client (D-040) → importer C-1/C-2। M4-এর
   স্থাপত্য-সিদ্ধান্ত বেশিরভাগই আগেই বন্ধ (O-008/015/016/021/026/028/029/030/031/038)। মালিকের কাছে যে ক'টা সত্যিই
   খোলা (conformance-এর লাইভ প্রোভাইডার, route-নির্ভর স্কোপ, 'each' backlog action) — সেগুলো জিজ্ঞেস করা হলো।
+
+## করলাম (M4 শুরু — মালিকের তিন উত্তর D-133)
+
+মালিকের উত্তর: (১) conformance mock/recorded-transport-এই, লাইভ কি লাগবে না; (২) সব route-gap কাজ M4-এ ঢুকবে
+(logs/audit store + whoami + DELETE /jobs + model probe); (৩) 'each' কনট্র্যাক্ট-অ্যাকশন হবে। **D-133** রেকর্ড
+(counter 133) + HANDOVER §7-এর দুই খোলা আইটেম answered করা হলো।
+
+**M4 slice 1 শুরু:** তিন অনুপস্থিত provider পরিবার — `ollama` (native model listing + pull state), `anthropic`
+(message format + tool blocks), `gemini` (streaming + safety metadata) — প্রত্যেকে conformance suite পাস করবে
+(§7: no live APIs; scripted transports)। বর্তমান ভিত্তি পড়া হয়েছে: conformance.ts (৫ area-র case-জেনারেটর),
+contract.ts, fake.ts (reference), openai.ts (D-100), compose.ts-এর ABSENT_FAMILIES (৩টা কমবে; `mock` refused থাকবে)।

@@ -89,9 +89,11 @@ import {
   type ConfigReadBody,
   type ConfigWriteBody,
   type ContextSection,
+  CreateMemoryBody,
   CreateSessionBody,
   CreateTaskBody,
   configETag,
+  EditMemoryBody,
   type Event,
   errorEnvelope,
   isJobState,
@@ -104,6 +106,7 @@ import {
   type JobRow,
   jobRow,
   ListQuery,
+  MemId,
   type MessageListBody,
   type ModelOverridesWriteBody,
   newId,
@@ -117,6 +120,7 @@ import {
   parseConfigIfMatch,
   parseIfMatch,
   ResumeTaskBody,
+  ReviewMemoryBody,
   SCHEMA_VERSION,
   SESSION_ORIGINS,
   type SessionActionBody,
@@ -175,6 +179,7 @@ import {
   appendEvent,
   appendMessage,
   authenticate,
+  createMemoryStore,
   createSession,
   createSqliteApprovalStore,
   createSqliteCheckpointStore,
@@ -191,6 +196,10 @@ import {
   listMessages,
   listSessions,
   listTasks,
+  type MemoryRecord,
+  type MemoryReference,
+  type MemoryStatus,
+  type MemoryStore,
   messageCharCount,
   messageLengths,
   mintPairingCode,
@@ -215,6 +224,7 @@ import {
   stateCounts,
   taskScratch,
   transact,
+  trustWord,
   unpinMessage,
 } from "@crabby/storage";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -480,6 +490,11 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
    *  broke, which is when a paused list matters). */
   const jobStore = createSqliteJobStore(db);
 
+  /** M4's memory store: the routes answer from one instance the way they answer the job table from one reader, so a
+   *  review on one interface is visible to the next. D-073's rules and D-065's deletion semantics live in the store,
+   *  not here — a route that re-implemented a conflict rule would be a second opinion about memory. */
+  const memoryStore = createMemoryStore(db);
+
   // The scheduler is composed beside the runner and for the same reason: a fired job *is* a task handoff, so it has to
   // reach the same runner, the same journal and the same arbiter — and a scheduler built by the caller would have to be
   // handed all four, which is how two compositions end up disagreeing about which manager a stop goes through. It is
@@ -643,6 +658,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   registerPolicyRoutes(app, deps, platform);
   registerConfigRoutes(app, deps);
   registerModelRoutes(app, deps);
+  registerMemoryRoutes(app, deps, memoryStore);
   registerAuthRoutes(app, deps, bus);
   registerTaskRoutes(app, deps, bus, checkpoints, cancellation, approvals, runner);
   registerJobRoutes(app, deps, jobStore, scheduler);
@@ -1630,6 +1646,250 @@ function registerModelRoutes(app: FastifyInstance, deps: GatewayDeps): void {
               : "written; the effective descriptor above is what the next start composes.",
       };
       return reply.header("etag", configETag(after.token)).send(body);
+    },
+  );
+}
+
+// ------------------------------------------------------------------ memory (§4.4, D-019/D-073/D-065)
+
+/** §4.4's `/memory` surface: list, save, the per-entry preview (W8-08's propagation view), edit, forget, review, and
+ *  the text search D-021 scoped to v1. Every rule a route could be tempted to re-state — provenance ranks, conflict
+ *  display, what a conversation's death does, what a user edit does — lives in `createMemoryStore` (D-073/D-065); a
+ *  route here translates bytes and answers, it does not adjudicate memory. The gate is the client token (F-52's
+ *  substitution): §6.1 names `memory.read`/`memory.write`/`memory.delete` for a *model's* act, and an owner client is
+ *  the person those capabilities protect, not a caller of them.
+ *
+ *  **No memory *content* reaches the log** (§12): the lines carry ids, counts and lengths — the audit question is
+ *  "who forgot which entry", never "what did it say". */
+function registerMemoryRoutes(app: FastifyInstance, deps: GatewayDeps, memory: MemoryStore): void {
+  const MEMORY_STATUSES = ["active", "superseded", "needs-review", "pending"] as const;
+
+  const entryBody = (entry: MemoryRecord, references?: readonly MemoryReference[]) => ({
+    entry,
+    trust: trustWord(entry),
+    ...(references === undefined ? {} : { references }),
+  });
+
+  app.get("/api/v1/memory", async (request, reply) => {
+    const query = (request.query ?? {}) as {
+      status?: string;
+      category?: string;
+      limit?: string;
+      offset?: string;
+    };
+    let status: MemoryStatus | undefined;
+    if (query.status !== undefined) {
+      if (!(MEMORY_STATUSES as readonly string[]).includes(query.status))
+        throw validationError(
+          [
+            {
+              path: "status",
+              kind: "invalid",
+              message: `'${query.status}' is not a memory status — the four are ${MEMORY_STATUSES.join(", ")}`,
+            },
+          ],
+          request.crabbyRequestId,
+        );
+      status = query.status as MemoryStatus;
+    }
+    const entries = memory.list({
+      ...(status === undefined ? {} : { status }),
+      ...(query.category === undefined ? {} : { category: query.category }),
+      ...(query.limit === undefined ? {} : { limit: Number(query.limit) }),
+      ...(query.offset === undefined ? {} : { offset: Number(query.offset) }),
+    });
+    return reply.send({
+      entries,
+      counts: memory.counts(),
+      serverTime: new Date().toISOString(),
+      note:
+        "`trust` is provenance read as a word (D-073) — never a percentage, because an uncalibrated number is " +
+        "trusted anyway. `pending` rows are the auto-memory queue (W8-06): a person reviews them, and until then " +
+        "they are not memory, they are a proposal.",
+    });
+  });
+
+  app.post<{ Body: CreateMemoryBody }>(
+    "/api/v1/memory",
+    { schema: { body: CreateMemoryBody } },
+    async (request, reply) => {
+      const entry = memory.save({
+        content: request.body.content,
+        category: request.body.category,
+        origin: request.body.origin ?? "stated",
+        sourceKind: request.body.sourceKind ?? "user",
+        sourceId: request.body.sourceId,
+        sourceCount: request.body.sourceCount,
+        external: request.body.external,
+        status: request.body.status,
+      });
+      const client = request.crabbyClient;
+      deps.log.info("memory saved", {
+        memory: entry.id,
+        origin: entry.origin,
+        status: entry.status,
+        bytes: entry.content.length,
+        ...(client === undefined ? {} : { by: client.id, via: client.interface }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      return reply.code(201).send({
+        ...entryBody(entry),
+        note:
+          entry.status === "pending"
+            ? "saved as a proposal: it is in the pending queue (W8-06) and becomes memory when a person approves it — " +
+              "a memory written silently is a personality change nobody approved (D-073)."
+            : entry.external
+              ? "saved, and marked unconfirmed (W8-07): content that came from outside stays T2 until a user confirms it."
+              : "saved; `trust` is the word every interface shows for this entry's rank.",
+      });
+    },
+  );
+
+  app.get("/api/v1/memory/search", async (request, reply) => {
+    const query = (request.query ?? {}) as { q?: string };
+    if (query.q === undefined || query.q.trim().length === 0)
+      throw validationError(
+        [
+          {
+            path: "q",
+            kind: "invalid",
+            message: "a search without a query searches nothing — name it, as `?q=pin`",
+          },
+        ],
+        request.crabbyRequestId,
+      );
+    const entries = memory.search(query.q);
+    return reply.send({
+      entries,
+      serverTime: new Date().toISOString(),
+      note:
+        "text search only in v1 (D-021) — and it says so rather than pretending to be semantic; the FTS5 tokenizer " +
+        "does not segment Bangla, so recall is documented as imperfect (D-065), and the index rebuilds from the " +
+        "authoritative rows rather than becoming an undeletable second copy of them (§2.4).",
+    });
+  });
+
+  app.get<{ Params: { id: string } }>("/api/v1/memory/:id", async (request, reply) => {
+    const entry = memory.get(request.params.id);
+    if (entry === undefined)
+      throw new GatewayError({
+        code: "memory_unknown",
+        message:
+          `no memory entry '${request.params.id}' exists here — a forgotten entry stays forgotten, and a list ` +
+          "that still showed it would be lying (GET /api/v1/memory answers what does exist)",
+        class: "not-found",
+        retryable: false,
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+    return reply.send({
+      ...entryBody(entry, memory.references(entry.id)),
+      note:
+        "`references` is W8-08's propagation preview: what names this entry today, so a delete is shown before it is " +
+        "committed — and a source flagged `sourceMissing` is §7's `source deleted`, displayed rather than rewritten.",
+    });
+  });
+
+  app.patch<{ Params: { id: string }; Body: EditMemoryBody }>(
+    "/api/v1/memory/:id",
+    { schema: { body: EditMemoryBody } },
+    async (request, reply) => {
+      const before = memory.get(request.params.id);
+      if (before === undefined)
+        throw new GatewayError({
+          code: "memory_unknown",
+          message: `no memory entry '${request.params.id}' exists here to edit`,
+          class: "not-found",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      const entry = memory.edit(request.params.id, request.body.content);
+      const client = request.crabbyClient;
+      deps.log.info("memory edited", {
+        memory: entry.id,
+        bytes: entry.content.length,
+        // W8-03's rule is the note, because a reader of the audit trail should see that the edit moved authority:
+        // agent-authored text became the user's own statement.
+        origin: entry.origin,
+        ...(client === undefined ? {} : { by: client.id, via: client.interface }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      return reply.send({
+        ...entryBody(entry),
+        note:
+          "edited: W8-03 makes a user edit authoritative, so the entry is re-attributed to `stated`/`user` — the " +
+          "strongest provenance this schema can express.",
+      });
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>("/api/v1/memory/:id", async (request, reply) => {
+    const report = memory.forget(request.params.id);
+    if (report === undefined)
+      throw new GatewayError({
+        code: "memory_unknown",
+        message: `no memory entry '${request.params.id}' exists here to forget`,
+        class: "not-found",
+        retryable: false,
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+    const client = request.crabbyClient;
+    deps.log.info("memory forgotten", {
+      memory: report.entry.id,
+      references: report.references.length,
+      origin: report.entry.origin,
+      ...(client === undefined ? {} : { by: client.id, via: client.interface }),
+      ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+    });
+    return reply.send({
+      entry: report.entry,
+      references: report.references,
+      note:
+        "forgotten: the row, its index entry and its references are gone together, and the answer carries what was " +
+        "removed — C9-05's line is this body rendered.",
+    });
+  });
+
+  app.post<{ Params: { id: string }; Body: ReviewMemoryBody }>(
+    "/api/v1/memory/:id/review",
+    { schema: { body: ReviewMemoryBody } },
+    async (request, reply) => {
+      const entry = memory.get(request.params.id);
+      if (entry === undefined)
+        throw new GatewayError({
+          code: "memory_unknown",
+          message: `no memory entry '${request.params.id}' exists here to review`,
+          class: "not-found",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      if (entry.status !== "pending")
+        throw new GatewayError({
+          code: "memory_not_pending",
+          message:
+            `'${request.params.id}' is ${entry.status}, and the review queue answers proposals only (W8-06) — an ` +
+            "active entry needs no approval to be what it already is, and forgetting it is DELETE",
+          class: "conflict",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      const after = memory.review(request.params.id, request.body.decision);
+      const client = request.crabbyClient;
+      deps.log.info("memory reviewed", {
+        memory: request.params.id,
+        decision: request.body.decision,
+        ...(client === undefined ? {} : { by: client.id, via: client.interface }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      return reply.send({
+        decision: request.body.decision,
+        entry: request.body.decision === "approve" ? (after ?? null) : null,
+        removed: request.body.decision === "reject" ? entry : null,
+        note:
+          request.body.decision === "approve"
+            ? "approved: the proposal is memory now, and it reads as `proposed` to nobody."
+            : "rejected and removed: the answer carries what was deleted, because a rejection is also a person's " +
+              "memory decision and neither decision may be silent.",
+      });
     },
   );
 }

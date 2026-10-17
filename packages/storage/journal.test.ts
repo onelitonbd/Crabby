@@ -330,6 +330,7 @@ describe("the SQLite journal", () => {
     // left standing is a failure no upgrade would ever meet.
     db.exec(
       "DELETE FROM schema_migration WHERE version >= 3; DROP TABLE checkpoint; DROP TABLE message; " +
+        "DROP TABLE memory_reference; DROP TABLE memory_search; DROP TABLE memory_search_fts; DROP TABLE memory; " +
         "DROP TABLE job_run; DROP TABLE job; DROP TABLE session; " +
         "ALTER TABLE task DROP COLUMN cancellation_json; ALTER TABLE task DROP COLUMN model; " +
         "ALTER TABLE task DROP COLUMN model_switch_json; ALTER TABLE task DROP COLUMN origin_json",
@@ -337,7 +338,7 @@ describe("the SQLite journal", () => {
     // Nothing is read before `migrate` on purpose: v3's SELECT names the new column, so a v2 file is unreadable by v3
     // code until the migration runs. That is why every process migrates on startup rather than lazily, and why this test
     // asserts the upgrade instead of the state before it.
-    assert.deepEqual(migrate(db), { applied: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12], version: 12 });
+    assert.deepEqual(migrate(db), { applied: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], version: 13 });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,
       1,

@@ -1203,8 +1203,8 @@ test("there is no `crabby session delete`: the destructive verb lives under `his
     .sort();
   assert.deepEqual(
     destructive,
-    ["crabby history delete-session", "crabby memory forget"].sort(),
-    `two destructive verbs in the grammar and exactly one of them destroys a conversation; found ${JSON.stringify(destructive)}`,
+    ["crabby history delete-session", "crabby memory forget", "crabby memory forget-topic"].sort(),
+    `three destructive verbs in the grammar and still exactly one of them destroys a conversation; found ${JSON.stringify(destructive)}`,
   );
   assert.ok(
     !destructive.some((line) => line.startsWith("crabby session")),

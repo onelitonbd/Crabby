@@ -160,3 +160,26 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - **ডক:** PROVIDERS_AND_TOOLS §3.8-এর শেষ রুলে D-134 বাক্য; INTERFACES §4.4-এর দুই row সমৃদ্ধ; ROADMAP-এ
   ষাট-ষষ্ঠ+সতেরোতম slice প্যারাগ্রাফ; D-134 রেকর্ড।
 - **গেট:** models.test 8/8, model-edit 17/17, provider 18/18, tsc শূন্য, biome শূন্য। ফুল sweep কমিটের আগে।
+
+## করলাম (M4 slice 3 — persistent memory: store + routes + CLI verbs)
+
+- **schema v13:** `memory` (provenance: origin stated/confirmed/inferred, source_kind/id, source_missing, source_count,
+  external, status active|superseded|needs-review|pending), `memory_reference`, `memory_search` + `memory_search_fts`
+  (FTS5 unicode61, memory_id UNINDEXED — প্রথম চেষ্টায় কলাম ঘোষণা ভুলে ফেল-খেয়েছিল)।
+- **packages/storage/memory.ts:** সব D-073/D-065 নিয়ম store-এ — শুধু newer-stated→older-stated supersede করে (অন্য
+  কিছুই নয়); conversation-deletion কিছুই ডিলিট করে না — single-source → needs-review, multi-source → re-attribute +
+  source_missing flag; pending queue = auto-memory-র ফিজিক্যাল অবস্থা; rebuildIndex(); trustWord() (শব্দ, কখনো % নয়)।
+  টেস্ট ১১/১১।
+- **D-135:** `mem_` = সপ্তম id-prefix (D-112-প্রেসিডেন্ট); ids.ts + contracts.test-এর "exactly the prefixes" লাইন
+  উদ্দেশ্য করে বদলানো; INTERFACES traceability-তে যোগ। সিদ্ধান্ত counter 135।
+- **gateway:** `createMemoryStore(db)` এক-ইনস্ট্যান্স; রাউট — GET/POST /memory, GET/PATCH/DELETE /memory/:id,
+  GET /memory/search?q=, POST /memory/:id/review; রিফিউজাল কোড memory_unknown / memory_not_pending; লগে content কখনো
+  নেই (§12) — id/count/bytes। টেস্ট ৭/৭। (শিক্ষা: Fastify-এ body ছাড়া content-type:json = empty-JSON রিফিউজাল —
+  টেস্ট-হেল্পার header শর্তায়িত করে।)
+- **CLI `crabby memory`:** list (--status), search (বাক্যেই "text search only in v1"), forget (আগে preview-print —
+  C9-05), forget-topic (গুনে ছাপে, --yes কনফার্মেশন স্কিপ করে গোনাটা নয় — C9-06)। registry-তে চার verb ready +
+  forget-topic নতুন row; crabby.ts dispatch।
+- **ডক:** INTERFACES §4.4 memory rows সমৃদ্ধ; DATA_AND_MEMORY §2.3/§2.4 "Built (M4)" নোট; ROADMAP-এ আটষষ্ঠতম slice।
+- **নাম-ধরা বাকি (এই M4-আইটেমের):** loop-এর automatic extraction + config toggle (memory.* namespace), executor-এ
+  memory.save/search/delete tools, T9/W8/G3-19 স্ক্রিন; propagation call-site history.deleteConversation (C9-02 verb
+  নেই)। স্যান্ডবক্স restore HEAD নামিয়েছিল (9c230b9) → fetch+reset-এ 391354a ফেরত; node_modules পুনঃইনস্টল।

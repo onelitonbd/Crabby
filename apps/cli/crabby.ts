@@ -40,6 +40,7 @@ import { runDoctor } from "./commands/doctor.ts";
 import { type GatewayVerb, runGateway } from "./commands/gateway.ts";
 import { runInit } from "./commands/init.ts";
 import { type JobVerb, runJob } from "./commands/job.ts";
+import { type MemoryVerb, runMemory } from "./commands/memory.ts";
 import { type ModelVerb, type ProviderVerb, runModel, runProvider } from "./commands/provider.ts";
 import { runSession, type SessionVerb } from "./commands/session.ts";
 import { runStatus } from "./commands/status.ts";
@@ -307,6 +308,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     case "tools": {
       return runTools(verb, rest, layout, renderer);
+    }
+    case "memory": {
+      return runMemory(verb as MemoryVerb | undefined, rest, layout, renderer);
     }
   }
 

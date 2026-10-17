@@ -13,6 +13,7 @@ export * from "./events.ts";
 export * from "./idempotency.ts";
 export * from "./jobs.ts";
 export * from "./journal.ts";
+export * from "./memory.ts";
 export * from "./messages.ts";
 export * from "./migrate.ts";
 export * from "./scratch.ts";

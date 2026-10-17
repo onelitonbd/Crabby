@@ -193,12 +193,13 @@ describe("gateway over http", () => {
     // on?" answerable by someone holding a phone and a backup.
     assert.equal(
       body.storage.schemaVersion,
-      12,
+      13,
       "M2's `approval` table advanced the ledger from 1 to 2, §6.2's cancellation column (D-091) from 2 to 3, D-065's " +
         "checkpoint table (D-095) from 3 to 4, §4.5's `job` and `job_run` tables (D-046, D-057) from 4 to 5, the " +
         "`session` record §2.1's conversations need (D-104) from 5 to 6, D-108's per-task model pin from 6 to 7, " +
         "§3.6 stage 3's switch the record has to show from 7 to 8, the identity a task belongs to (D-111) from 8 to 9, " +
-        "§2.5's message table (D-112) from 9 to 10, D-116's summary coverage columns from 10 to 11 and D-119's pins from 11 to 12 — and this " +
+        "§2.5's message table (D-112) from 9 to 10, D-116's summary coverage columns from 10 to 11, D-119's pins from 11 to 12 " +
+        "and M4's memory tables — provenance, references and an FTS5 index (D-073, D-065, D-135) — from 12 to 13, and this " +
         "literal is why a migration cannot land quietly",
     );
   });

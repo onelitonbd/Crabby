@@ -460,6 +460,45 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 13,
+    name: "memory",
+    up(db) {
+      db.exec(`
+        CREATE TABLE memory (
+          id                TEXT PRIMARY KEY,
+          content           TEXT NOT NULL,
+          category          TEXT,
+          origin            TEXT NOT NULL CHECK (origin IN ('stated', 'confirmed', 'inferred')),
+          source_kind       TEXT NOT NULL CHECK (source_kind IN ('conversation', 'task', 'user', 'agent')),
+          source_id         TEXT,
+          source_missing    INTEGER NOT NULL DEFAULT 0 CHECK (source_missing IN (0, 1)),
+          source_count      INTEGER NOT NULL DEFAULT 1 CHECK (source_count >= 1),
+          external          INTEGER NOT NULL DEFAULT 0 CHECK (external IN (0, 1)),
+          status            TEXT NOT NULL DEFAULT 'active'
+                            CHECK (status IN ('active', 'superseded', 'needs-review', 'pending')),
+          superseded_by     TEXT REFERENCES memory (id),
+          created_at        TEXT NOT NULL,
+          updated_at        TEXT NOT NULL,
+          last_confirmed_at TEXT
+        );
+        CREATE INDEX memory_status ON memory (status, updated_at);
+        CREATE INDEX memory_source ON memory (source_kind, source_id);
+        CREATE TABLE memory_reference (
+          memory_id  TEXT NOT NULL REFERENCES memory (id) ON DELETE CASCADE,
+          session_id TEXT,
+          task_id    TEXT,
+          at         TEXT NOT NULL
+        );
+        CREATE INDEX memory_reference_memory ON memory_reference (memory_id);
+        CREATE TABLE memory_search (
+          memory_id TEXT PRIMARY KEY REFERENCES memory (id) ON DELETE CASCADE,
+          content   TEXT NOT NULL
+        );
+        CREATE VIRTUAL TABLE memory_search_fts USING fts5(memory_id UNINDEXED, content, tokenize='unicode61');
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

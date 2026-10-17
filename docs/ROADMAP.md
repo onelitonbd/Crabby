@@ -1454,6 +1454,26 @@ named rather than hidden — and the answer's `changed` is about the file while 
 because a restatement moves the first and not the second. Gates: models 8/8 over HTTP, model-edit 17/17, provider
 18/18, full sweep, typecheck, biome, parity, docs:check.
 
+**Sixty-eighth slice — persistent memory: the store, the `/memory` routes, and the `crabby memory` verbs (D-135).**
+Memory lands where the documents put the rules: schema version 13 carries the `memory` tables — provenance not a
+confidence score (D-073), the reference log that names what pointed at an entry, and an FTS5 index that is a derived
+record in both directions (rebuilt from the rows, dropped with the row, so it can never become an undeletable second
+copy — §2.4). The store's conflict rules are calls, not conventions: only a newer `stated` over an older `stated`
+supersedes; everything else is two active entries with timestamps, displayed as the contradiction it is. A
+conversation's death deletes nothing (D-065): single-source memories are *marked* `needs-review`, multi-source ones
+are re-attributed with the dead pointer flagged, and a screen renders "source deleted" instead of rewriting a story.
+Deletion propagation's call site is `history.deleteConversation` (C9-02, not yet a verb) and is named rather than
+left implicit. Entries carry the seventh id prefix (`mem_`, D-135 — a memory id is a wire fact, added by D-112's
+precedent). The routes (`GET/POST /memory`, `GET/PATCH/DELETE /memory/{id}`, `/memory/search?q=`,
+`POST /memory/{id}/review`) answer from one store instance; the queue is physical — `status: "pending"` is the only
+way a row starts proposed, and review is its one exit (`409 memory_not_pending` for anything else). The CLI verbs
+follow region C9: `list` (provenance and trust per line), `search` (which says "text search" because D-021 scoped v1
+to text), `forget` (shows what referenced the entry *before* deleting, C9-05), `forget-topic` (counts what it will
+touch and prints the count even with `--yes` — the flag skips the confirmation, never the count, C9-06). The loop's
+automatic extraction and its config toggle are the item's named remainder. Gates: memory store 11/11, memory routes
+7/7 over HTTP, contracts 17/17 with the prefix list moved on purpose, full sweep, typecheck, biome, parity,
+docs:check.
+
 ## 6. Phase M4 — Providers, memory, extensions
 
 - Provider adapters: `openai-compatible` (+ user-defined endpoints, D-041), `ollama`, `anthropic`, `gemini`, each

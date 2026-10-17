@@ -114,7 +114,9 @@ describe("followTask — the SSE grammar, over a scripted fetch", () => {
           if (chunk !== undefined) controller.enqueue(encoder.encode(chunk));
           else controller.error(new Error("connection dropped"));
           // A stream between messages stays open; the abort is what ends it, like a real one.
-          init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")), { once: true });
+          init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")), {
+            once: true,
+          });
         },
       });
       return { ok: status < 400, status, body: status < 400 ? body : null };

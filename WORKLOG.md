@@ -433,3 +433,8 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 5. এগুলো মিললে **`v0.1.0` কাটা** — "নতুন ব্যবহারকারী শুধু ডক পড়ে ফোনে একটা multi-step task শেষ করবে, LIMITATIONS-এ না-লেখা কিছুতে আটকাবে না।"
 
 **Post-v1:** O-008 strategy half, O-065, O-052, O-064, O-001-র ক্লজটি ছাড়া সব বন্ধ।
+## Slice 19 — মালিক-ডিভাইসের প্রথম হিট: bare `crabby` নাম — INSTALL/TROUBLESHOOTING ধরা হলো — 2026-10-17
+
+- Termux-এ `crabby doctor` → command-not-found (D-050-র ফল, বাগ নয়)। INSTALL.md-তে "the name `crabby`" সেকশন
+  (alias = no-global-install-এর ergonomic রূপ) + **bare `npx crabby` সতর্কতা** (রেজিস্ট্রির অচেনা প্যাকেজ —
+  সাপ্লাই-চেইন-প্রত্যাখ্যান); TROUBLESHOOTING-এ প্রথম এন্ট্রি।

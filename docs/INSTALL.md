@@ -15,6 +15,26 @@ directory (`~/.crabby/`); a backup taken first (`crabby backup`) is how anything
 - **A C toolchain (python3, make, a C++ compiler)** — only where the prebuilt binary does not cover you. Termux
   always needs it; Linux/macOS on x64/arm64 normally do not.
 
+## The name `crabby` — and why it is not on your PATH
+
+D-050 promises no global install and no self-updater, so nothing puts a `crabby` binary on your PATH and your
+shell's command-not-found will suggest unrelated packages. The command lives inside the checkout:
+
+```sh
+node apps/cli/crabby.ts doctor          # the unambiguous form, works anywhere in the checkout
+npx --no-install crabby doctor          # the workspace bin, after npm install
+```
+
+For the bare name, use an alias — the ergonomic form of "no global install":
+
+```sh
+echo "alias crabby='node $HOME/Crabby/apps/cli/crabby.ts'" >> ~/.bashrc && source ~/.bashrc
+```
+
+**Never a bare `npx crabby` from outside the checkout**: with no local install under it, npx is allowed to fetch
+whichever registry package answers to that name — a stranger's code with our name, which is exactly the
+supply-chain shape this install path exists to refuse.
+
 ## Linux and macOS
 
 ```sh

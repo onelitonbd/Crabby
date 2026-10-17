@@ -474,6 +474,29 @@ export interface LoopDeps {
    *  Optional, and absent means an ask with no options — which is the honest answer for a single-model install and for a
    *  harness, not a degraded one: the ask still names the spent budget and still accepts "the same model again". */
   readonly askCandidates?: AskCandidates | undefined;
+  /** §14's `tool_invocation` row, as a seam: the loop is the one party that sees every tool act begin and end, and the
+   *  audit trail lives in another package's database (`ARCHITECTURE.md` §19), so the fact travels out through this
+   *  callback and the composition root writes it. Deliberately **argument-free** — `SECURITY.md` §7 keeps `call.args`
+   *  out of the checkpoint because the model's words are not the trail's business, and the journal's own
+   *  `tool.execution.*` events remain the arg-carrying record per task. */
+  readonly auditToolInvocation?: ((entry: ToolInvocationAudit) => void) | undefined;
+}
+
+/** The one fact the loop hands the audit trail per tool act: what ran, at what tier, with what outcome and how long it
+ *  took. `rejected` is a step policy refused before the executor was touched — an effect that never happened is a
+ *  different row from one that failed halfway, which is exactly the distinction §14's `outcome` column exists for. */
+export interface ToolInvocationAudit {
+  readonly taskId: string;
+  readonly tool: string;
+  readonly tier: Tier | undefined;
+  readonly outcome: "ok" | "error" | "rejected";
+  readonly code: string | undefined;
+  readonly durationMs: number;
+  readonly approvalId: string | undefined;
+  readonly correlationId: string | undefined;
+  /** Who drove the task, when the task has an origin — a scheduled run records the job's creator, a route run records
+   *  the client that asked. Absent only for work with no origin to name. */
+  readonly origin: RunOrigin | undefined;
 }
 
 export interface Loop {
@@ -1098,7 +1121,20 @@ export function createLoop(deps: LoopDeps): Loop {
           startedAt,
         );
         // A refusal is a committed boundary too: the step has an outcome (the reason), the model will be told it, and the
-        // run continues from there. Nothing external happened, which is what makes it the easy case for §7.3.
+        // run continues from there. Nothing external happened, which is what makes it the easy case for §7.3 — and a
+        // refused act is its own audit row (`rejected`), because a trail that recorded only the acts that happened would
+        // be silent about exactly the attempts the trail exists to show.
+        deps.auditToolInvocation?.({
+          taskId: state.input.taskId,
+          tool: input.call.tool,
+          tier: input.tier,
+          outcome: "rejected",
+          code: refusal.code,
+          durationMs: 0,
+          approvalId: input.approvalId,
+          correlationId: state.input.correlationId,
+          origin: state.input.origin,
+        });
         const result = toolMessage(input.toolCallId, refusal.reason);
         const next = [...input.messages, result];
         // D-117: the model is about to read this sentence, so the transcript must carry it — a refused step that
@@ -1166,6 +1202,17 @@ export function createLoop(deps: LoopDeps): Loop {
         },
         doneAt,
       );
+      deps.auditToolInvocation?.({
+        taskId: state.input.taskId,
+        tool: input.call.tool,
+        tier: input.tier,
+        outcome: outcome.ok ? "ok" : "error",
+        code: outcome.code,
+        durationMs: doneAt - startedAt,
+        approvalId: input.approvalId,
+        correlationId: state.input.correlationId,
+        origin: state.input.origin,
+      });
       // D-117: the result is the half of §2.5's second bullet the assistant's proposal cannot supply, and it is
       // written in this same transaction as the outcome and the boundary — three facts about one step, or none.
       const stored = storeTurn(state, result, outcome.output, doneAt);
@@ -1959,6 +2006,19 @@ export function createLoop(deps: LoopDeps): Loop {
       if (refusals >= limits.refusalsBeforePause) {
         return pause(state, run.taskId, run.call.tool, reason, refusals, at);
       }
+      // The trail's `rejected` row beside the blocked event: a denial the user gave is exactly the attempt §14 asks the
+      // trail to keep, whoever gave it and whatever became of the task afterwards.
+      deps.auditToolInvocation?.({
+        taskId: run.taskId,
+        tool: run.call.tool,
+        tier: row.request.tier,
+        outcome: "rejected",
+        code: "approval_denied",
+        durationMs: 0,
+        approvalId: row.id,
+        correlationId: run.input.correlationId,
+        origin: run.input.origin,
+      });
       // §4.1's `awaiting_approval` → `planning` edge: a denial that leaves other work possible re-plans rather than dies.
       const next = [...state.messages, toolMessage(run.toolCallId, reason)];
       phase(run.taskId, run.input.correlationId, (emit) => {
@@ -2002,6 +2062,20 @@ export function createLoop(deps: LoopDeps): Loop {
         emit("tool.execution.blocked", { tool: run.call.tool, reason, approvalId: row.id }, at);
         const task = currentTask(run.taskId);
         if (task.state === "awaiting_approval") move(task, "planning", {}, emit, at);
+      });
+      // The trail's `rejected` row for exactly this case: the user said yes and policy — re-asked at the moment of
+      // execution, §5's rule 1 — said no. A trail that recorded only acts which ran would be silent about the one
+      // attempt this whole re-evaluation exists to catch.
+      deps.auditToolInvocation?.({
+        taskId: run.taskId,
+        tool: run.call.tool,
+        tier: row.request.tier,
+        outcome: "rejected",
+        code: "approval_revoked",
+        durationMs: 0,
+        approvalId: row.id,
+        correlationId: run.input.correlationId,
+        origin: run.input.origin,
       });
       return drive({
         ...state,

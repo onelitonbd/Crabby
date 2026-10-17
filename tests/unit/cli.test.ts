@@ -875,14 +875,14 @@ test("`crabby job show` with no id asks which job, and says where a job comes fr
   );
 });
 
-test("`crabby job backlog <id>` with no answer names both answers, and with two refuses to guess between them", () => {
+test("`crabby job backlog <id>` with no answer names all three answers, and with two refuses to guess between them", () => {
   const root = tempDir();
   const state = path.join(root, ".crabby");
   const neither = crabby(["job", "backlog", "job_1"], state);
   assert.equal(
     neither.code,
     2,
-    "there is deliberately no default: one of the two answers fires work, and §4.5's sixth rule is that a backlog must " +
+    "there is deliberately no default: two of the three answers fire work, and §4.5's sixth rule is that a backlog must " +
       "not run without the user being told",
   );
   assert.match(neither.out, /which answer/);
@@ -890,20 +890,21 @@ test("`crabby job backlog <id>` with no answer names both answers, and with two 
   assert.match(neither.out, /--skip/);
   assert.match(
     neither.out,
+    /--each/,
+    "D-133 made `each` a wire action the scheduler drains one run at a time — the flag a user will try is now the flag " +
+      "that exists",
+  );
+  assert.match(
+    neither.out,
     /recorded/,
     "and says the answer is recorded either way, which is the point of the verb",
-  );
-  assert.ok(
-    !neither.out.includes("--each"),
-    "`each` is not offered: firing every missed occurrence is the burst §4.5 forbids, and a flag that appears in a fix " +
-      "line is a flag a user will try",
   );
 
   const both = crabby(["job", "backlog", "job_1", "--latest", "--skip"], state);
   assert.equal(both.code, 2);
   assert.match(
     both.out,
-    /two different answers/,
+    /different answers/,
     'two flags is not a missing flag, and a refusal that said "one is required" to a user who gave two would be ' +
       "arguing for a rule they did not break",
   );

@@ -310,5 +310,27 @@ export function createSqliteJobStore(db: SqliteDb): JobStore {
         return total;
       });
     },
+    acknowledgeRun(runId, at) {
+      // One row, and only a still-unacknowledged `missed` one: D-133's `each` chain answers an occurrence when it fires,
+      // and a second answer for the same row (a retried backlog request) finds nothing left to answer.
+      const changed = db
+        .prepare(
+          `UPDATE job_run SET acknowledged_at = ?
+            WHERE id = ? AND outcome = 'missed' AND acknowledged_at IS NULL`,
+        )
+        .run(at, runId);
+      return changed.changes > 0;
+    },
+    deleteJob(id, withHistory) {
+      return transact(db, () => {
+        // The history rows go only when asked: W16-11's sentence is that past runs are work which already happened, and
+        // D-065's rule about not erasing it does not stop being true because the row that scheduled it is going. Since
+        // v15 the table has no job foreign key to cascade on — v5's did, and the delete route would have erased the
+        // history by default — so the survivor rows read as the history they are.
+        if (withHistory) db.prepare("DELETE FROM job_run WHERE job_id = ?").run(id);
+        const changed = db.prepare("DELETE FROM job WHERE id = ?").run(id);
+        return changed.changes > 0;
+      });
+    },
   };
 }

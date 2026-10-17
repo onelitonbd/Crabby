@@ -80,6 +80,14 @@ export interface JobStore {
    *  system does not quietly edit its own past applies to a timer's history too — and returns the number of occurrences
    *  the answer covered, which is what zeroes the job's counter. */
   acknowledgeMissed(jobId: string, at: string): number;
+  /** D-133's `each`: the chain answers one occurrence at a time, so the acknowledgement is per row rather than per job.
+   *  Marks one still-unacknowledged `missed` row answered and returns whether it was found — a second answer for the
+   *  same occurrence (a retried request) is `false`, not an error, because the row already carries what was asked for. */
+  acknowledgeRun(runId: string, at: string): boolean;
+  /** T17-05/W16-11's delete: the job row goes, and its run history goes with it only when asked — a job's past runs are
+   *  work that already happened, and D-065's rule about not erasing it does not stop at the row that scheduled it.
+   *  Returns whether a job was removed. */
+  deleteJob(id: string, withHistory: boolean): boolean;
 }
 
 export interface JobPatch {
@@ -282,8 +290,13 @@ export interface Scheduler {
   /** C12-04's explicit run outside the schedule, which changes nothing about the schedule. */
   runNow(id: string, at?: number): JobActionResult;
   /** C12-06's answer to §4.5's backlog: `latest` fires one run for the most recent missed occurrence, `skip` fires
-   *  nothing, and both are recorded. */
-  backlog(id: string, action: "latest" | "skip", at?: number): JobActionResult;
+   *  nothing, and D-133's `each` fires the earliest now and lets the tick drain the rest one at a time. All three are
+   *  recorded. */
+  backlog(id: string, action: "latest" | "skip" | "each", at?: number): JobActionResult;
+  /** T17-05/W16-11's delete. Refused while a run is open — a deletion that outlives its own evidence is the shape §4.5
+   *  prices as D-065's erased past — and a no-op on a job nobody created. The history rows outlive the job unless
+   *  `withHistory` says otherwise, which is W16-11's own sentence. */
+  forget(id: string, withHistory: boolean, at?: number): JobActionResult;
   list(): readonly JobRecord[];
   get(id: string): JobView | undefined;
   facts(): SchedulerFacts;
@@ -442,6 +455,27 @@ export function createMemoryJobStore(): JobStore {
         runs.set(id, { ...run, acknowledgedAt: at });
       }
       return total;
+    },
+    acknowledgeRun(runId, at) {
+      const run = runs.get(runId);
+      if (run === undefined || run.outcome !== "missed" || run.acknowledgedAt !== undefined)
+        return false;
+      runs.set(runId, { ...run, acknowledgedAt: at });
+      return true;
+    },
+    deleteJob(id, withHistory) {
+      if (!jobs.has(id)) return false;
+      jobs.delete(id);
+      const kept: string[] = [];
+      for (const runId of runOrder) {
+        const run = runs.get(runId);
+        if (run !== undefined && run.jobId === id && withHistory) runs.delete(runId);
+        else kept.push(runId);
+      }
+      runOrder.length = 0;
+      runOrder.push(...kept);
+      jobOrder.splice(jobOrder.indexOf(id), 1);
+      return true;
     },
   };
 }
@@ -733,8 +767,55 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       });
       reconciled.push({ runId: run.id, outcome: state });
       log?.info("scheduled run settled", { job: run.jobId, task: run.taskId, outcome: state });
+      // D-133's `each` chain, drained here: a backlog-triggered run just settled, and if the job still owes unacknowledged
+      // occurrences the next one fires now. The preconditions are the fire path's own — not paused, no open run, an
+      // identity to run under, a schedule this build can read — so a chain that reaches a refusal simply stops, with the
+      // refusal recorded the way every other refusal is. It continues through `failed` and `cancelled` on purpose: the
+      // user's answer was "run each", and one occurrence ending badly is not a second answer on their behalf. A manual
+      // `run-now` settling with missed rows present drains nothing — its trigger is `run-now`, and a run the user asked
+      // for by hand is one run, not a backlog being answered.
+      if (run.trigger === "backlog") drainBacklogChain(run.jobId, at);
     }
     return reconciled;
+  }
+
+  /** Fire the next unacknowledged occurrence of a job whose backlog chain is live. Called only from `reconcile`, right
+   *  after a backlog-triggered run settled — the one moment the one-run-at-a-time rule has opened a slot and the answer
+   *  "each" is still the outstanding one. */
+  function drainBacklogChain(jobId: string, at: number): void {
+    const rows = deps.store.unacknowledgedMissed(jobId);
+    if (rows.length === 0) return;
+    const job = deps.store.get(jobId);
+    if (job === undefined || job.state === "paused") return;
+    const open = openRunFor(jobId);
+    if (open !== undefined) return;
+    const next = rows[0];
+    if (next === undefined) return;
+    const dueAt = Date.parse(next.dueAt);
+    const parsed = parsedOf(job);
+    if (!parsed.ok) {
+      log?.warn("job backlog chain stopped: the schedule is no longer readable", {
+        job: jobId,
+        reason: parsed.reason,
+      });
+      return;
+    }
+    const fired = fireOnce(job, at, Number.isNaN(dueAt) ? at : dueAt, "backlog");
+    if (!fired.ok) {
+      log?.warn("job backlog chain stopped", {
+        job: jobId,
+        code: fired.code,
+        reason: fired.reason,
+      });
+      return;
+    }
+    deps.store.acknowledgeRun(next.id, new Date(at).toISOString());
+    log?.info("job backlog chain fired", {
+      job: jobId,
+      task: fired.taskId,
+      due: new Date(dueAt).toISOString(),
+      remaining: rows.length - 1,
+    });
   }
 
   // ------------------------------------------------------------------ the tick
@@ -1168,7 +1249,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     };
   }
 
-  function backlog(id: string, action: "latest" | "skip", at: number = now()): JobActionResult {
+  function backlog(
+    id: string,
+    action: "latest" | "skip" | "each",
+    at: number = now(),
+  ): JobActionResult {
     const job = deps.store.get(id);
     if (job === undefined) return notFound(id);
     const rows = deps.store.unacknowledgedMissed(id);
@@ -1191,6 +1276,65 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           `${acknowledged} missed occurrence${acknowledged === 1 ? "" : "s"} recorded as skipped and none of them fired; ` +
           "the rows keep their outcome and gain the moment you answered, because the history of work that did not happen " +
           "is the record §4.5 asks for (D-065's rule about not editing the past)",
+      };
+    }
+    if (action === "each") {
+      // D-133's third answer, as the rows said it: one run per occurrence, but never at once. The chain fires the
+      // *earliest* missed occurrence now — the order the schedule produced them in, which is also the order their work
+      // assumed — and leaves the remaining rows unacknowledged, where they are the queue: `reconcile` fires the next one
+      // only when the run before it has settled, so D-103's one-run-at-a-time rule is the drain's own precondition and
+      // `skip` retires whatever the chain has not reached yet. Acknowledging the fired row and no other is what makes the
+      // queue readable: the unacknowledged count *is* the work still owed, on the rows C12-06 already knows how to show.
+      // `rows.length === 0` returned above, so the row exists; the guard keeps the type honest without lying about it.
+      const earliest = rows[0];
+      if (earliest === undefined)
+        return {
+          ok: true,
+          job,
+          acknowledged: 0,
+          note: "no occurrence of this job passed while nothing was watching, so there is no backlog to answer for",
+        };
+      const dueAt = Date.parse(earliest.dueAt);
+      const jobE = job.state === "paused" ? undefined : job;
+      if (jobE === undefined)
+        return {
+          ok: false,
+          code: "paused",
+          reason: `the job is paused, so nothing may run for it — \`crabby job resume ${id}\` first, then answer the backlog`,
+        };
+      const openE = openRunFor(id);
+      if (openE !== undefined)
+        return {
+          ok: false,
+          code: "in-flight",
+          reason: `a run of this job is still open (task ${openE.taskId ?? "unknown"}, ${openE.outcome}); one run at a time per job`,
+        };
+      const parsedE = parsedOf(jobE);
+      if (!parsedE.ok) return { ok: false, code: "unfireable", reason: parsedE.reason };
+      const fired = fireOnce(jobE, at, Number.isNaN(dueAt) ? at : dueAt, "backlog");
+      if (!fired.ok) return { ok: false, code: fired.code, reason: fired.reason };
+      // The fired row is answered; the rest stay exactly what they were, which is the queue's whole bookkeeping. The
+      // counter zeroes all the same: "missed" means *unanswered*, and the user has now answered — what remains is the
+      // chain's own follow-through, visible on the rows rather than as a question nobody has dealt with.
+      deps.store.acknowledgeRun(earliest.id, new Date(at).toISOString());
+      deps.store.update(id, { missed: 0, updatedAt: new Date(at).toISOString() });
+      const remaining = rows.length - 1;
+      log?.info("job backlog chain fired", {
+        job: id,
+        task: fired.taskId,
+        due: new Date(dueAt).toISOString(),
+        remaining,
+      });
+      return {
+        ok: true,
+        job: deps.store.get(id) ?? jobE,
+        run: fired.run,
+        taskId: fired.taskId,
+        acknowledged: 1,
+        note:
+          `the earliest missed occurrence (${new Date(dueAt).toISOString()}) fired now, and ${remaining} more will ` +
+          "follow one at a time — each only after the one before it settles — because D-133's `each` is the walk the " +
+          "scheduler performs, not a burst; `skip` retires the ones it has not reached",
       };
     }
     // `latest`: one run for the most recent missed occurrence, and the rest acknowledged. Firing the *latest* rather than
@@ -1237,6 +1381,36 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     };
   }
 
+  function forget(id: string, withHistory: boolean, _at: number = now()): JobActionResult {
+    const job = deps.store.get(id);
+    if (job === undefined) return notFound(id);
+    const open = openRunFor(id);
+    if (open !== undefined)
+      return {
+        ok: false,
+        code: "in-flight",
+        reason:
+          `a run of this job is still open (task ${open.taskId ?? "unknown"}, ${open.outcome}), and deleting it now ` +
+          "would take the schedule away from work that is still running — let the run settle or cancel it with " +
+          "`crabby task cancel " +
+          (open.taskId ?? "<id>") +
+          "`, then delete the job",
+      };
+    const removed = deps.store.deleteJob(id, withHistory);
+    if (!removed) return notFound(id);
+    // The timer may have been armed for this job's next fire; recomputing is how the absence takes effect without a
+    // restart, the same way every other write that changes what is due ends.
+    arm();
+    log?.info("job deleted", { job: id, historyKept: !withHistory });
+    return {
+      ok: true,
+      job,
+      note:
+        `deleted. ${withHistory ? "Its run history went with it, because you asked for the history too" : "Its run history stays — work that already happened is D-065's record, and a delete that erased it would be the audit trail erasing itself"}; ` +
+        `the conversation the job ran in (${job.sessionId}) is untouched, and any task a past run created stays where it is`,
+    };
+  }
+
   function notFound(id: string): JobActionResult {
     return {
       ok: false,
@@ -1271,6 +1445,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     edit,
     runNow,
     backlog,
+    forget,
     list,
     get,
     facts,

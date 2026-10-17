@@ -21,7 +21,12 @@ import { type ConfigFile, createLogger } from "@crabby/core";
 import { buildApp } from "@crabby/gateway";
 import { dataLayout } from "@crabby/platform";
 import { capabilitiesFor } from "@crabby/policy";
-import { composeProviders } from "@crabby/providers";
+import {
+  composeProviders,
+  FAKE_MODEL_ID,
+  FakeProvider,
+  type ProviderComposition,
+} from "@crabby/providers";
 import { migrate, mintPairingCode, openDatabase, redeemPairingCode } from "@crabby/storage";
 
 const DESCRIPTOR = {
@@ -71,7 +76,12 @@ interface Harness {
 }
 
 async function boot(
-  options: { readonly document?: ConfigFile | undefined } = {},
+  options: {
+    readonly document?: ConfigFile | undefined;
+    /** Hand-compose a fake behind the probe route: §3.3 refuses `mock` from configuration, but the route's contract is
+     *  with a *composed* adapter, and the fake is §7's reference one — the same party the conformance suite runs. */
+    readonly fake?: FakeProvider | undefined;
+  } = {},
 ): Promise<Harness> {
   const dir = mkdtempSync(path.join(tmpdir(), "crabby-models-"));
   const layout = dataLayout(dir);
@@ -84,7 +94,19 @@ async function boot(
   const built = await buildApp({
     db: handle.db,
     layout,
-    providers: composeProviders(options.document?.provider ?? {}),
+    providers:
+      options.fake === undefined
+        ? composeProviders(options.document?.provider ?? {})
+        : ([
+            {
+              id: options.fake.id,
+              ok: true as const,
+              provider: options.fake,
+              modelIds: options.fake.listModels(),
+              warnings: [],
+              overrides: {},
+            },
+          ] satisfies ProviderComposition[]),
     log: createLogger({ level: "error", write: () => {} }, "models-test"),
     version: "test",
     startedAt: new Date(),
@@ -133,7 +155,9 @@ async function raw(
     method: init.method ?? "GET",
     headers: {
       ...(init.token === null ? {} : { authorization: `Bearer ${init.token ?? h.token}` }),
-      "content-type": "application/json; charset=utf-8",
+      // A content-type without a body is Fastify's empty-JSON refusal — the header names a payload, so it rides
+      // only when there is one (the same rule tests/integration/memory.test.ts states).
+      ...(init.body === undefined ? {} : { "content-type": "application/json; charset=utf-8" }),
       ...init.headers,
     },
     ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
@@ -336,5 +360,110 @@ describe("§4.4's PUT /models/{provider}/{model}/overrides — `crabby model edi
       undefined,
       "the empty map is removed with the record",
     );
+  });
+});
+
+describe("W10-07/C7-09 — POST /models/{provider}/{model}/probe (D-133)", () => {
+  it("answers a table in the descriptor's own order: the claims it can exercise stand for pass/fail, and the rest say what they are", async () => {
+    const boots: Awaited<ReturnType<typeof boot>>[] = [];
+    after(async () => {
+      for (const h of boots) await h.close();
+    });
+    const fake = new FakeProvider({ id: "fake" });
+    const h = await boot({ fake });
+    boots.push(h);
+    const probe = await raw(h, `/api/v1/models/fake/${FAKE_MODEL_ID}/probe`, { method: "POST" });
+    assert.equal(probe.status, 200);
+    const body = probe.body as {
+      provider: string;
+      model: string;
+      probedAt: string;
+      durationMs: number;
+      table: {
+        capability: string;
+        claimed: boolean;
+        status: string;
+        errorClass?: string;
+        detail?: string;
+      }[];
+      note: string;
+    };
+    assert.equal(body.provider, "fake");
+    assert.equal(body.model, FAKE_MODEL_ID);
+    assert.ok(!Number.isNaN(Date.parse(body.probedAt)));
+    assert.equal(typeof body.durationMs, "number");
+    // C7-09: "output is stable enough to diff" — the rows follow the descriptor's own feature order, every §3.2
+    // capability has exactly one row, and the fake-small claims only streaming and systemRole.
+    const byName = new Map(body.table.map((row) => [row.capability, row]));
+    assert.equal(body.table.length, 10);
+    assert.equal(byName.get("streaming")?.status, "pass", "the claim was exercised and answered");
+    assert.equal(byName.get("systemRole")?.status, "pass");
+    assert.equal(
+      byName.get("toolCalling")?.status,
+      "unclaimed",
+      "a capability the descriptor does not claim is not probed — probing a denial would spend a call proving a negative",
+    );
+    assert.equal(byName.get("imageInput")?.status, "unclaimed");
+    assert.match(body.note, /answered/);
+
+    // The tool-capable model claims parallelToolCalls, which is the `unprobed` row's reason to exist: claimed, honest,
+    // and not folded into either verdict.
+    const tools = await raw(h, "/api/v1/models/fake/fake-tools/probe", { method: "POST" });
+    assert.equal(tools.status, 200);
+    const toolsBody = tools.body as typeof body & { table: (typeof body.table)[number][] };
+    const byName2 = new Map(toolsBody.table.map((row) => [row.capability, row]));
+    assert.equal(
+      byName2.get("toolCalling")?.status,
+      "pass",
+      "the tool claim was exercised and answered",
+    );
+    assert.equal(byName2.get("parallelToolCalls")?.status, "unprobed");
+    assert.match(
+      byName2.get("parallelToolCalls")?.detail ?? "",
+      /no probe transport/,
+      "the row says why it is not a verdict",
+    );
+  });
+
+  it("a failing endpoint is a row with the §3.5 class, not a 500", async () => {
+    const boots: Awaited<ReturnType<typeof boot>>[] = [];
+    after(async () => {
+      for (const h of boots) await h.close();
+    });
+    const fake = new FakeProvider({ id: "fake" });
+    fake.setFailure("auth");
+    const h = await boot({ fake });
+    boots.push(h);
+    const probe = await raw(h, `/api/v1/models/fake/${FAKE_MODEL_ID}/probe`, { method: "POST" });
+    assert.equal(probe.status, 200, "the probe answered — with the table, which is the point");
+    const body = probe.body as {
+      table: { capability: string; status: string; errorClass?: string }[];
+      note: string;
+    };
+    const byName = new Map(body.table.map((row) => [row.capability, row]));
+    assert.equal(byName.get("streaming")?.status, "fail");
+    assert.equal(byName.get("streaming")?.errorClass, "auth", "the row names how it failed (§3.5)");
+    assert.equal(byName.get("systemRole")?.status, "fail");
+    assert.match(body.note, /failed/);
+  });
+
+  it("refuses the probe of what is not there, with the codes the overrides route established", async () => {
+    const boots: Awaited<ReturnType<typeof boot>>[] = [];
+    after(async () => {
+      for (const h of boots) await h.close();
+    });
+    const fake = new FakeProvider({ id: "fake" });
+    const h = await boot({ fake });
+    boots.push(h);
+    const noProvider = await raw(h, `/api/v1/models/local/${FAKE_MODEL_ID}/probe`, {
+      method: "POST",
+    });
+    assert.equal(noProvider.status, 404);
+    assert.equal((noProvider.body as any).error.code, "provider_unknown");
+    const noModel = await raw(h, "/api/v1/models/fake/model_nobody_declared/probe", {
+      method: "POST",
+    });
+    assert.equal(noModel.status, 404);
+    assert.equal((noModel.body as any).error.code, "model_unknown");
   });
 });

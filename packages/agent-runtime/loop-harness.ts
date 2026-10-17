@@ -78,7 +78,9 @@ import {
   type LoopSubject,
   type ModelAnswer,
   type ModelSuspendedRun,
+  type RunOrigin,
   type SuspendedRun,
+  type ToolInvocationAudit,
   type ToolOutcome,
   type ToolRunContext,
   type ToolSurface,
@@ -139,6 +141,8 @@ export interface HarnessOptions {
    *  that composes a real one with `surface` gets `idempotent` from §4.1's record instead
    *  (`stepFactsFromDeclarations`). */
   readonly stepFacts?: (tool: string) => StepFacts;
+  /** §14's `tool_invocation` seam: supplied, the loop's audit callback lands here instead of the default collector. */
+  readonly auditToolInvocation?: ((entry: ToolInvocationAudit) => void) | undefined;
   readonly modelId?: string;
   readonly models?: readonly string[];
   /** The clock the loop, the arbiter and the events all read. Injectable because D-064's TTLs are the rule under test. */
@@ -167,6 +171,8 @@ export interface Harness {
   readonly approvals: Approvals;
   readonly taskId: string;
   readonly sessionId: string;
+  /** The `tool_invocation` facts the loop emitted — the rows §14's trail would hold, collected by default. */
+  readonly invocations: readonly ToolInvocationAudit[];
   readonly clock: { now(): number; advance(ms: number): void; set(ms: number): void };
   /** Everything the journal stored, in order. */
   readonly events: Event[];
@@ -204,6 +210,8 @@ export interface Harness {
   start(input?: {
     subject?: Partial<LoopSubject>;
     correlationId?: string;
+    /** The origin a real caller carries — a route run, a fired job — so an audit row can name who drove the task. */
+    origin?: RunOrigin;
     /** A cancellation the loop must pass to the provider and to every tool (`docs/DEVELOPMENT.md` §4: cancellation via
      *  `AbortSignal` everywhere). Aborting it is how a test reaches §6's half-built door. */
     signal?: AbortSignal;
@@ -666,6 +674,9 @@ export function createHarness(options: HarnessOptions): Harness {
   // and the point of `runner()` below is that a runner test is not testing a second, simpler copy of this wiring.
   const guardedApprovals = guardApprovals(approvals, memory.insideTransaction);
   const platform = { isTermux: options.isTermux ?? false };
+  /** Every `tool_invocation` fact the loop emitted, collected so a test asserts the row the Gateway would write without
+   *  owning a database (§19: the trail lives in another package). */
+  const invocations: ToolInvocationAudit[] = [];
   const loop = createLoop({
     journal: memory.journal,
     approvals: guardedApprovals,
@@ -674,6 +685,7 @@ export function createHarness(options: HarnessOptions): Harness {
     provider,
     tools: tools.surface,
     platform,
+    auditToolInvocation: options.auditToolInvocation ?? ((entry) => invocations.push(entry)),
     // A real subscriber, so the invariant is checked rather than assumed: §9's rule is that publishing happens after the
     // transaction commits and never inside it, and a stream that learned about a write a rollback later took back is a
     // client that has to be told the opposite.
@@ -749,6 +761,7 @@ export function createHarness(options: HarnessOptions): Harness {
     turns: messageStore.turns,
     states: memory.states,
     executions: tools.executions,
+    invocations,
     provider,
     task: memory.task,
     checkpoint: () => checkpointStore.read(taskId),
@@ -761,6 +774,7 @@ export function createHarness(options: HarnessOptions): Harness {
         modelId: options.modelId ?? FAKE_TOOL_MODEL_ID,
         subject: subject(input.subject),
         ctx: ctxFor(input.subject),
+        ...(input.origin === undefined ? {} : { origin: input.origin }),
         ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
         // The manager's controller is what an `immediate` cancellation aborts; a test that supplies its own signal is
         // testing the abort itself rather than §6's policy.

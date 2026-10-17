@@ -583,6 +583,107 @@ test("the backlog answer is recorded either way: `latest` fires one run, `skip` 
   }
 });
 
+test("D-133's `each` fires the earliest occurrence and the tick drains the rest one at a time", () => {
+  const h = harness();
+  // A daily expression: the job's own next occurrence is a day away, so every fire this test sees is the chain's or the
+  // answer's, and none of them is the schedule catching up underneath the test.
+  const job = h.schedule({ schedule: "0 7 * * *" });
+  const base = dueAt(job);
+  // Three separate rows, the shape a chain has work left over in: one row per occurrence, oldest first, the order
+  // `unacknowledgedMissed` answers in. `start()` then records the gap itself on top, and its row is the newest.
+  for (const [index, minutesAgo] of [4, 3, 2].entries())
+    h.store.insertRun({
+      id: `run_missed${index}`,
+      jobId: job.id,
+      dueAt: new Date(base - minutesAgo * MINUTE).toISOString(),
+      recordedAt: new Date(base - minutesAgo * MINUTE).toISOString(),
+      outcome: "missed",
+      trigger: "schedule",
+      occurrences: 1,
+      reason: "one occurrence passed while this process was not running",
+    });
+  h.moveTo(base + MINUTE);
+  h.scheduler.start();
+  assert.equal(
+    h.store.unacknowledgedMissed(job.id).length,
+    4,
+    "three inserted rows plus the gap `start()` recorded: the queue the chain will work through",
+  );
+
+  const each = h.scheduler.backlog(job.id, "each");
+  assert.ok(each.ok, each.ok ? "" : each.reason);
+  if (!each.ok) return;
+  assert.equal(each.acknowledged, 1, "one decision: the earliest row is answered and no other");
+  assert.equal(each.taskId, "tsk_1");
+  assert.equal(each.run?.trigger, "backlog");
+  assert.match(each.note, /one at a time/);
+  assert.equal(h.fires.length, 1);
+  assert.equal(
+    h.fires[0]?.at,
+    Date.parse(new Date(base - 4 * MINUTE).toISOString()),
+    "the earliest occurrence, not the newest — the order the schedule produced them in",
+  );
+  assert.equal(
+    h.store.unacknowledgedMissed(job.id).length,
+    3,
+    "the rest are the queue, still unacknowledged",
+  );
+
+  // The run settles; the next tick reconciles it and the chain fires the next occurrence — and only one, however many
+  // rows remain, because one run at a time per job is the drain's own precondition.
+  h.tasks.set("tsk_1", "completed");
+  const firstTick = h.tick(h.at + MINUTE);
+  assert.equal(h.fires.length, 2, "the chain advanced by exactly one run");
+  assert.equal(firstTick.reconciled.length, 1);
+  assert.equal(h.store.unacknowledgedMissed(job.id).length, 2);
+
+  h.tasks.set("tsk_2", "completed");
+  h.tick(h.at + MINUTE);
+  assert.equal(h.fires.length, 3);
+  assert.equal(h.store.unacknowledgedMissed(job.id).length, 1);
+
+  // `skip` retires whatever the chain has not reached: the rows are acknowledged, and the next settlement drains nothing.
+  const stop = h.scheduler.backlog(job.id, "skip");
+  assert.ok(stop.ok);
+  assert.equal(
+    stop.ok ? stop.acknowledged : 0,
+    1,
+    "the one row the chain had not reached — `start()`'s own, whose occurrences are what `skip` retires",
+  );
+  h.tasks.set("tsk_3", "completed");
+  h.tick(h.at + MINUTE);
+  assert.equal(h.fires.length, 3, "the chain stopped where the user stopped it");
+  assert.equal(h.store.unacknowledgedMissed(job.id).length, 0);
+
+  // A manual run-now settling with missed rows present drains nothing: its trigger is `run-now`, and one run the user
+  // asked for by hand is one run, not a backlog being answered.
+  const h2 = harness();
+  const job2 = h2.schedule({ schedule: "0 7 * * *" });
+  const base2 = dueAt(job2);
+  h2.store.insertRun({
+    id: "run_manual_missed",
+    jobId: job2.id,
+    dueAt: new Date(base2 - MINUTE).toISOString(),
+    recordedAt: new Date(base2 - MINUTE).toISOString(),
+    outcome: "missed",
+    trigger: "schedule",
+    occurrences: 1,
+    reason: "one occurrence passed while this process was not running",
+  });
+  h2.moveTo(base2 + MINUTE);
+  h2.scheduler.start();
+  const manual = h2.scheduler.runNow(job2.id);
+  assert.ok(manual.ok);
+  h2.tasks.set(manual.ok ? (manual.taskId ?? "tsk_1") : "tsk_1", "completed");
+  h2.tick(h2.at + MINUTE);
+  assert.equal(
+    h2.store.unacknowledgedMissed(job2.id).length,
+    2,
+    "the missed rows wait for a backlog answer; a run-now was not one (the inserted row plus the gap `start()` recorded)",
+  );
+  assert.equal(h2.fires.length, 1);
+});
+
 test("a paused job does not fire, and pausing takes effect before the next tick while a run in flight keeps going", () => {
   const h = harness();
   const job = h.schedule({ schedule: "* * * * *" });

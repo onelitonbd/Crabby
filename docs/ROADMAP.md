@@ -1545,6 +1545,30 @@ nothing does yet — wiring the client into the runner is the slice that has a r
 server no task can call would be registration as theater. Gates: mcp 12/12 (a real child process and a real HTTP
 server, both stood up by the test), mcp-cli 2/2, extensions 41/41, full sweep, typecheck, biome, parity, docs:check.
 
+**Seventy-third slice — the route gaps the owner named, closed, and the wire answers that went with them
+(D-133, D-138).** The three routes the interfaces named as absent exist: `GET /logs` answers from the Gateway's own
+ring buffer — one exported level ranking so a route and the logger cannot disagree, a buffer-offset cursor, a bounded
+window, and no knob that turns §7's redaction off; `GET /audit` answers §14's trail over an `aud_` cursor (the eighth
+id prefix, D-138) with a `taskId` filter and a table that holds **no foreign key**, because a revoked client or a
+deleted task must not take its history with it; and `GET /whoami` answers the paired client's identity beside the
+tool surface the composed executor *actually* declares — an absent executor is a stated absence, never a default
+wearing a fact's clothes. The writes the trail exists for record where they happen: the guard writes a rejected
+`auth_attempt` before its 401 leaves, mint and redeem and revoke write theirs (O-071's durable row), `PUT /config`
+writes `config_change` with key *paths* and never values, an approval decision writes who answered from which surface
+on what tier, and the loop's `tool_invocation` row travels out through a seam the composition root writes —
+argument-free on purpose, because §7 keeps the model's words out of the record that outlives the task, and a
+`rejected` act (policy's re-evaluation refusing what a prompt had cleared) is its own row. `DELETE /jobs/{id}`
+closes T17-05/W16-11's gap with the default the row itself wrote: the run history stays unless `?history=delete`
+asks, which forced schema v15 — v5's `ON DELETE CASCADE` deleted exactly the history the accepted sentence keeps, so
+the reference is gone and the rows outlive the job — and the deletion writes `job_delete`, since an audit log that
+lost the fact of a deletion to the deletion would not be one. `each` joins `latest | skip` in `JobBacklogBody` as
+D-133 planned: the earliest missed occurrence fires now, and the scheduler's own tick drains the rest one at a time —
+each next only after the one before settles — so T17-07's walk retired from the TUI and became what the rows say it
+is. `POST /models/{p}/{m}/probe` runs one small live call per claim it can exercise, renders §3.5's class per failed
+row, and reports the claims it has no transport for as `unprobed` rather than inventing a verdict — D-133's scope is
+no live key, and a probe that cannot run says so in its row rather than in a 500. Gates: storage 33/33, scheduler
+22/22, jobs HTTP 13/13, models HTTP 11/11, loop 50/50, cli 54/54, full sweep, typecheck, biome, parity, docs:check.
+
 ## 6. Phase M4 — Providers, memory, extensions
 
 - Provider adapters: `openai-compatible` (+ user-defined endpoints, D-041), `ollama`, `anthropic`, `gemini`, each

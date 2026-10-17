@@ -85,6 +85,54 @@ function stateMoves(harness: Harness): string[] {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+describe("§14's tool_invocation trail (D-133)", () => {
+  it("records an ok row for a tool that ran, argument-free, with the act's shape", async () => {
+    const harness = createHarness({ rounds: [readRound, doneRound], tools: fileTools() });
+    const outcome = await harness.start({
+      origin: {
+        clientId: "cli_tester",
+        clientName: "the tester",
+        interface: "cli",
+        capabilities: ["fs.read"],
+        sessionId: "ses_loop_audit",
+      },
+    });
+    assert.equal(outcome.kind, "completed");
+    assert.equal(harness.invocations.length, 1, "one tool act, one row");
+    const entry = harness.invocations[0];
+    assert.equal(entry?.taskId, harness.taskId);
+    assert.equal(entry?.tool, "file.read");
+    assert.equal(entry?.outcome, "ok");
+    assert.equal(entry?.tier, "T0");
+    assert.equal(entry?.code, undefined);
+    assert.ok((entry?.durationMs ?? 0) >= 0);
+    assert.ok(!("args" in (entry as unknown as Record<string, unknown>)),
+      "the trail carries no arguments — SECURITY.md §7 keeps the model's words out of the record that outlives the task");
+    assert.equal(entry?.origin?.interface, "cli", "the origin names who drove the task");
+    assert.equal(entry?.origin?.clientId, "cli_tester");
+  });
+
+  it("records a rejected row when the arbiter refuses the act at the moment of execution", async () => {
+    const harness = createHarness({ rounds: [deleteRound, doneRound], tools: fileTools() });
+    const run = suspended(await harness.start());
+    harness.answer(run.approvalId, "approve", { via: "web" });
+    // The grant is gone when the run resumes, so policy refuses the act the prompt had already cleared — the same
+    // moment the existing blocked-event test pins, now asserted from the trail's side.
+    const revoked: SuspendedRun = {
+      ...run,
+      input: { ...run.input, subject: { ...run.input.subject, grants: ["fs.read"] } },
+    };
+    const outcome = await harness.resume(revoked);
+    assert.equal(outcome.kind, "completed");
+    const entry = harness.invocations.find((candidate) => candidate.tool === "file.delete");
+    assert.ok(entry !== undefined, "the refused act is on the trail");
+    assert.equal(entry.outcome, "rejected", "nothing ran, and the row says so");
+    assert.equal(entry.tier, "T2", "file.delete inside the workspace prices at T2 in this harness");
+    assert.equal(entry.approvalId, run.approvalId, "the row names the approval it was refused under");
+    assert.equal(harness.executions.length, 0, "the executor was never touched");
+  });
+});
+
 describe("the loop that opens a request (§5's rule 1, PROVIDERS_AND_TOOLS.md §4.4)", () => {
   it("completes a task that needs nothing approved, passing through `running` because §4.1 has no shortcut", async () => {
     const harness = createHarness({ messages: true, rounds: [doneRound], tools: [] });

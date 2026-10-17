@@ -363,6 +363,6 @@ Every `C` element above has to exist for the parity test to pass: if a capabilit
 
 **Open questions:** C6-A, C6-B, C-A-A and C-S-A are closed by D-063.
 
-
-
-
+**On `GET /whoami` (D-133): deliberately verbless here.** The CLI reads its own pairing row out of the local store —
+`crabby auth clients` already lists identities, and a command that asked the Gateway who it is would re-answer a
+question the file on disk answers without a round trip. The route exists for the surfaces that hold only a token.

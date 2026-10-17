@@ -66,8 +66,8 @@ test("schema version 6 is the session table, and the index is the order the list
   try {
     assert.equal(
       schemaVersion(db),
-      14,
-      "the file advances past 6 (the task pin, its switch, its origin, D-112's message table, D-116's coverage columns, M4's memory and M4's audit trail) but v6 is still sessions",
+      15,
+      "the file advances past 6 (the task pin, its switch, its origin, D-112's message table, D-116's coverage columns, M4's memory, M4's audit trail and the run history's release from its job) but v6 is still sessions",
     );
     assert.equal(MIGRATIONS.find((entry) => entry.version === 6)?.name, "sessions");
     const indexes = db
@@ -147,7 +147,7 @@ test("the backfill gives every conversation a task already referenced, named fro
 
   const applied = migrate(handle.db);
   try {
-    assert.deepEqual(applied.applied, [6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    assert.deepEqual(applied.applied, [6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
     const rows = listSessions(handle.db);
     assert.deepEqual(
       rows.map((row) => row.id).sort(),
@@ -714,8 +714,8 @@ describe("a conversation's turns", () => {
       migrate(handle.db);
       assert.equal(
         schemaVersion(handle.db),
-        14,
-        "four migrations run at once: coverage (11), pins (12), memory (13) and the audit trail (14)",
+        15,
+        "five migrations run at once: coverage (11), pins (12), memory (13), the audit trail (14) and the run history (15)",
       );
       assert.deepEqual(
         listMessages(handle.db, sessionId.id).items.map((message) => message.content),

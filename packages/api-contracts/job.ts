@@ -255,6 +255,16 @@ export interface JobActionBody {
   readonly openRunTaskId?: string;
 }
 
+/** `DELETE /jobs/{id}`'s answer (T17-05/W16-11, D-133): what went, what stayed, and the sentence that says both. The job
+ *  row is the thing deleted; the run history is a choice the asker made and the answer records, because "the history of
+ *  past runs is not deleted with the job unless asked" is W16-11's own third column and a body that did not say which
+ *  happened would make every client guess. */
+export interface JobDeleteBody {
+  readonly deleted: string;
+  readonly historyKept: boolean;
+  readonly note: string;
+}
+
 /** `PATCH /jobs/{id}`'s body, and the fields it accepts are the ones §4.5 does not call material: a name is how the user
  *  refers to the job, and a schedule changes *when* it runs rather than *what* it does. `objective` is absent from the
  *  schema on purpose — `additionalProperties: false` turns "change what it targets" into a named refusal quoting §4.5's
@@ -269,12 +279,14 @@ export const PatchJobBody = Type.Object(
 );
 export type PatchJobBody = Static<typeof PatchJobBody>;
 
-/** `POST /jobs/{id}/backlog`'s body: C12-06's two answers. `latest` fires one run for the most recent missed occurrence
- *  and acknowledges the rest; `skip` acknowledges them all and fires nothing. Both are recorded, because an
+/** `POST /jobs/{id}/backlog`'s body: C12-06's three answers. `latest` fires one run for the most recent missed
+ *  occurrence and acknowledges the rest; `skip` acknowledges them all and fires nothing; `each` (D-133) fires the
+ *  earliest now and drains the rest one at a time — the tick fires the next occurrence only when the one before it has
+ *  settled, so the no-burst rule holds and `skip` retires whatever remains. All three are recorded, because an
  *  acknowledgement nobody can find later is the same silence §4.5 forbids. */
 export const JobBacklogBody = Type.Object(
   {
-    action: Type.Union([Type.Literal("latest"), Type.Literal("skip")]),
+    action: Type.Union([Type.Literal("latest"), Type.Literal("skip"), Type.Literal("each")]),
   },
   { additionalProperties: false },
 );

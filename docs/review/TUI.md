@@ -121,6 +121,7 @@ leave headings as text, and never touch fenced blocks.
 | T5-04 | File attach | path typed or picked from workspace roots | one line per path | paths as text, no blob preview; the deny-list applies (`SECURITY.md` §8) | ACCEPTED |
 | T5-05 | This-turn model switch | one-turn override | one line | prints the capability delta warning if the target lacks tool calling (D-045) | ACCEPTED |
 | T5-06 | Capability summary before send | `fs: workspace · net: off · shell: off` | one line | visible before sending, exactly like Web W4-06 | ACCEPTED |
+| T5-06a | Capability line's source | the composer's local facts; `GET /whoami` (D-133) states the same truth on the wire | — | a pane that wants the install's real surface reads the route rather than re-deriving one; deliberately verbless in the CLI (recorded there) | ACCEPTED |
 | T5-07 | Send vs stop | one control, two states | one line | stop means the cancel endpoint's semantics: finish the current step, then settle — never a local hide | ACCEPTED |
 | T5-08 | Queue | messages sent while a task runs | count + `q` lists them | queued, not interrupting; reorder and drop available in that list | ACCEPTED |
 | T5-09 | Input history | previous inputs via `↑` when the composer is empty | n/a | per session, and it must not swallow `↑` for scrolling in a pane that scrolls | ACCEPTED |

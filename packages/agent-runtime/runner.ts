@@ -35,6 +35,7 @@ import {
   type ModelSuspendedRun,
   type RunOrigin,
   type SuspendedRun,
+  type ToolInvocationAudit,
   type ToolSurface,
 } from "./loop.ts";
 import type { MessageWriter } from "./messages.ts";
@@ -75,6 +76,9 @@ export interface RunnerDeps {
    *  them: the composition root builds this from the pool it already composed (D-110), and the loop only names what it
    *  is given (D-101). */
   readonly askCandidates?: AskCandidates | undefined;
+  /** §14's `tool_invocation` seam, handed to the loop unchanged — the loop sees every act, and the composition root
+   *  (where the database lives) writes the row. */
+  readonly auditToolInvocation?: ((entry: ToolInvocationAudit) => void) | undefined;
 }
 
 export interface StartInput {
@@ -196,6 +200,9 @@ export function createRunner(deps: RunnerDeps): Runner {
     ...(deps.context === undefined ? {} : { context: deps.context }),
     ...(deps.limits === undefined ? {} : { limits: deps.limits }),
     ...(deps.askCandidates === undefined ? {} : { askCandidates: deps.askCandidates }),
+    ...(deps.auditToolInvocation === undefined
+      ? {}
+      : { auditToolInvocation: deps.auditToolInvocation }),
     now,
   });
 

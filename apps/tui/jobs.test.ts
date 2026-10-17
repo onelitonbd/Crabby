@@ -20,7 +20,6 @@ import {
   readJobDetail,
   readJobItems,
   runLine,
-  walkPromptLines,
 } from "./jobs.ts";
 import type { PaneContext } from "./panes.ts";
 
@@ -117,14 +116,9 @@ describe("T17-07 — the missed-run line and the prompt's three answers", () => 
     assert.ok((lines[2] as string).includes("[s]"));
   });
 
-  it("walks `each` one occurrence per decision, never a burst", () => {
-    const lines = walkPromptLines(
-      [run(), run({ id: "run_2", dueAt: "2026-10-16T07:30+06:00" })],
-      0,
-    );
-    assert.ok((lines[0] as string).includes("1 of 2"));
-    assert.ok((lines[0] as string).includes("2026-10-15T07:30+06:00"));
-    assert.ok((lines[1] as string).includes("[y]") && (lines[1] as string).includes("[n]"));
+  it("still says each, because D-133 moved the walk onto the wire and the prompt's third answer stayed", () => {
+    const lines = backlogPromptLines([run(), run({ id: "run_2" })]);
+    assert.ok((lines[2] as string).includes("each one at a time"));
   });
 });
 

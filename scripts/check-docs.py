@@ -431,6 +431,7 @@ def main() -> int:
         "tasks": r"\btask",
         "tools": r"\btool",
         "tunnel": r"tunnel",
+        "whoami": r"whoami",
     }
     res_names = set()
     for route in set(re.findall(r"`(?:GET|POST|PATCH|PUT|DELETE) (/[a-zA-Z0-9{}/_.-]*)`", iface)):

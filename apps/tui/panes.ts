@@ -123,7 +123,10 @@ export interface TaskReader {
   /** T17-07's answer over `POST /jobs/{id}/backlog`. The body's `action` is `latest | skip`; T17-07's third answer
    *  (`each`) is the walk this TUI builds over `runJob` one decision at a time, because the wire has no `each` and a
    *  burst is what §4.5 forbids outright. */
-  jobBacklog?(id: string, body: { readonly action: "latest" | "skip" }): Promise<Response<unknown>>;
+  jobBacklog?(
+    id: string,
+    body: { readonly action: "latest" | "skip" | "each" },
+  ): Promise<Response<unknown>>;
 }
 
 /** `items` out of a Gateway list body, or a thrown sentence. **A client of a document is not entitled to assume the field is

@@ -103,7 +103,6 @@ import {
   type TaskSummary,
   tasksPane,
   unparsableFields,
-  walkPromptLines,
 } from "./panes.ts";
 import { clip, FrameRenderer, type Terminal } from "./render.ts";
 import { switcherLines, switchNote } from "./sessions.ts";
@@ -194,14 +193,13 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
   let taskFilterEditing = false;
   let approvals: readonly ApprovalSummary[] = [];
   let jobs: readonly JobRow[] = [];
-  /** The jobs pane's modes (T17): the detail T17-04 draws, T17-07's backlog prompt and its `each` walk, T17-06's edit
-   *  form and T17-05's typed delete confirm. One is open at a time and each takes the keyboard while it is — the same
-   *  focus rule T1-07 writes for the approvals modal. */
+  /** The jobs pane's modes (T17): the detail T17-04 draws, T17-07's backlog prompt — whose `each` answer D-133 moved
+   *  onto the wire, retiring this file's walk — T17-06's edit form and T17-05's typed delete confirm. One is open at a
+   *  time and each takes the keyboard while it is — the same focus rule T1-07 writes for the approvals modal. */
   let jobIndex = 0;
   let jobDetail: readonly string[] | undefined;
   let jobMissed: readonly JobRunRecord[] = [];
   let jobBacklog = false;
-  let jobWalk: number | undefined;
   let jobEdit: JobEditForm | undefined;
   let jobDelete: JobDeleteConfirm | undefined;
   /** The models pane's read half (T11-01/02): `loadConfig`'s document composed by the same functions `crabby model list`
@@ -564,24 +562,6 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       ? `effective unchanged — every value you set is what the endpoint already reported${reserveNote}`
       : `${report.changes.join("; ")}${reserveNote}`;
   };
-  /** The walk's end: every missed row was decided one at a time, and the rows are acknowledged so none waits in silence.
-   *  The recorded action is `skip` — the wire's way to acknowledge without firing — with each fired run's own `run-now`
-   *  record beside it, which is the truth of "each" over a body that has only `latest | skip`. */
-  const finishWalk = async (): Promise<string> => {
-    const job = jobs[jobIndex];
-    jobWalk = undefined;
-    if (job === undefined || client?.jobBacklog === undefined) return "the walk is over";
-    try {
-      const response = await client.jobBacklog(job.id, { action: "skip" });
-      await readJobs();
-      void draw();
-      return `${(response.body as { note?: string } | null)?.note ?? "rows acknowledged"} — the walk decided each one`;
-    } catch (error) {
-      return `the walk is over, but the rows could not be acknowledged: ${
-        error instanceof Error ? error.message : String(error)
-      }`;
-    }
-  };
   /** The composer's key table, reused for the edit form and the typed confirm: one table for "what does a key mean while
    *  typing", so the form and the composer cannot disagree about where the cursor is. `send` is mapped by the caller. */
   const actionForKey = (key: Key): ReturnType<typeof actionFor> | undefined => {
@@ -724,11 +704,10 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     }
     if (pane === "jobs") {
       // The modes draw over the list, and each is a projection of state this app holds: the form T17-06 sizes at 4–6
-      // lines, the delete confirm T17-05 prices with the typed name, the walk T17-07's third answer takes, the prompt
-      // itself, and T17-04's detail. The list is what is underneath all of them.
+      // lines, the delete confirm T17-05 prices with the typed name, T17-07's prompt, and T17-04's detail. The list is
+      // what is underneath all of them.
       if (jobEdit !== undefined) return editFormLines(jobEdit, columns);
       if (jobDelete !== undefined) return deletePromptLines(jobDelete, columns);
-      if (jobWalk !== undefined) return walkPromptLines(jobMissed, jobWalk);
       if (jobBacklog) return backlogPromptLines(jobMissed);
       if (jobDetail !== undefined) return jobDetail;
       return jobsPane(context(), jobs, jobIndex);
@@ -1482,46 +1461,6 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         }
         return false;
       }
-      // T17-07's `each` walk: one missed occurrence per decision, y runs it (a fresh `run-now`), n skips it. When the
-      // walk ends the rows are acknowledged so none is dropped silently — the recorded answer is `skip` with the
-      // run-now records beside it, which is the truth of "each was decided" over a wire that has no `each`.
-      if (jobWalk !== undefined) {
-        if (key.kind === "escape") {
-          jobWalk = undefined;
-          say(
-            "the walk stopped — the missed rows are still unacknowledged and will be asked about again",
-          );
-          return false;
-        }
-        if (key.kind === "char" && key.char === "n") {
-          jobWalk += 1;
-          if (jobWalk >= jobMissed.length)
-            void finishWalk().then(say, (error: unknown) => say(String(error)));
-          return false;
-        }
-        if (key.kind === "char" && key.char === "y") {
-          if (client?.runJob === undefined || job === undefined) return false;
-          void client
-            .runJob(job.id)
-            .then((response) => {
-              const note = (response.body as { note?: string } | null)?.note ?? "run started";
-              say(note);
-              jobWalk = (jobWalk ?? 0) + 1;
-              if (jobWalk >= jobMissed.length) return finishWalk().then(say);
-              return undefined;
-            })
-            .catch((error: unknown) => {
-              // D-103's one-run-at-a-time rule refuses a second open run; the occurrence is not lost — the walk stays
-              // on it and the refusal is on the line rather than in a log.
-              say(`run refused: ${error instanceof Error ? error.message : String(error)}`);
-            })
-            .then(() => {
-              void refreshJobs();
-            });
-          return false;
-        }
-        return false;
-      }
       // T17-07's prompt: three answers, and Esc answers nothing (the rows stay).
       if (jobBacklog) {
         if (key.kind === "escape") {
@@ -1553,14 +1492,29 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
             );
           return false;
         }
+        // D-133 retired the walk: `each` is a wire action now, and the scheduler performs the one-at-a-time drain the
+        // client used to do by hand. The key's answer is one call, like `l` and `s`.
         if (key.kind === "char" && key.char === "e") {
-          if (jobMissed.length === 0) {
-            say("nothing is missed, so there is nothing to walk");
-            jobBacklog = false;
-            return false;
-          }
+          if (client?.jobBacklog === undefined || job === undefined) return false;
           jobBacklog = false;
-          jobWalk = 0;
+          void client
+            .jobBacklog(job.id, { action: "each" })
+            .then((response) => {
+              const body = response.body as {
+                note?: string;
+                taskId?: string;
+                acknowledged?: number;
+              } | null;
+              say(
+                `${body?.note ?? "backlog answered"}${body?.taskId === undefined ? "" : ` (task ${body.taskId})`}`,
+              );
+              return refreshJobs();
+            })
+            .catch((error: unknown) =>
+              say(
+                `backlog answer failed: ${error instanceof Error ? error.message : String(error)}`,
+              ),
+            );
           return false;
         }
         return false;

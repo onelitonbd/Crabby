@@ -28,6 +28,7 @@ import {
   type ClientInterface,
   isTerminal,
   type JobActionBody,
+  type JobDeleteBody,
   type JobDetailBody,
   type JobListBody,
   type JobRecord,
@@ -42,6 +43,7 @@ import { composeProviders, FAKE_TOOL_MODEL_ID, type FakeStep } from "@crabby/pro
 import {
   getSession,
   getTask,
+  listAudit,
   listSessions,
   migrate,
   mintPairingCode,
@@ -382,7 +384,9 @@ async function raw(
     method: init.method ?? "GET",
     headers: {
       authorization: `Bearer ${init.token ?? h.creator.token}`,
-      "content-type": "application/json; charset=utf-8",
+      // A content-type without a body is Fastify's empty-JSON refusal — the header names a payload, so it rides
+      // only when there is one.
+      ...(init.body === undefined ? {} : { "content-type": "application/json; charset=utf-8" }),
     },
     ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
   });
@@ -878,7 +882,7 @@ describe("the job routes on a Gateway that drives", () => {
       assert.equal(
         noAction.status,
         400,
-        "C12-06's two answers are the only two, and the route will not guess between them",
+        "C12-06's three answers are the only three, and the route will not guess between them",
       );
       assert.match(
         (noAction.body as ErrorEnvelope).error.message,
@@ -886,17 +890,59 @@ describe("the job routes on a Gateway that drives", () => {
         "the refusal names the field it needs",
       );
 
+      // D-133's `each`, over the wire: the earliest occurrence fires now and the rest stay as the queue the tick drains
+      // one run at a time. This fixture's backlog is one row standing for four occurrences, so the chain is one decision
+      // long — the route asserts what the wire does; the drain's sequencing is the scheduler's own test.
       const each = await raw(h, `/api/v1/jobs/${job.id}/backlog`, {
         method: "POST",
         body: { action: "each" },
       });
       assert.equal(
         each.status,
-        400,
-        "and `each` is refused rather than honoured: four runs for four missed occurrences is the burst §4.5 forbids",
+        201,
+        "`each` fires work, so the answer is a creation, not an acknowledgement alone",
+      );
+      const eachBody = each.body as JobActionBody;
+      assert.equal(
+        eachBody.acknowledged,
+        1,
+        "one decision: the row that fired is answered, the rest wait",
+      );
+      assert.equal(
+        eachBody.taskId !== undefined,
+        true,
+        "a run was created for the earliest occurrence",
+      );
+      assert.match(eachBody.note, /one at a time/, "and the note names the drain, never a burst");
+      assert.equal(
+        eachBody.job.missed,
+        0,
+        "the user answered, so the counter a list prints is cleared",
+      );
+      const afterEach = (await h.cli.job(job.id)).body as JobDetailBody;
+      assert.equal(
+        afterEach.missedUnacknowledged.length,
+        0,
+        "a one-row backlog is fully queued by one answer",
       );
 
-      const latest = await raw(h, `/api/v1/jobs/${job.id}/backlog`, {
+      // A fresh job with a fresh row, so `latest` answers a backlog that `each` has not just consumed — and does not
+      // meet the run `each` left open, which is the one-run-at-a-time rule doing its job.
+      const latestJob = scheduleJob(h, { name: "third", schedule: "0 9 * * *" });
+      disarm(h);
+      h.jobStore.insertRun({
+        id: "run_missed_latest",
+        jobId: latestJob.id,
+        dueAt: new Date(Date.now() - 90_000).toISOString(),
+        recordedAt: new Date().toISOString(),
+        outcome: "missed",
+        trigger: "schedule",
+        occurrences: 3,
+        reason: "three occurrences passed while this process was not running",
+      });
+      h.jobStore.update(latestJob.id, { missed: 3, updatedAt: new Date().toISOString() });
+
+      const latest = await raw(h, `/api/v1/jobs/${latestJob.id}/backlog`, {
         method: "POST",
         body: { action: "latest" },
       });
@@ -905,7 +951,7 @@ describe("the job routes on a Gateway that drives", () => {
       assert.equal(latest.location, `/api/v1/tasks/${body.taskId as string}`);
       assert.equal(
         body.acknowledged,
-        4,
+        3,
         "the whole backlog is answered, not just the occurrence that ran",
       );
       assert.equal(
@@ -924,19 +970,30 @@ describe("the job routes on a Gateway that drives", () => {
         "and the note says the rest were recorded rather than fired",
       );
 
-      const detail = (await h.cli.job(job.id)).body as JobDetailBody;
+      const detail = (await h.cli.job(latestJob.id)).body as JobDetailBody;
       assert.deepEqual(
         detail.missedUnacknowledged,
         [],
         "nothing is left to answer for, so the sheet W16-08 would open is empty",
       );
       const missed = detail.runs.filter((run) => run.outcome === "missed");
-      assert.equal(missed.length, 1, "the row is still there");
+      assert.equal(
+        missed.length,
+        1,
+        "the row is still there — the history was recorded, never rewritten",
+      );
       assert.ok(
         missed[0]?.acknowledgedAt !== undefined,
         "with the moment the user answered on it — D-065's rule about not editing the past applies to a timer's history too",
       );
-      assert.equal(missed[0]?.occurrences, 4);
+      // And the row `each` answered keeps its own moment: two answers, two rows, neither rewritten.
+      const eachDetail = (await h.cli.job(job.id)).body as JobDetailBody;
+      const eachRows = eachDetail.runs.filter((run) => run.outcome === "missed");
+      assert.equal(eachRows.length, 1);
+      assert.ok(
+        eachRows[0]?.acknowledgedAt !== undefined,
+        "the row the chain fired carries the moment the answer was given",
+      );
 
       // `skip` with nothing left to skip is an answer rather than a refusal, because a client that asks every morning must
       // not be told it made a mistake.
@@ -969,6 +1026,115 @@ describe("the job routes on a Gateway that drives", () => {
         body: { action: "skip" },
       });
       assert.equal(missing.status, 404);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("deletes a job, keeps its run history by default, and writes the audit row that says so (T17-05/W16-11, D-133)", async () => {
+    const h = await boot({ rounds: [[{ kind: "text", text: "done" }]] });
+    try {
+      const job = scheduleJob(h);
+      disarm(h);
+      // History a delete must not take with it: work that already happened is D-065's record.
+      h.jobStore.insertRun({
+        id: "run_history1",
+        jobId: job.id,
+        dueAt: new Date(Date.now() - 60_000).toISOString(),
+        recordedAt: new Date().toISOString(),
+        outcome: "completed",
+        trigger: "schedule",
+        occurrences: 1,
+      });
+
+      const deleted = await raw(h, `/api/v1/jobs/${job.id}`, { method: "DELETE" });
+      assert.equal(deleted.status, 200);
+      const body = deleted.body as JobDeleteBody;
+      assert.equal(body.deleted, job.id);
+      assert.equal(
+        body.historyKept,
+        true,
+        "the default is W16-11's own sentence: the history of past runs is not deleted with the job unless asked",
+      );
+      assert.match(body.note, /history stays/);
+      assert.equal(h.jobStore.get(job.id), undefined, "the job is gone");
+      assert.equal(
+        h.jobStore.runsFor(job.id, 10).length,
+        1,
+        "and the run row survived it — there is no foreign key to cascade on, which is v5's own choice",
+      );
+
+      // §14's row: the one write whose subject stops existing is the one the trail must outlive.
+      const trail = listAudit(h.db, { limit: 10 });
+      const row = trail.rows.find(
+        (candidate) => candidate.kind === "job_delete" && candidate.detail?.jobId === job.id,
+      );
+      assert.ok(row !== undefined, "the audit trail names the deletion");
+      assert.equal(row.detail?.historyKept, true);
+
+      const again = await raw(h, `/api/v1/jobs/${job.id}`, { method: "DELETE" });
+      assert.equal(again.status, 404, "and a second delete has nothing to delete");
+      assert.equal((again.body as ErrorEnvelope).error.code, "job_not-found");
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("`?history=delete` is the ask that removes the run rows too, and the answer says which happened", async () => {
+    const h = await boot({ rounds: [[{ kind: "text", text: "done" }]] });
+    try {
+      const job = scheduleJob(h);
+      disarm(h);
+      h.jobStore.insertRun({
+        id: "run_history2",
+        jobId: job.id,
+        dueAt: new Date(Date.now() - 60_000).toISOString(),
+        recordedAt: new Date().toISOString(),
+        outcome: "failed",
+        trigger: "schedule",
+        occurrences: 1,
+      });
+      const deleted = await raw(h, `/api/v1/jobs/${job.id}?history=delete`, { method: "DELETE" });
+      assert.equal(deleted.status, 200);
+      const body = deleted.body as JobDeleteBody;
+      assert.equal(body.historyKept, false);
+      assert.match(body.note, /went with it/);
+      assert.equal(
+        h.jobStore.runsFor(job.id, 10).length,
+        0,
+        "the ask was explicit, so the rows went",
+      );
+
+      const nonsense = await raw(h, `/api/v1/jobs/${job.id}?history=shred`, { method: "DELETE" });
+      assert.equal(
+        nonsense.status,
+        400,
+        "an ask the contract does not spell is a 400, not a guess",
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("refuses to delete a job whose run is still open: the schedule does not abandon running work", async () => {
+    const h = await boot({ rounds: [[{ kind: "text", text: "still going" }]] });
+    try {
+      const job = scheduleJob(h);
+      // A fire the fixture keeps open: the run row's outcome is `fired`, and it stays that way until a reconcile reads
+      // the task's state — which the disarmed scheduler below never performs.
+      const due = job.nextRunAt === undefined ? Date.now() : Date.parse(job.nextRunAt);
+      const fired = schedulerOf(h).tick(due);
+      assert.equal(fired.fired.length, 1, "the fixture's job fired once");
+      disarm(h);
+      const refused = await raw(h, `/api/v1/jobs/${job.id}`, { method: "DELETE" });
+      assert.equal(refused.status, 409);
+      assert.equal((refused.body as ErrorEnvelope).error.code, "job_in-flight");
+      assert.match(
+        (refused.body as ErrorEnvelope).error.message,
+        /still open/,
+        "and the refusal names the task that keeps going",
+      );
+      assert.ok(h.jobStore.get(job.id) !== undefined, "the job is still there");
     } finally {
       await h.close();
     }
@@ -1175,6 +1341,20 @@ describe("the job routes on a Gateway that composed no runner", () => {
         { composed: false, rows: 1, armed: false },
         "the rows exist and nothing is armed — two facts an operator needs, kept apart",
       );
+
+      // A delete arms no timer, so the party that must exist for `pause` is not the party this needs: the store's own
+      // delete answers, with the same default the scheduler's route keeps. Placed after the diagnostics read, because
+      // the row this Gateway still holds is what that read counts.
+      const removed = await raw(h, "/api/v1/jobs/job_from_before", { method: "DELETE" });
+      assert.equal(
+        removed.status,
+        200,
+        "a read-only Gateway can still remove a row nobody can drive",
+      );
+      const deleteBody = removed.body as JobDeleteBody;
+      assert.equal(deleteBody.deleted, "job_from_before");
+      assert.equal(deleteBody.historyKept, true);
+      assert.equal(h.jobStore.get("job_from_before"), undefined);
 
       // §5.1's "hidden is better than failing", applied to a subsystem — and the hiding happens in the *runtime fields*,
       // not in the row. §4.2's registry is a document of what the product will do, so `cron.schedule` is listed here as it

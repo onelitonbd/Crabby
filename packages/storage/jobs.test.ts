@@ -66,7 +66,7 @@ test("schema version 5 is the job tables, and the migration is the one that crea
     // Ten and not five, because §2.1's conversation record (D-104), the task's model pin, its switch, its origin and
     // D-112's message table all landed after this table did. The assertion that matters here is unchanged: the job tables are version 5's work and no later
     // migration touched them.
-    assert.equal(schemaVersion(db), 14);
+    assert.equal(schemaVersion(db), 15);
     assert.equal(
       MIGRATIONS.find((entry) => entry.version === 5)?.name,
       "jobs",
@@ -289,10 +289,17 @@ test("a run keeps its reason and its task when it is closed, and its history is 
     );
     assert.equal(orphan?.outcome, "completed", "while keeping the outcome it recorded");
 
-    // `job_id` is `ON DELETE CASCADE`: a job's runs are its history and nothing else, so deleting the job deletes them.
-    db.prepare("DELETE FROM job WHERE id = ?").run("job_1");
-    assert.equal(store.runsFor("job_1", 50).length, 0);
+    // `job_id` lost its `REFERENCES job (id) ON DELETE CASCADE` in v15: W16-11 prices a delete as "the history of past
+    // runs is not deleted with the job unless asked", and a cascade deletes exactly that history by default. Deleting
+    // the rows is what `deleteJob` does when the ask is explicit.
+    assert.equal(store.deleteJob("job_1", false), true);
     assert.equal(store.get("job_1"), undefined);
+    assert.equal(
+      store.runsFor("job_1", 50).length,
+      3,
+      "the job went and its history stayed — three rows of work that already happened",
+    );
+    assert.equal(store.deleteJob("job_1", false), false, "a second delete has nothing to delete");
   } finally {
     close();
   }

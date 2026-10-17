@@ -386,3 +386,7 @@ and collapse W1-04, W1-07, W1-08, W1-09 into a single "more" sheet (W1-11) — w
 
 Nothing in this file is optional by size. The count of rows still awaiting review is not repeated here — it is in `DECISIONS.md` §4B, computed by `scripts/check-docs.py`, because this sentence carried a number that had been stale for two rounds.
 
+**On `GET /whoami` (D-133): the wire source W4-06's line states.** The composer's capability summary and the route
+answer the same question from two ends — the line from the surface it drafted against, the route from the executor
+this Gateway actually composed. A settings pane that wants the install's real surface reads the route rather than
+re-deriving one.

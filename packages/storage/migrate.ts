@@ -525,6 +525,46 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // D-133's delete route made an accepted sentence executable and the schema disagree with it: W16-11 prices `DELETE
+    // /jobs/{id}` as "the history of past runs is not deleted with the job unless asked", and v5's
+    // `job_run.job_id REFERENCES job (id) ON DELETE CASCADE` deletes exactly that history — a default that erases the
+    // record of work which already happened (D-065's rule) from behind a settings screen. So the reference goes: the
+    // table is rebuilt without the job foreign key and copied row for row, the way v11's rebuild carried a
+    // conversation's turns across. The column stays `NOT NULL` — every row was written by a job, and a null would be a
+    // fact nothing produced. Deleting the rows a job leaves behind is still possible: it is what
+    // `DELETE /jobs/{id}?history=delete` asks for explicitly, which is the shape W16-11 actually wrote.
+    version: 15,
+    name: "job-run-history",
+    up(db) {
+      db.exec(`
+        CREATE TABLE job_run_rebuilt (
+          id              TEXT PRIMARY KEY,
+          job_id          TEXT NOT NULL,
+          due_at          TEXT NOT NULL,
+          recorded_at     TEXT NOT NULL,
+          settled_at      TEXT,
+          outcome         TEXT NOT NULL CHECK (outcome IN
+                          ('fired','waiting_on_approval','skipped','missed','refused',
+                           'completed','failed','cancelled','interrupted')),
+          triggered_by    TEXT NOT NULL CHECK (triggered_by IN ('schedule','run-now','backlog')),
+          task_id         TEXT REFERENCES task (id) ON DELETE SET NULL,
+          reason          TEXT,
+          occurrences     INTEGER NOT NULL DEFAULT 1,
+          acknowledged_at TEXT
+        );
+        INSERT INTO job_run_rebuilt
+          SELECT id, job_id, due_at, recorded_at, settled_at, outcome, triggered_by,
+                 task_id, reason, occurrences, acknowledged_at
+          FROM job_run;
+        DROP TABLE job_run;
+        ALTER TABLE job_run_rebuilt RENAME TO job_run;
+        CREATE INDEX job_run_job     ON job_run (job_id, due_at);
+        CREATE INDEX job_run_open    ON job_run (outcome);
+        CREATE INDEX job_run_backlog ON job_run (job_id, outcome, acknowledged_at);
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

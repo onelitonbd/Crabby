@@ -62,6 +62,7 @@ import {
   DEFAULT_RUN_HISTORY,
   estimateFromChars,
   type JobActionCode,
+  type JobActionResult,
   type JobStore,
   type LoopLimits,
   type LoopSubject,
@@ -100,6 +101,7 @@ import {
   JOB_STATES,
   type JobActionBody,
   JobBacklogBody,
+  type JobDeleteBody,
   type JobDetailBody,
   type JobListBody,
   type JobRecord,
@@ -108,6 +110,8 @@ import {
   ListQuery,
   type MessageListBody,
   type ModelOverridesWriteBody,
+  type ModelProbeBody,
+  type ModelProbeRow,
   newId,
   PairCodeRequestBody,
   PairRequestBody,
@@ -172,7 +176,11 @@ import {
   nextOverride,
   type Provider,
   type ProviderComposition,
+  ProviderError,
+  type ProviderRequest,
+  type ProviderToolSpec,
   parseOverride,
+  SUPPORTED_FEATURES,
   selectPinnedModel,
   writeOverrideRecord,
 } from "@crabby/providers";
@@ -440,6 +448,28 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
           // started with may have changed by the time its budget runs out, and a prompt listing models that are no longer
           // configured is a prompt offering an answer that would be refused.
           askCandidates: (current) => composeAskCandidates(composedPool(deps), current),
+          // §14's `tool_invocation` row, written where the database is (D-112's writer, same rule): the loop names the
+          // act and this callback records it. Argument-free on purpose — the model's words are the task journal's
+          // record, and the trail carries the shape of the act, not its contents.
+          auditToolInvocation: (entry) => {
+            recordAudit(deps.db, {
+              ts: new Date().toISOString(),
+              kind: "tool_invocation",
+              outcome: entry.outcome,
+              ...(entry.origin === undefined ? {} : { actor: entry.origin.clientId }),
+              ...(entry.origin === undefined ? {} : { interface: entry.origin.interface }),
+              ...(entry.origin === undefined ? {} : { sessionId: entry.origin.sessionId }),
+              taskId: entry.taskId,
+              ...(entry.correlationId === undefined ? {} : { correlationId: entry.correlationId }),
+              detail: {
+                tool: entry.tool,
+                ...(entry.tier === undefined ? {} : { tier: entry.tier }),
+                ...(entry.code === undefined ? {} : { code: entry.code }),
+                durationMs: entry.durationMs,
+                ...(entry.approvalId === undefined ? {} : { approvalId: entry.approvalId }),
+              },
+            });
+          },
           // D-117's context manager, composed here for the same reason the writer above is: this is where the
           // database is and where the pool lives. The summarizer is D-115's `limits.context.summaryModel`
           // resolved against that pool, or the run's own provider and model when the key is absent — which is
@@ -1553,6 +1583,11 @@ function registerConfigRoutes(app: FastifyInstance, deps: GatewayDeps): void {
   );
 }
 
+/** The wall one probe capability runs against, its own abort per row: a probe that hangs must cost its 20 seconds and
+ *  nothing else, and 20 s is the number `LIMITS.netFetchMs` already prices for one outbound call (D-115) — a probe is
+ *  exactly that, driven from a route instead of from a tool. */
+const PROBE_TIMEOUT_MS = 20_000;
+
 // ------------------------------------------------------------------ models (§4.4, D-045/D-126/D-127)
 
 /** §4.4's two `/models` paths. `GET` answers §3.8's whole subject in one body — the **effective** descriptor the next
@@ -1766,6 +1801,199 @@ function registerModelRoutes(app: FastifyInstance, deps: GatewayDeps): void {
               : "written; the effective descriptor above is what the next start composes.",
       };
       return reply.header("etag", configETag(after.token)).send(body);
+    },
+  );
+
+  // W10-07/C7-09's probe (D-133's fifth gap, on D-125's named placement): one small live call per claimed capability,
+  // and a table that says which claims actually answered. The rows follow SUPPORTED_FEATURES' order — C7-09 asks for
+  // output stable enough to diff — and the statuses are the four the contract names: `pass`/`fail` are this build's own
+  // observation, `unclaimed` is a claim the descriptor does not make (probing a denial would spend a call proving a
+  // negative), and `unprobed` is a claim with no transport here — reported as the claim it is, never folded into a
+  // verdict, because D-133's scope is no live key: a probe that cannot run says so in its row rather than in a 500.
+  app.post<{ Params: { provider: string; model: string } }>(
+    "/api/v1/models/:provider/:model/probe",
+    async (request, reply) => {
+      const providerId = request.params.provider;
+      const modelId = request.params.model;
+      const composed = (deps.providers ?? []).find(
+        (entry): entry is Extract<ProviderComposition, { ok: true }> =>
+          entry.id === providerId && entry.ok,
+      );
+      if (composed === undefined) {
+        const refused = (deps.providers ?? []).find(
+          (entry): entry is Extract<ProviderComposition, { ok: false }> =>
+            entry.id === providerId && !entry.ok,
+        );
+        throw new GatewayError({
+          code: "provider_unknown",
+          message:
+            refused === undefined
+              ? `no composed provider '${providerId}' — GET /api/v1/models prints what this Gateway composed, and a probe probes an adapter, not a configuration entry`
+              : `provider '${providerId}' did not compose, so there is no adapter to probe: ${refused.reason}`,
+          class: "not-found",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      const provider: Provider = composed.provider;
+      const descriptors = await provider.describe();
+      const descriptor: ModelDescriptor | undefined = descriptors[modelId];
+      if (descriptor === undefined)
+        throw new GatewayError({
+          code: "model_unknown",
+          message: `provider '${providerId}' composed no model '${modelId}' — its descriptor set is what GET /api/v1/models already showed, and a probe of an absent model is a probe of nothing`,
+          class: "not-found",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+
+      const startedAt = Date.now();
+      const probedAt = new Date(startedAt).toISOString();
+      // One context per probe, one signal per probe: a capability that hangs must cost its own 20 s, not poison the
+      // table behind it. `taskId` names what it is — a route-driven call, not a run's step.
+      const contextOf = (
+        index: number,
+      ): {
+        signal: AbortSignal;
+        requestId: string;
+        attempt: 1;
+        taskId: string;
+        timeoutMs: number;
+      } => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+        timer.unref?.();
+        return {
+          signal: controller.signal,
+          requestId: `probe_${request.crabbyRequestId ?? startedAt}_${index}`,
+          attempt: 1,
+          taskId: "route-probe",
+          timeoutMs: PROBE_TIMEOUT_MS,
+        };
+      };
+      const message = (role: "system" | "user", content: string) => ({ role, content });
+      const probeTool: ProviderToolSpec = {
+        name: "crabby_probe",
+        description:
+          "A probe offers a tool so the adapter can prove the model may answer with one.",
+        parameters: { type: "object", properties: {}, additionalProperties: true },
+      };
+      /** Runs one probe and answers its row. Throwing is a failure *of the claim*, reported as the class the taxonomy
+       *  named — that is the table's whole point (§3.5's classes, rendered per capability). */
+      const probeRow = async (
+        feature: (typeof SUPPORTED_FEATURES)[number],
+        index: number,
+      ): Promise<ModelProbeRow> => {
+        if (!descriptor.supports[feature])
+          return { capability: feature, claimed: false, status: "unclaimed" };
+        const request: ProviderRequest = {
+          modelId,
+          maxTokens: 32,
+          ...(feature === "systemRole"
+            ? {
+                messages: [
+                  message("system", "You are a probe."),
+                  message("user", "Reply with the single word ok."),
+                ],
+              }
+            : feature === "toolCalling" || feature === "parallelToolCalls"
+              ? {
+                  messages: [message("user", "Call the probe tool if you can; otherwise reply.")],
+                  tools: [probeTool],
+                }
+              : { messages: [message("user", "Reply with the single word ok.")] }),
+        };
+        try {
+          if (feature === "streaming") {
+            let finished = false;
+            for await (const event of provider.stream(request, contextOf(index))) {
+              if (event.type === "done") {
+                finished = true;
+                break;
+              }
+              if (event.type === "error") throw event.error;
+              if (event.type === "cancelled")
+                return {
+                  capability: feature,
+                  claimed: true,
+                  status: "fail",
+                  detail: "the stream ended cancelled before a terminal state",
+                };
+            }
+            if (!finished)
+              return {
+                capability: feature,
+                claimed: true,
+                status: "fail",
+                detail: "the stream closed without a done event (§3.1's terminal-state rule)",
+              };
+            return { capability: feature, claimed: true, status: "pass" };
+          }
+          const result = await provider.generate(request, contextOf(index));
+          return {
+            capability: feature,
+            claimed: true,
+            status: "pass",
+            ...(result.finishReason === undefined
+              ? {}
+              : { detail: `finishReason: ${result.finishReason}` }),
+          };
+        } catch (error) {
+          const errorClass = error instanceof ProviderError ? error.class : "invalid-response";
+          return {
+            capability: feature,
+            claimed: true,
+            status: "fail",
+            errorClass,
+            detail: error instanceof Error ? error.message : String(error),
+          };
+        }
+      };
+
+      // The three capabilities this build can exercise stand for the table's pass/fail columns; the rest are reported as
+      // the claims they are. Inventing transports for image or audio input would be a probe of the *fixture's*
+      // imagination rather than of the endpoint — W10-05's rule, applied to this route.
+      const EXERCISABLE: ReadonlySet<string> = new Set(["systemRole", "streaming", "toolCalling"]);
+      const table: ModelProbeRow[] = [];
+      for (const [index, feature] of SUPPORTED_FEATURES.entries())
+        table.push(
+          EXERCISABLE.has(feature)
+            ? await probeRow(feature, index)
+            : descriptor.supports[feature]
+              ? {
+                  capability: feature,
+                  claimed: true,
+                  status: "unprobed",
+                  detail:
+                    "claimed, and this build has no probe transport for it — the claim stands or falls with the first real request (W10-05's notice names the failure it can produce)",
+                }
+              : { capability: feature, claimed: false, status: "unclaimed" },
+        );
+
+      const passed = table.filter((row) => row.status === "pass").length;
+      const failed = table.filter((row) => row.status === "fail").length;
+      const unprobed = table.filter((row) => row.status === "unprobed").length;
+      deps.log.info("model probe ran", {
+        provider: providerId,
+        model: modelId,
+        passed,
+        failed,
+        unprobed,
+        ...(request.crabbyClient === undefined ? {} : { by: request.crabbyClient.id }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      return reply.send({
+        provider: providerId,
+        model: modelId,
+        probedAt,
+        durationMs: Date.now() - startedAt,
+        table,
+        note:
+          `${passed} claimed ${passed === 1 ? "capability" : "capabilities"} answered, ${failed} failed` +
+          (unprobed === 0
+            ? "."
+            : `, and ${unprobed} ${unprobed === 1 ? "is" : "are"} claimed but unprobed here — the row says what that means`),
+      } satisfies ModelProbeBody);
     },
   );
 }
@@ -3397,6 +3625,95 @@ function registerJobRoutes(
     { schema: { body: JobBacklogBody } },
     withScheduler("backlog"),
   );
+
+  // T17-05/W16-11's delete, and D-133's fourth gap closed. It answers with the scheduler's refusal sentences when one is
+  // owed (in-flight, not-found) and deletes through the store when this process composed no scheduler — a job nobody can
+  // drive still owes its owner a way to remove it, and a delete arms no timer, so the party that must exist for `pause`
+  // is not the party this needs. `?history=delete` is W16-11's "unless asked": the default keeps the run rows, because
+  // work that already happened is D-065's record and a route that erased it by default would be the audit trail
+  // erasing itself from behind a settings screen.
+  app.delete<{ Params: { id: string }; Querystring: Record<string, string> }>(
+    "/api/v1/jobs/:id",
+    async (request, reply) => {
+      const { id } = request.params;
+      const history = request.query.history;
+      if (history !== undefined && history !== "keep" && history !== "delete")
+        throw validationError(
+          [
+            {
+              path: "history",
+              kind: "enum",
+              message: "must be `keep` or `delete` — the default keeps the run history (W16-11)",
+            },
+          ],
+          request.crabbyRequestId,
+        );
+      const withHistory = history === "delete";
+      const result =
+        scheduler === undefined ? forgetDirect(id, withHistory) : scheduler.forget(id, withHistory);
+      if (!result.ok) throw refusal(result, request.crabbyRequestId);
+      const client = request.crabbyClient;
+      // §14's job_delete row: the one write in this file whose *subject* stops existing, which is precisely the row the
+      // trail exists for — an audit log that lost the fact of a deletion to the deletion would not be one.
+      recordAudit(deps.db, {
+        ts: new Date().toISOString(),
+        kind: "job_delete",
+        outcome: "ok",
+        ...(client === undefined ? {} : { actor: client.id }),
+        ...(client === undefined ? {} : { interface: client.interface }),
+        ...(request.crabbyRequestId === undefined
+          ? {}
+          : { correlationId: request.crabbyRequestId }),
+        detail: {
+          jobId: id,
+          jobName: result.job.name,
+          historyKept: !withHistory,
+        },
+      });
+      deps.log.info("job deleted", {
+        job: id,
+        historyKept: !withHistory,
+        ...(client === undefined ? {} : { by: client.id, via: client.interface }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      return reply.send({
+        deleted: id,
+        historyKept: !withHistory,
+        note: result.note,
+      } satisfies JobDeleteBody);
+    },
+  );
+
+  /** The store's own delete, used when this Gateway composed no scheduler: the same precondition the scheduler checks
+   *  (an open run refuses, because evidence outlives the schedule) run against the store this function already holds. */
+  function forgetDirect(id: string, withHistory: boolean): JobActionResult {
+    const job = jobs.get(id);
+    if (job === undefined)
+      return {
+        ok: false,
+        code: "not-found",
+        reason: `no job ${id} — GET /api/v1/jobs prints the ids this Gateway holds`,
+      };
+    const open = jobs.openRuns().find((candidate) => candidate.jobId === id);
+    if (open !== undefined)
+      return {
+        ok: false,
+        code: "in-flight",
+        reason:
+          `a run of this job is still open (task ${open.taskId ?? "unknown"}, ${open.outcome}), and deleting it now ` +
+          "would take the schedule away from work that is still running — let the run settle or cancel it with " +
+          `\`crabby task cancel ${open.taskId ?? "<id>"}\`, then delete the job`,
+      };
+    return jobs.deleteJob(id, withHistory)
+      ? {
+          ok: true,
+          job,
+          note:
+            `deleted. ${withHistory ? "Its run history went with it, because you asked for the history too" : "Its run history stays — work that already happened is D-065's record, and a delete that erased it would be the audit trail erasing itself"}; ` +
+            `the conversation the job ran in (${job.sessionId}) is untouched, and any task a past run created stays where it is`,
+        }
+      : { ok: false, code: "not-found", reason: `no job ${id}` };
+  }
 }
 
 // ------------------------------------------------------------------ approvals (§4.3, SECURITY.md §6.3)

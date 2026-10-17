@@ -73,28 +73,29 @@ export async function runJob(
     return EXIT.usage;
   }
   // C12-06 asks once (latest / each / skip) and records the answer. In a terminal that can prompt, the asking is the
-  // command's; here the flag *is* the asking, and there is deliberately no default, because one of the two answers
-  // fires work and §4.5's sixth rule is that a backlog must not run without the user being told. `each` is not offered:
-  // firing every missed occurrence is the burst the rule exists to prevent, and a user who wants N runs can ask for one
-  // and then N-1 with `job run-now`, which is a person deciding each time.
+  // command's; here the flag *is* the asking, and there is deliberately no default, because two of the three answers
+  // fire work and §4.5's sixth rule is that a backlog must not run without the user being told. `--each` (D-133) is the
+  // walk the *scheduler* now performs: the earliest occurrence fires now and the tick drains the rest one at a time, so
+  // the no-burst rule is the drain's own precondition rather than a person deciding N times.
+  const BACKLOG_ANSWERS = [
+    ["--latest", "latest"],
+    ["--each", "each"],
+    ["--skip", "skip"],
+  ] as const;
+  const chosen = BACKLOG_ANSWERS.filter(([flag]) => tail.booleans.has(flag));
   const action =
-    verb === "backlog"
-      ? tail.booleans.has("--latest") && !tail.booleans.has("--skip")
-        ? "latest"
-        : tail.booleans.has("--skip") && !tail.booleans.has("--latest")
-          ? "skip"
-          : undefined
-      : undefined;
-  if (verb === "backlog" && action === undefined) {
+    verb === "backlog" ? (chosen[0]?.[1] as "latest" | "each" | "skip" | undefined) : undefined;
+  if (verb === "backlog" && (action === undefined || chosen.length > 1)) {
     renderer.line(
       "job backlog",
-      tail.booleans.has("--latest") && tail.booleans.has("--skip")
-        ? "`--latest` and `--skip` are two different answers and cannot both be the one you meant"
-        : "which answer? one of `--latest` or `--skip` is required",
+      chosen.length > 1
+        ? `${chosen.join(" and ")} are different answers and cannot all be the one you meant`
+        : "which answer? one of `--latest`, `--each` or `--skip` is required",
     );
     renderer.fix(
-      "`--latest` fires one run for the most recent missed occurrence and acknowledges the rest; `--skip` acknowledges " +
-        "them and fires nothing. Either way the answer is recorded (§4.5, C12-06)",
+      "`--latest` fires one run for the most recent missed occurrence and acknowledges the rest; `--each` fires the " +
+        "earliest now and the scheduler drains the rest one at a time; `--skip` acknowledges them and fires nothing. " +
+        "Either way the answer is recorded (§4.5, C12-06, D-133)",
     );
     return EXIT.usage;
   }
@@ -137,7 +138,7 @@ export async function runJob(
       if (body.missedUnacknowledged > 0)
         renderer.fix(
           `${body.missedUnacknowledged} missed occurrence(s) nobody has answered for: ` +
-            "`crabby job backlog <id> --latest` or `--skip` (§4.5)",
+            "`crabby job backlog <id> --latest`, `--each` or `--skip` (§4.5, D-133)",
         );
       if (!body.driven) renderer.fix(body.note ?? "this Gateway is not driving these jobs");
       return EXIT.success;
@@ -185,7 +186,8 @@ export async function runJob(
             "occurrence(s) that passed while nothing was watching",
         );
         renderer.fix(
-          "`crabby job backlog <id> --latest` fires the most recent and acknowledges the rest; `--skip` fires nothing",
+          "`crabby job backlog <id> --latest` fires the most recent and acknowledges the rest; `--each` drains them one " +
+            "at a time; `--skip` fires nothing",
         );
       }
       const runs = body.runs.slice(0, SHOW_RUNS);
@@ -267,7 +269,7 @@ export async function runJob(
       renderer.line(
         "backlog",
         `${action}: ${body.acknowledged ?? 0} missed occurrence(s) acknowledged` +
-          `${body.taskId === undefined ? ", nothing fired" : `, one run created as task ${body.taskId}`}`,
+          `${body.taskId === undefined ? ", nothing fired" : action === "each" ? `, the first run created as task ${body.taskId}; the rest follow one at a time` : `, one run created as task ${body.taskId}`}`,
       );
       renderer.line("recorded", body.note);
       if (body.taskId !== undefined)

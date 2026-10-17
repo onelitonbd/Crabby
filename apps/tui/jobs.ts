@@ -193,20 +193,6 @@ export function backlogPromptLines(missed: readonly JobRunRecord[]): readonly st
   ];
 }
 
-/** The `each` answer as a walk: one missed occurrence per decision. This is the mapping T17-07's third answer takes over
- *  a wire that has only `latest | skip` — the CLI's `job backlog` records the same semantics ("a user who wants N runs
- *  can ask for one and then N-1 … a person deciding each time"), and D-103's one-run-at-a-time rule means N runs cannot
- *  open at once anyway. Each `run` is a fresh policy evaluation (`run-now`, §4.5); when the walk ends, the rows are
- *  acknowledged so none of them is dropped silently. */
-export function walkPromptLines(missed: readonly JobRunRecord[], index: number): readonly string[] {
-  const run = missed[index];
-  if (run === undefined) return ["the walk is over — nothing left to decide"];
-  return [
-    `missed occurrence ${index + 1} of ${missed.length} — due ${run.dueAt}${run.reason === undefined ? "" : ` (${run.reason})`}`,
-    "run this one [y] · skip it [n] — one decision at a time, never a burst (D-103)",
-  ];
-}
-
 /** T17-06's edit form, 4–6 lines: the two fields the row names and the re-approval notice. `schedule` is the
  *  non-material half `PATCH /jobs/{id}` carries; `objective` is the material half §4.5 prices as re-approval and
  *  nothing in this build can open one (D-084) — so the form collects both, and the save says which of them can land. */

@@ -300,8 +300,8 @@ describe("upgrading", () => {
       new Date(0).toISOString(),
     );
     assert.deepEqual(migrate(db), {
-      applied: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
-      version: 14,
+      applied: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      version: 15,
     });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,

@@ -262,3 +262,7 @@ Nothing in this file may become a capability the other three interfaces lack, an
 (G6-06, G7-03) are already recorded.
 
 **Open questions:** none that invent a feature. Both inherited unknowns are now decided: pairing UX (O-019) by D-067 and per-tier expiry (O-041) by D-064, so this inventory has no row waiting on a decision.
+
+**On `GET /whoami` (D-133): not carried.** A Telegram chat pairs once and holds one identity for the whole chat, so
+there is no capability line to redraw per message; the route serves the surfaces that hold only a token and render a
+composer beside it.

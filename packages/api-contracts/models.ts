@@ -71,3 +71,29 @@ export interface ModelOverridesWriteBody {
   readonly provenance: unknown;
   readonly note: string;
 }
+
+/** One row of `POST /api/v1/models/{provider}/{model}/probe`'s table (W10-07/C7-09, D-133). The statuses are closed:
+ *  `pass` and `fail` are what this build's own probe observed, `unclaimed` is a capability the descriptor does not claim
+ *  (so there is nothing to probe — probing a denial would spend a call proving a negative), and `unprobed` is a claim
+ *  this build has no transport to exercise — reported as the claim it is, never silently folded into either verdict. */
+export interface ModelProbeRow {
+  readonly capability: string;
+  readonly claimed: boolean;
+  readonly status: "pass" | "fail" | "unprobed" | "unclaimed";
+  /** §3.5's class when a probe failed, so the row names *how* it failed and a retry decision is possible without a
+   *  second call. */
+  readonly errorClass?: string;
+  readonly detail?: string;
+}
+
+/** The probe's answer: stable row order (the descriptor's own feature order), one row per §3.2 capability, and the
+ *  duration beside the timestamp because C7-09 wants output stable enough to diff — and a duration that moved is the
+ *  honest reason two diffs differ. */
+export interface ModelProbeBody {
+  readonly provider: string;
+  readonly model: string;
+  readonly probedAt: string;
+  readonly durationMs: number;
+  readonly table: readonly ModelProbeRow[];
+  readonly note: string;
+}

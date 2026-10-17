@@ -139,6 +139,16 @@ export const COMMANDS: readonly CommandSpec[] = [
     flags: ["--json"],
     status: "ready",
   },
+
+  {
+    // M6's first verb: D-065's backup made concrete. Restore is deliberately not a verb — D-065 keeps it a
+    // documented manual step, and the verb's fix line points at §8 rather than guessing which files to replace.
+    noun: "backup",
+    summary:
+      "online backup (database, config, extensions) into a timestamped directory; secrets excluded, restore is a documented manual step",
+    flags: ["--json"],
+    status: "ready",
+  },
   {
     noun: "tools",
     verb: "ls",

@@ -32,6 +32,7 @@ function isPipeError(error: unknown): boolean {
 
 import { type ApprovalVerb, runApproval } from "./commands/approval.ts";
 import { type AuthVerb, runAuth } from "./commands/auth.ts";
+import { runBackup } from "./commands/backup.ts";
 import { runChat } from "./commands/chat.ts";
 import { type ConfigVerb, runConfig } from "./commands/config.ts";
 import { type ContextVerb, runContext } from "./commands/context.ts";
@@ -230,6 +231,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     case "version": {
       return runVersion(facts, readVersion(rootPackageJson), renderer);
+    }
+    case "backup": {
+      return await runBackup(rest, layout, renderer);
     }
     case "doctor": {
       return runDoctor(

@@ -275,6 +275,29 @@ Defined for release by D-065 (closing O-017); the bullets below are the requirem
 - Portability across supported platforms.
 - Backup retention and whether deleted data can return from an old backup, which must be disclosed to the user.
 
+**Shipped (M6, D-142).** `crabby backup [destination]` writes `crabby-backup-<timestamp>/` under
+`<stateDir>/backups` by default: the database through the driver's online backup API (consistent against a writing
+Gateway, where a raw byte copy is a restore gamble), `config.json`, `extensions/` and `mcp/`, and a
+`manifest.json` that names every included path and every exclusion with its reason. The copy is opened and must
+pass `integrity_check` before the backup exists — a failed copy is deleted, so the directory only ever holds
+verified backups. Secrets are excluded by default: the vault's file and the two bearer-token files (`client.json`,
+`telegram.json`) are never copied; on the restoring device a key arrives by `crabby vault set`, typed by the person
+who will keep it. Nothing prunes `backups/`, and the disclosure this section asks for is printed by the verb:
+**a backup is a moment in time — data deleted after it was taken comes back when it is restored.**
+
+Restoring is a manual step (D-065), and the steps are:
+
+1. Stop the Gateway (Ctrl-C) — nothing should have the database open while files move.
+2. Move the current `crabby.sqlite3` aside — keep it, do not delete it — together with any `crabby.sqlite3-wal` /
+   `-shm` sidecars; a stale sidecar on top of a restored file is corruption.
+3. Copy the backup's `crabby.sqlite3` into `<stateDir>/`, then `config.json` and, if wanted, `extensions/` and
+   `mcp/`.
+4. Start the Gateway: migrations run at open, a copy that does not open is refused with the file named, and the
+   original you moved aside is still there.
+
+Each backup's `manifest.json` records which schema version it carries; a backup restores into the release that
+wrote it or a later one.
+
 ## 9. Open Questions
 
 01. Which database engine and driver are finally selected? (O-001, O-002)

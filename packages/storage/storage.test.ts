@@ -26,6 +26,8 @@ import {
   getTask,
   listIdentities,
   listTasks,
+  MIGRATIONS,
+  type Migration,
   migrate,
   mintPairingCode,
   newPairingCode,
@@ -127,6 +129,46 @@ describe("migrations", () => {
       "one row per migration and never an update to an old one, so a file can say which version it is on",
     );
     close();
+  });
+
+  // D-065's "a failed migration leaves the previous file untouched" (§8's downgrade clause): the transaction
+  // rolls back, the ledger does not record the failed version, and the file answers as the version it was.
+  it("a migration that fails halfway leaves the previous file untouched and the ledger honest", () => {
+    const { db, close } = tempDb();
+    try {
+      const before = schemaVersion(db);
+      const tasksBefore = (db.prepare("SELECT COUNT(*) AS n FROM task").get() as { n: number }).n;
+      const intruder = {
+        version: before + 1,
+        name: "fixture-that-throws",
+        up() {
+          db.exec("CREATE TABLE fixture_partial (id TEXT PRIMARY KEY)");
+          throw new Error("boom — the fixture fails after writing something");
+        },
+      };
+      (MIGRATIONS as unknown as Migration[]).push(intruder);
+      try {
+        assert.throws(() => migrate(db), /boom/);
+        assert.equal(schemaVersion(db), before, "the ledger never recorded the version that failed");
+        assert.equal(
+          (db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'fixture_partial'").get() as { n: number }).n,
+          0,
+          "the failed migration's partial write rolled back with it",
+        );
+        assert.equal(
+          (db.prepare("SELECT COUNT(*) AS n FROM task").get() as { n: number }).n,
+          tasksBefore,
+          "the previous version's tables still answer",
+        );
+      } finally {
+        (MIGRATIONS as unknown as Migration[]).pop();
+      }
+      // And the file carries on: the next migrate is the ordinary idempotent one.
+      const again = migrate(db);
+      assert.equal(again.applied.length, 0);
+    } finally {
+      close();
+    }
   });
 
   it("is idempotent, because every CLI process runs migrate on startup", () => {

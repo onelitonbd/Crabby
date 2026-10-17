@@ -7,6 +7,7 @@
 // project has already decided against.
 export * from "./approvals.ts";
 export * from "./audit.ts";
+export * from "./backup.ts";
 export * from "./checkpoints.ts";
 export * from "./clients.ts";
 export * from "./db.ts";

@@ -336,7 +336,7 @@ pipeable and free of color when not a TTY.
 
 | Area | Commands |
 | --- | --- |
-| Setup | `init`, `doctor` (`--security` prints the plain-language posture summary — M5), `status`, `version` |
+| Setup | `init`, `doctor` (`--security` prints the plain-language posture summary — M5), `status`, `version`, `backup [destination-dir]` — the online backup (database, config, extensions; secrets excluded and named, integrity verified at backup time) whose restore is a documented manual step (D-065/D-142, `docs/DATA_AND_MEMORY.md` §8) |
 | Chat | `chat "…"` (one-shot), `chat --session <id>` |
 | Tasks | `task run "…"`, `task ls`, `task show <id>`, `task watch <id>`, `task cancel <id>`, `task resume <id>` |
 | Approvals | `approval ls`, `approval approve <id>`, `approval deny <id>` |

@@ -52,6 +52,13 @@ shapes. The auth list shows each identity's last-seen time, and `crabby doctor -
 subset with plain-language posture sentences. Full sweep 1486/1486, typecheck, biome, parity (51 routes, 45 tools,
 32 capabilities), docs:check.
 
+**M6 is underway (2026-10-17).** Its first slice shipped `crabby backup` (D-142): the online backup verb with a
+verified copy and a named-exclusions manifest, secrets excluded by default, restore kept a documented manual step
+(`docs/DATA_AND_MEMORY.md` §8 has the four moves), and the migration-failure clause finally a test. What the phase
+still owes: the written install path for Termux/Linux/macOS rehearsed from a clean device, the license audit and
+third-party notices, the changelog and version/`0.x` policy, the README/troubleshooting/limitations release pages —
+and the performance pass, which is a phone measurement the owner's device owes.
+
 | Workstream | State |
 | --- | --- |
 | CLI | **Largely done.** 30 commands live; the registry (`apps/cli/registry.ts`) is the authority on what is `ready`. |
@@ -64,7 +71,7 @@ carrying an accepted limitation — **that half passes** — and one task is sta
 the TUI, cancelled from the CLI — in one demo, documented as the release test. **The demo is the remaining M3 work, and it
 needs a live Telegram token.**
 
-Decisions run to **D-141**; open questions to **O-075**. O-008's gate is final (D-140) — the strategy half is post-v1. `docs/ROADMAP.md` has one paragraph per slice (39–78) — read the
+Decisions run to **D-142**; open questions to **O-075**. O-008's gate is final (D-140) — the strategy half is post-v1. O-008's gate is final (D-140) — the strategy half is post-v1. `docs/ROADMAP.md` has one paragraph per slice (39–79) — read the
 last three to know what just happened and why.
 
 ## 3. The last three slices, and the bugs they found

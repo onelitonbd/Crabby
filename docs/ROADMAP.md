@@ -1664,7 +1664,26 @@ M3 four-interface demo.*
 Exit: every threat row T-01…T-15 has a mitigation and a test; no open security decision is silently resolved by an
 implementer.
 
+**Seventy-ninth slice — `crabby backup`: D-065's backup sentence with files behind it (M6's first slice, D-142).**
+The verb writes one timestamped directory — the database through better-sqlite3's online `db.backup()` (§8's
+"online backup preferred over raw file copy": a byte copy of a WAL database mid-write is a restore gamble),
+`config.json`, `extensions/` with D-039's reports, and `mcp/` — with a `manifest.json` naming every exclusion and
+its reason: the vault's file, `client.json`, `telegram.json` (§8's secrets-excluded default — a key arrives on the
+restoring device by `crabby vault set`, from the person who types it), runtime state, scratch, and `backups/`
+itself. §8's "restore validation" runs where it can be automated — the copy must pass `integrity_check` or it is
+deleted, so `backups/` only holds complete answers — while restore stays what D-065 made it, a documented manual
+step whose four moves now live in `docs/DATA_AND_MEMORY.md` §8. Retention is the user's, and the verb prints the
+disclosure: data deleted after a backup was taken returns when it is restored. No route, on purpose — a backup
+writes local files, the same class of local-only act as `init` and `vault set`. The §8 migration-failure clause
+("a failed migration leaves the previous file untouched") gained the test it never had: a throwing migration rolls
+back, the ledger stays honest, the file still answers as the version it was. Gates: backup 4/4, storage 29/29,
+cli 56/56, full sweep, typecheck, biome, parity, docs:check.
+
 ## 8. Phase M6 — Release readiness
+
+*Underway (2026-10-17): the backup/restore mechanics are shipped (D-142, slice 79); the install docs, license
+audit, notices, changelog and the release page remain. The performance pass is a phone measurement the owner's
+device owes, like the M3 demo.*
 
 - Install path for Termux, Linux, macOS written and rehearsed from a clean device; O-012 closed (install, update,
   rollback, backup, recovery).

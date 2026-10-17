@@ -469,6 +469,32 @@ function doctorSecurity(state: string): { code: number | null; payload: DoctorPa
   return { code: run.code, payload: JSON.parse(run.out) as DoctorPayload };
 }
 
+test("`crabby backup` makes a verified timestamped copy under the state dir, and names its exclusions (D-065, §8)", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  crabby(["init"], state);
+  const run = crabby(["backup", "--json"], state);
+  assert.equal(run.code, 0, run.out + run.err);
+  const doc = JSON.parse(run.out) as {
+    dir: string;
+    integrity: string;
+    included: string[];
+    excluded: { name: string }[];
+  };
+  assert.equal(doc.integrity, "ok");
+  assert.ok(doc.included.includes("crabby.sqlite3"));
+  assert.ok(doc.dir.startsWith(state), "the default destination is inside the state dir");
+  assert.ok(existsSync(path.join(doc.dir, "manifest.json")), "the manifest rides with the copy");
+  assert.ok(!existsSync(path.join(doc.dir, "vault")), "secrets are excluded by default (§8)");
+  const names = doc.excluded.map((entry) => entry.name);
+  assert.ok(names.includes("vault/"), "the vault exclusion is named in the answer");
+  // A second run makes its own directory rather than overwriting the first.
+  const second = crabby(["backup", "--json"], state);
+  assert.equal(second.code, 0);
+  const doc2 = JSON.parse(second.out) as { dir: string };
+  assert.notEqual(doc.dir, doc2.dir);
+});
+
 test("`doctor --security` prints the security subset with a plain-language posture, and omits the rest", () => {
   const root = tempDir();
   const state = path.join(root, ".crabby");

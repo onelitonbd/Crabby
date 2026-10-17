@@ -372,3 +372,12 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - `termux-keystore` probe — O-018-এর মালিক-ডিভাইস মাপা (vault চলবে কি keychain-এ, নাকি ফাইলে)।
 
 **Post-v1 (কিছুই ব্লক করে না):** O-008-এর strategy half (candidate implementation হলে D-140-র corpus পয়েন্ট করা), O-065 (Termux sandbox মাপা), O-052 (remembered approvals), O-064 (signing), O-001-র এক ক্লজ (clean-env better-sqlite3 reproduction)।
+## Slice 14 — M6 slice-1: `crabby backup` (D-142) — 2026-10-17
+
+- **নতুন verb:** `crabby backup [destination]` — online `db.backup()` + config.json + extensions/ + mcp/ →
+  timestamped dir + manifest.json (অন্তর্ভুক্ত/বাদ-তালিকা কারণসহ); copy-র `integrity_check` backup-সময়েই, ফেল হলে
+  dir মুছে যায়।
+- **বাদ (§8-র ডিফল্ট):** vault/, client.json, telegram.json (সিক্রেট/বেয়ারার), gateway.json, last-exit.json,
+  scratch/, backups/ — সব manifest-এ নাম-কারণসহ।
+- **Restore manual (D-065):** DATA_AND_MEMORY §8-এ ৪ ধাপ (sidecar-সতর্কতাসহ); verb-এর fix line সেখাই পয়েন্ট করে।
+- **migration-fail টেস্ট** storage.test.ts-এ — rollback + ledger-সততা + আগের সংস্করণ অক্ষত (D-065-র ক্লজ, এখন টেস্ট)।

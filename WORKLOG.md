@@ -354,3 +354,21 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - **ডক:** SECURITY §17/§18(03·06·08)/§19(O-009·O-018·O-019 বন্ধ হিসেবে স্বীকৃত)/§20 (টেস্ট-কলামসহ T-map);
   EXTENSIONS §15; PROVIDERS §4.5; DECISIONS (D-140, D-141, O-008, D-078-এর ষষ্ঠ নাম `telegram.json`); HANDOVER
   (M5-complete, D-141 পর্যন্ত counts); ROADMAP ৭৮তম slice + §7 complete।
+
+## বাকি-হিসাব — M5 শেষে (2026-10-17) — Telegram লগবুকের WORKLOG-mirror
+
+*টোকেন নেই, তাই নিয়ম ৭ অনুযায়ী এখানেই মিরর। টোকেন এলে এই ব্লকটাই টেলিগ্রামে যাবে।*
+
+**M5 সম্পূর্ণ ✅** — ৪টি slice, ৪টি push:
+1. `fd9f9d4` — vault (D-139): scrypt/GCM ফাইল-স্টোর, set/unlock/lock, hot re-compose, `vault://` (F-56)।
+2. `615156a` — Quick Tunnel (§13): confirm-gated route, `tunnel_active` 409, URL প্রতি স্টার্টে, `crabby tunnel on/off/status`।
+3. `1313459` — `auth list` last-seen + `doctor --security` posture (plain-language, human+JSON দুই চ্যানেলে)।
+4. `9f4e6a8` — D-140 (O-008-এর গেট চূড়ান্ত) + §17-র injection corpus (৪ fixture) + D-141 (§4.5 রিড-থ্রু) + ডক ক্যাচ-আপ (§18/§19/§20, D-078-এর ষষ্ঠ নাম, HANDOVER)।
+
+**গেট:** sweep 1486/1486 · tsc ✓ · biome 0 · parity 51 routes/45 tools/32 capabilities · docs:check ✓ (141 accepted · 11 proposed · 75 open)।
+
+**মালিকের হাতে যা বাকি:**
+- `TG_BOT_TOKEN=… npm run telegram:check` — মালিক-ডিভাইসে; এরপর M3-র চার-ইন্টারফেস ডেমো (Telegram→Web→TUI→CLI)।
+- `termux-keystore` probe — O-018-এর মালিক-ডিভাইস মাপা (vault চলবে কি keychain-এ, নাকি ফাইলে)।
+
+**Post-v1 (কিছুই ব্লক করে না):** O-008-এর strategy half (candidate implementation হলে D-140-র corpus পয়েন্ট করা), O-065 (Termux sandbox মাপা), O-052 (remembered approvals), O-064 (signing), O-001-র এক ক্লজ (clean-env better-sqlite3 reproduction)।

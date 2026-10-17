@@ -121,40 +121,42 @@ async function boot(options: BootOptions): Promise<Harness> {
     // real install hands `buildApp` both. This harness drives with the fake — D-081's conformance reference, not a
     // stub — while reporting one configured local endpoint. Without the pair the row would answer `absent` in a Gateway
     // that is plainly driving tasks, and the note's driven branch would be the one no test reads.
-    providers: composeWithSecond(
-      composeProviders({
-        local: {
-          baseUrl: "http://127.0.0.1:8080/v1",
-          // A whole descriptor, because §3.2's capability questions are answered from it and the adapter refuses one it
-          // cannot parse: `contextWindow` is required, and an entry that declares no models is refused for the reason
-          // `compose.ts` gives. The shape is the one `tests/integration/gateway.test.ts` composes, so the two harnesses
-          // report the same subsystem from the same kind of configuration.
-          models: {
-            "qwen2.5:3b": {
-              contextWindow: 4096,
-              maxOutputTokens: 512,
-              supports: {
-                streaming: true,
-                toolCalling: true,
-                parallelToolCalls: false,
-                systemRole: true,
-                structuredOutput: false,
-                imageInput: false,
-                audioInput: false,
-                reasoning: false,
-                promptCaching: false,
-                jsonSchemaValidation: false,
+    providers: [
+      ...composeWithSecond(
+        composeProviders({
+          local: {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            // A whole descriptor, because §3.2's capability questions are answered from it and the adapter refuses one it
+            // cannot parse: `contextWindow` is required, and an entry that declares no models is refused for the reason
+            // `compose.ts` gives. The shape is the one `tests/integration/gateway.test.ts` composes, so the two harnesses
+            // report the same subsystem from the same kind of configuration.
+            models: {
+              "qwen2.5:3b": {
+                contextWindow: 4096,
+                maxOutputTokens: 512,
+                supports: {
+                  streaming: true,
+                  toolCalling: true,
+                  parallelToolCalls: false,
+                  systemRole: true,
+                  structuredOutput: false,
+                  imageInput: false,
+                  audioInput: false,
+                  reasoning: false,
+                  promptCaching: false,
+                  jsonSchemaValidation: false,
+                },
+                cancellation: "best-effort",
+                rateLimits: null,
+                cost: "local",
+                batching: null,
               },
-              cancellation: "best-effort",
-              rateLimits: null,
-              cost: "local",
-              batching: null,
             },
           },
-        },
-      }),
-      options.secondRounds,
-    ),
+        }),
+        options.secondRounds,
+      ),
+    ],
     log: createLogger({ level: "error", write: () => {} }, "tasks-test"),
     version: "test",
     startedAt: new Date(),

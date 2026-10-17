@@ -56,7 +56,11 @@ function tempDb(): { db: SqliteDb; dir: string; close(): void } {
   return { db: handle.db, dir, close: handle.close };
 }
 
-function event(taskId: string, sessionId: string, payload: Record<string, unknown> = {}): Event {
+function event(
+  taskId: string,
+  sessionId: string,
+  payload: Record<string, unknown> = {},
+): Event & { taskId: string; sessionId: string } {
   return {
     id: newId("evt"),
     schemaVersion: SCHEMA_VERSION,

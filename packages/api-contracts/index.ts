@@ -22,3 +22,4 @@ export * from "./session.ts";
 export * from "./task.ts";
 export * from "./tools.ts";
 export * from "./validate.ts";
+export * from "./vault.ts";

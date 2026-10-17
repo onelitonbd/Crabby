@@ -1,0 +1,14 @@
+{
+  "name": "@crabby/vault",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SECURITY.md §7's secrets store (D-031): the OS keychain where the platform has one (macOS Keychain, Linux Secret Service), the passphrase-encrypted file everywhere else (D-066's scrypt floor), and the lock state both report",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@crabby/platform": "0.0.0"
+  }
+}

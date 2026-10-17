@@ -565,6 +565,37 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+
+  // M5's vault transitions (§3.7, D-139) join the trail: SQLite cannot ALTER a CHECK, so the same rebuild v15
+  // taught — copy the rows, drop, rename. The kind list grows by one word and nothing else moves.
+  {
+    version: 16,
+    name: "audit-kind-vault",
+    up(db) {
+      db.exec(`
+        CREATE TABLE audit_log_rebuilt (
+          id             TEXT PRIMARY KEY,
+          ts             TEXT NOT NULL,
+          kind           TEXT NOT NULL CHECK (kind IN
+                         ('auth_attempt', 'approval', 'config_change', 'tool_invocation', 'extension_install', 'tunnel', 'job_delete', 'vault')),
+          actor          TEXT,
+          interface      TEXT,
+          session_id     TEXT,
+          task_id        TEXT,
+          correlation_id TEXT,
+          outcome        TEXT NOT NULL CHECK (outcome IN ('ok', 'rejected', 'error')),
+          detail         TEXT
+        );
+        INSERT INTO audit_log_rebuilt
+          SELECT id, ts, kind, actor, interface, session_id, task_id, correlation_id, outcome, detail
+          FROM audit_log;
+        DROP TABLE audit_log;
+        ALTER TABLE audit_log_rebuilt RENAME TO audit_log;
+        CREATE INDEX audit_kind ON audit_log (kind, ts);
+        CREATE INDEX audit_task ON audit_log (task_id, ts);
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

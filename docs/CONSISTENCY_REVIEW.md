@@ -1304,6 +1304,14 @@ rows carrying their five pending fields. Three things belong beside the number:
 
 ### F-56 — §3.7 gives an adapter a vault handle, and nothing in the build resolves one
 
+**Severity: medium — answered (D-139, M5's seventy-fifth slice): the vault is the subsystem, and the resolver exists.**
+`packages/vault` implements D-031's two back ends behind one facade (keychain where the platform has one, the scrypt
+envelope D-066 pinned everywhere else), `composeProviders` takes the vault's resolver and composes a keyed entry when
+it can name the value — refusing with the vault's own state when it cannot — and the Gateway re-composes in place on
+unlock (D-139 records the one honest limit: composition is hot, the runner is not). `crabby vault set <name>` is the
+write path, and `vault://name` in a provider entry now composes instead of refusing. The original finding's text follows,
+kept because the refusal sentence it describes was the right answer for the two milestones in between:
+
 **Severity: medium, open, and the same shape as F-52.** §3.7 is specific: provider credentials "are supplied once, stored
 in the vault, and referenced by name in configuration — `provider.groq.key = vault://groq`", and "adapters receive a
 handle that yields the value at call time; the agent never reads it, and it never enters model context". `SECURITY.md` §7

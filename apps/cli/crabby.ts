@@ -50,6 +50,7 @@ import { runTask, type TaskVerb } from "./commands/task.ts";
 import { runTelegramStart } from "./commands/telegram.ts";
 import { runTools } from "./commands/tools.ts";
 import { runTuiCommand } from "./commands/tui.ts";
+import { runVault } from "./commands/vault.ts";
 import { readVersion, runVersion } from "./commands/version.ts";
 import { runWebOpen } from "./commands/web.ts";
 import { commandName, findCommand, helpText, suggest } from "./registry.ts";
@@ -318,6 +319,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       // C-E13: the servers file is the MCP verbs' own state (D-137), read and written here like the extensions
       // repo is — no Gateway round trip, because no route answers for this file.
       return runMcp(verb, rest, layout, renderer);
+    }
+    case "vault": {
+      // M5's secrets verbs: the store is opened per command (a process that kept the key would be a second
+      // lock state to explain), and unlock/lock target the running Gateway's session, not this one.
+      return await runVault(verb ?? "", rest, layout, renderer);
     }
     case "ext": {
       // Region C-E: the extensions repo lives in the state dir, so `--data-dir` is the one fact these verbs need

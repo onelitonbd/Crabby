@@ -101,7 +101,7 @@ test("compose: no provider entry is not an error, it is an install that has not 
   assert.deepEqual(composed({}), []);
 });
 
-test("compose: a `vault://` key is refused, because nothing in this build resolves one (F-56)", () => {
+test("compose: a view resolves no references, and a handed resolver decides the keyed entry (F-56 closed)", () => {
   const [result] = composed({
     groq: entry({ baseUrl: "https://api.groq.com/openai/v1", key: "vault://groq" }),
   });
@@ -110,14 +110,30 @@ test("compose: a `vault://` key is refused, because nothing in this build resolv
   assert.match(result.reason, /vault/, result.reason);
   assert.match(
     result.reason,
-    /M5/,
-    "the reason names the milestone that closes it, not just the gap",
+    /vault status/,
+    "the refusal names where the state question is answered, not a milestone — the vault exists now",
   );
-  assert.match(
-    result.reason,
-    /F-56/,
-    "and the finding that records it, so a reader can follow the sentence",
+  // A resolver present and answering: the keyed entry composes with the value, and the value appears in
+  // neither the composition result nor any refusal.
+  const [resolved] = composeProviders(
+    { groq: entry({ baseUrl: "https://api.groq.com/openai/v1", key: "vault://groq" }) },
+    undefined,
+    (reference) => {
+      assert.equal(reference, "vault://groq", "the resolver sees the reference, not the field");
+      return { ok: true, secret: "gsk_resolved_secret" };
+    },
   );
+  assert.equal(resolved?.ok, true, "the resolver's yes composes the entry");
+  // A resolver present and refusing: the refusal is the resolver's own reason, so the vault state — locked,
+  // missing name — is what the user reads, not a composition opinion about it.
+  const [locked] = composeProviders(
+    { groq: entry({ baseUrl: "https://api.groq.com/openai/v1", key: "vault://groq" }) },
+    undefined,
+    () => ({ ok: false, reason: "the vault is locked" }),
+  );
+  assert.equal(locked?.ok, false);
+  if (locked?.ok) return;
+  assert.match(locked.reason, /the vault is locked/, locked.reason);
 });
 
 test("compose: a key that is not a `vault://` name is refused without being printed (§7)", () => {

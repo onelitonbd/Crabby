@@ -24,6 +24,7 @@ import {
   STATE_DIR_NAME,
 } from "@crabby/platform";
 import { composeProviders, type ProviderComposition, selectDefaultModel } from "@crabby/providers";
+import { openVault } from "@crabby/vault";
 import type { Renderer } from "../output.ts";
 import { WORKSPACE_ROOT_NAME } from "./init.ts";
 
@@ -466,29 +467,45 @@ function workspaceCheck(input: DoctorInput): Check {
 }
 
 function vaultCheck(input: DoctorInput): Check {
-  if (!existsSync(input.layout.vaultDir)) {
+  // The store's own answer, not the directory's: which back end this device got (D-031's platform table),
+  // which state it is in, and — when the file store is the one it has — the weaker-protection sentence §7
+  // requires every message that references the fallback to carry.
+  const vault = openVault({ vaultDir: input.layout.vaultDir, platform: input.facts.platform });
+  const status = vault.status();
+  if (existsSync(input.layout.vaultDir)) {
+    const mode = statSync(input.layout.vaultDir).mode & 0o777;
+    if ((mode & 0o077) !== 0) {
+      return {
+        id: "vault",
+        status: "fail",
+        summary: `${input.layout.vaultDir} is readable beyond its owner (mode ${mode.toString(8)})`,
+        fix: `chmod 700 ${input.layout.vaultDir}`,
+      };
+    }
+  }
+  if (status.state === "unset") {
     return {
       id: "vault",
       status: "warn",
-      summary: `${input.layout.vaultDir} does not exist yet`,
+      summary: `no vault yet (${status.kind} store)`,
       detail: "secrets live here and nowhere else (D-031, D-066)",
-      fix: "crabby init creates the directory; `crabby auth` fills it in M1b",
+      fix: "`crabby vault set <name>` creates it — a provider entry whose key is a vault:// reference composes once the name exists and the store is unlocked",
     };
   }
-  const mode = statSync(input.layout.vaultDir).mode & 0o777;
-  if ((mode & 0o077) !== 0) {
+  if (status.state === "locked") {
     return {
       id: "vault",
-      status: "fail",
-      summary: `${input.layout.vaultDir} is readable beyond its owner (mode ${mode.toString(8)})`,
-      fix: `chmod 700 ${input.layout.vaultDir}`,
+      status: "warn",
+      summary: `locked (${status.kind} store)`,
+      ...(status.note === undefined ? {} : { detail: status.note }),
+      fix: "`crabby vault unlock` opens the running Gateway's session; keyed providers compose again with it",
     };
   }
   return {
     id: "vault",
     status: "ok",
-    summary: input.layout.vaultDir,
-    detail: "mode 700 or tighter",
+    summary: `${status.kind} store, unlocked${status.entries === undefined ? "" : `, ${String(status.entries)} entr${status.entries === 1 ? "y" : "ies"}`}`,
+    ...(status.note === undefined ? {} : { detail: status.note }),
   };
 }
 

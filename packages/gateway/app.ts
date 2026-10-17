@@ -144,6 +144,11 @@ import {
   TaskId,
   type TaskRecord,
   type TaskState,
+  type VaultLockAnswerT,
+  type VaultStatusBodyT,
+  type VaultUnlockAnswerT,
+  VaultUnlockBody,
+  type VaultUnlockBodyT,
   validate,
 } from "@crabby/api-contracts";
 import {
@@ -251,6 +256,7 @@ import {
   trustWord,
   unpinMessage,
 } from "@crabby/storage";
+import type { Vault, VaultStatus } from "@crabby/vault";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { createEventBus } from "./bus.ts";
 import {
@@ -314,7 +320,20 @@ export interface GatewayDeps {
    *  than read here for the reason `platformFacts` is injected: this file has no opinion about where configuration comes
    *  from, and a Gateway that loaded its own could not be tested against a second configuration. Refusals travel with the
    *  list, because `GET /api/v1/status` owes a caller the reason an entry did not compose and not only its absence. */
-  readonly providers?: readonly ProviderComposition[] | undefined;
+  /** Mutable in contents, fixed in identity: the composition root hands one array and D-139's hot re-compose
+   *  swaps its contents in place, so every route holding `deps` sees the fresh list without re-registration. */
+  readonly providers?: ProviderComposition[] | undefined;
+  /** §7's store, when the composition root opened one. Present means `/health` reports `managed: true`, the
+   *  status row answers the real state, and the unlock/lock routes act — absent means this Gateway carries no
+   *  vault at all, and the rows say that rather than implying a protection that does not exist. */
+  readonly vault?: Vault | undefined;
+  /** D-139's hot half of unlock: re-run the composition root's provider pass with the vault's resolver and
+   *  swap `providers` in place, so `/status`, `/models` and the probe see the unlocked keys without a restart.
+   *  The runner is deliberately *not* rebuilt — it keeps the composition it started with, and the unlock
+   *  answer says so instead of implying the task surface came back with the keys. */
+  readonly recomposeProviders?:
+    | (() => { composed: number; refused: readonly { id: string; reason: string }[] })
+    | undefined;
   /** The composed executor's half of §4.1's record, so `GET /api/v1/tools` can answer the five fields
    *  `PENDING_RECORD_FIELDS` names from the party that executes them instead of printing them as pending (F-55). Handed
    *  in for the reason `providers` is: `packages/gateway` has no dependency on `packages/tools` and should not grow one,
@@ -721,6 +740,19 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   registerConfigRoutes(app, deps);
   registerModelRoutes(app, deps);
   registerMemoryRoutes(app, deps, memoryStore);
+  registerVaultRoutes(app, deps, (name) => {
+    // §3.6's system family: the lock transitions are events every interface knows how to carry, and a screen
+    // that was showing "locked" learns "unlocked" without a poll. Not journaled — the status routes are the
+    // replayable truth, and a reconnect learns the state from `GET /vault`, not from a stale frame.
+    bus.publish({
+      id: newId("evt"),
+      schemaVersion: SCHEMA_VERSION,
+      type: `system.${name}`,
+      ts: new Date().toISOString(),
+      seq: 0,
+      payload: {},
+    });
+  });
   registerExtensionRoutes(app, deps);
   registerAuthRoutes(app, deps, bus);
   registerTaskRoutes(app, deps, bus, checkpoints, cancellation, approvals, runner);
@@ -1170,7 +1202,9 @@ function recordAndDriveTask(
   // `appendEvent` advances `task.last_seq` itself, so nothing here duplicates that bookkeeping: two writers of one
   // counter is how a counter starts lying.
   const appended = appendEvent(deps.db, {
-    event,
+    // Task-scoped by construction: the fields are the created row's own ids, and the narrowed parameter type
+    // (the journal's table needs them) is the type system learning what this site already knew.
+    event: event as typeof event & { taskId: string; sessionId: string },
     scratchDir: taskScratch(deps.layout, created.id),
   });
   bus.publish({ ...event, seq: appended.seq });
@@ -1248,9 +1282,10 @@ function registerSystemRoutes(
       version: deps.version,
       uptimeMs: Math.max(0, Math.round(Date.now() - deps.startedAt.getTime())),
       listener: { mode: deps.listenerMode, host: listener.host, port: listener.port },
-      // Reported as unmanaged rather than unlocked: this build has no vault code, and `locked: false` would claim a
-      // protection that does not exist yet.
-      vault: { managed: false },
+      // §7's "lock state is visible" on the liveness row: managed when a store was opened, with its state;
+      // `managed: false` is the honest answer for a Gateway composed without a vault, and `locked: false` would
+      // claim a protection that does not exist.
+      vault: vaultHealth(deps.vault),
       storage: { schemaVersion: schemaVersion(deps.db) },
     });
   });
@@ -1268,8 +1303,12 @@ function registerSystemRoutes(
             }
           : { state: "ready" as const },
       providers: providersRow(deps.providers, runner !== undefined),
-      extensions: { state: "absent", reason: "arrives with M-Extensions" },
-      tunnel: { state: "absent", reason: "arrives with the tunnel slice" },
+      extensions: extensionsRow(deps.layout.stateDir),
+      tunnel: {
+        state: "absent",
+        reason: "no tunnel in this process — POST /api/v1/tunnel starts one (§13)",
+      },
+      vault: vaultRow(deps.vault),
     } as const;
     return reply.send({
       ready: Object.values(subsystems).every((row) => row.state === "ready"),
@@ -2212,6 +2251,220 @@ function registerModelRoutes(app: FastifyInstance, deps: GatewayDeps): void {
  *
  *  **No memory *content* reaches the log** (§12): the lines carry ids, counts and lengths — the audit question is
  *  "who forgot which entry", never "what did it say". */
+/** §7's lock state on the liveness row — a shape, not a string, so an interface can colour it without parsing. */
+function vaultHealth(vault: Vault | undefined): {
+  managed: boolean;
+  kind?: VaultStatus["kind"];
+  state?: VaultStatus["state"];
+  note?: string;
+} {
+  if (vault === undefined) return { managed: false };
+  const status = vault.status();
+  return {
+    managed: true,
+    kind: status.kind,
+    state: status.state,
+    ...(status.note === undefined ? {} : { note: status.note }),
+  };
+}
+
+/** The status row's answer. `ready` is an unlocked store; a locked or unset one answers with the state as its
+ *  own word, because D-031's "reported clearly" is about naming which of the three the caller is in. */
+function vaultRow(vault: Vault | undefined): { state: string; reason?: string } {
+  if (vault === undefined) {
+    return {
+      state: "absent",
+      reason: "no vault in this process — secrets answer from configuration only",
+    };
+  }
+  const status = vault.status();
+  if (status.state === "unlocked") return { state: "ready" };
+  return {
+    state: status.state,
+    reason:
+      status.state === "locked"
+        ? "the vault is locked: keyed providers compose again after POST /api/v1/vault/unlock, and a restart arms the runner with them"
+        : "no vault exists yet: `crabby vault set <name>` creates one, and keyed providers compose once it holds the referenced name",
+  };
+}
+
+/** The extensions row, answered from the store on disk rather than from a milestone sentence — M4 built the
+ *  repo, and a status that still said "arrives with M-Extensions" would be a status lying about the past. */
+function extensionsRow(stateDir: string): { state: string; reason?: string } {
+  const root = join(stateDir, "extensions");
+  if (!existsSync(root)) {
+    return {
+      state: "absent",
+      reason: "no extension repo yet — `crabby ext init` scaffolds the first pack",
+    };
+  }
+  const installed = extList(root, undefined).installed.length;
+  return installed === 0
+    ? {
+        state: "absent",
+        reason: "the repo exists and holds no pack — `crabby ext install <path>` adds one",
+      }
+    : { state: "ready" };
+}
+
+/** §3.7's vault routes: the status read, and the two state changes. The passphrase rides the body once and is
+ *  written nowhere — not the trail (the audit row records the attempt and its outcome, never the credential),
+ *  not a log line, not an event. Unlock re-composes the provider list in place (D-139); the answer carries the
+ *  per-entry decisions, because "reported clearly on all four interfaces" starts with the interface that did
+ *  the unlocking knowing what changed and why the rest still waits. */
+function registerVaultRoutes(
+  app: FastifyInstance,
+  deps: GatewayDeps,
+  publishSystem: (name: "vault.locked" | "vault.unlocked") => void,
+): void {
+  app.get("/api/v1/vault", async (_request, reply) => {
+    if (deps.vault === undefined) {
+      throw notFound("vault", _request.crabbyRequestId);
+    }
+    const status = deps.vault.status();
+    const body: VaultStatusBodyT = {
+      kind: status.kind,
+      state: status.state,
+      ...(status.entries === undefined ? {} : { entries: status.entries }),
+      ...(status.names === undefined ? {} : { names: [...status.names] }),
+      ...(status.note === undefined ? {} : { note: status.note }),
+    };
+    return reply.send(body);
+  });
+
+  app.post<{ Body: VaultUnlockBodyT }>(
+    "/api/v1/vault/unlock",
+    { schema: { body: VaultUnlockBody } },
+    async (request, reply) => {
+      if (deps.vault === undefined) throw notFound("vault", request.crabbyRequestId);
+      if (deps.vault.status().state === "unset") {
+        // Creating a vault from an HTTP body would make the Gateway the one that picked the passphrase — §7
+        // puts the create with the human who will type it, and the CLI's `vault set` is that act.
+        recordAudit(deps.db, {
+          ts: new Date().toISOString(),
+          kind: "vault",
+          outcome: "rejected",
+          ...(request.crabbyClient === undefined ? {} : { actor: request.crabbyClient.id }),
+          ...(request.crabbyClient === undefined
+            ? {}
+            : { interface: request.crabbyClient.interface }),
+          ...(request.crabbyRequestId === undefined
+            ? {}
+            : { correlationId: request.crabbyRequestId }),
+          detail: { action: "unlock", reason: "no vault exists yet" },
+        });
+        throw new GatewayError({
+          code: "vault_unset",
+          message:
+            "no vault exists yet — `crabby vault set <name>` creates one and asks for the passphrase; a " +
+            "passphrase that arrived over a route would have been chosen by the process, not the person",
+          class: "conflict",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      const unlocked = deps.vault.unlock(request.body.passphrase);
+      if (!unlocked.ok) {
+        // §14 keeps the attempt and its outcome; the body it tried is not the trail's business.
+        recordAudit(deps.db, {
+          ts: new Date().toISOString(),
+          kind: "vault",
+          outcome: "rejected",
+          ...(request.crabbyClient === undefined ? {} : { actor: request.crabbyClient.id }),
+          ...(request.crabbyClient === undefined
+            ? {}
+            : { interface: request.crabbyClient.interface }),
+          ...(request.crabbyRequestId === undefined
+            ? {}
+            : { correlationId: request.crabbyRequestId }),
+          detail: { action: "unlock", reason: "the passphrase did not open the vault" },
+        });
+        throw new GatewayError({
+          code: "vault_unlock_failed",
+          message: unlocked.reason,
+          class: "auth",
+          retryable: true,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      const recomposed = deps.recomposeProviders?.() ?? {
+        composed: 0,
+        refused: [] as { id: string; reason: string }[],
+      };
+      const note = [
+        ...(deps.vault.kind === "file" ? [FILE_DISCLOSURE_LINE] : []),
+        ...(deps.recomposeProviders === undefined
+          ? []
+          : [
+              "composition is hot, the runner is not: tasks already running keep the providers they started " +
+                "with, and a Gateway that started locked has no runner until `crabby gateway restart` arms one",
+            ]),
+      ];
+      recordAudit(deps.db, {
+        ts: new Date().toISOString(),
+        kind: "vault",
+        outcome: "ok",
+        ...(request.crabbyClient === undefined ? {} : { actor: request.crabbyClient.id }),
+        ...(request.crabbyClient === undefined
+          ? {}
+          : { interface: request.crabbyClient.interface }),
+        ...(request.crabbyRequestId === undefined
+          ? {}
+          : { correlationId: request.crabbyRequestId }),
+        detail: {
+          action: "unlock",
+          composed: recomposed.composed,
+          refused: recomposed.refused.length,
+        },
+      });
+      deps.log.info("vault unlocked", {
+        ...(request.crabbyClient === undefined ? {} : { by: request.crabbyClient.id }),
+        composed: recomposed.composed,
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      publishSystem("vault.unlocked");
+      const body: VaultUnlockAnswerT = {
+        state: "unlocked",
+        providers: { composed: recomposed.composed, refused: [...recomposed.refused] },
+        ...(note.length === 0 ? {} : { note: note.join(" ") }),
+      };
+      return reply.send(body);
+    },
+  );
+
+  app.post("/api/v1/vault/lock", async (request, reply) => {
+    if (deps.vault === undefined) throw notFound("vault", request.crabbyRequestId);
+    deps.vault.lock();
+    const recomposed = deps.recomposeProviders?.() ?? {
+      composed: 0,
+      refused: [] as { id: string; reason: string }[],
+    };
+    recordAudit(deps.db, {
+      ts: new Date().toISOString(),
+      kind: "vault",
+      outcome: "ok",
+      ...(request.crabbyClient === undefined ? {} : { actor: request.crabbyClient.id }),
+      ...(request.crabbyClient === undefined ? {} : { interface: request.crabbyClient.interface }),
+      ...(request.crabbyRequestId === undefined ? {} : { correlationId: request.crabbyRequestId }),
+      detail: { action: "lock" },
+    });
+    deps.log.info("vault locked", {
+      ...(request.crabbyClient === undefined ? {} : { by: request.crabbyClient.id }),
+      ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+    });
+    publishSystem("vault.locked");
+    const body: VaultLockAnswerT = {
+      state: "locked",
+      providers: { composed: recomposed.composed, refused: [...recomposed.refused] },
+    };
+    return reply.send(body);
+  });
+}
+
+const FILE_DISCLOSURE_LINE =
+  "the encrypted file protects against casual disclosure, not against someone who already controls this user " +
+  "account (SECURITY.md §15)";
+
 function registerMemoryRoutes(app: FastifyInstance, deps: GatewayDeps, memory: MemoryStore): void {
   const MEMORY_STATUSES = ["active", "superseded", "needs-review", "pending"] as const;
 
@@ -2976,7 +3229,7 @@ function sweepApprovals(
         },
       };
       const appended = appendEvent(deps.db, {
-        event,
+        event: event as typeof event & { taskId: string; sessionId: string },
         scratchDir: taskScratch(deps.layout, task.id),
       });
       events.push({ ...event, seq: appended.seq });
@@ -4048,7 +4301,7 @@ function registerApprovalRoutes(
           },
         };
         const appended = appendEvent(deps.db, {
-          event,
+          event: event as typeof event & { taskId: string; sessionId: string },
           scratchDir: taskScratch(deps.layout, task.id),
         });
         return { result, published: { ...event, seq: appended.seq } };

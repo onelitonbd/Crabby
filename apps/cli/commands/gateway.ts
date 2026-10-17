@@ -34,7 +34,7 @@ import {
   writeGatewayInfo,
 } from "@crabby/gateway";
 import { type DataLayout, homeDirectory } from "@crabby/platform";
-import { composeProviders, selectDefaultModel } from "@crabby/providers";
+import { composeProviders, type ProviderComposition, selectDefaultModel } from "@crabby/providers";
 import {
   createMemoryStore,
   DB_FILE_NAME,
@@ -74,6 +74,7 @@ import {
   type TaskToolOptions,
 } from "@crabby/tools";
 import { createShellTools } from "@crabby/tools/shell";
+import { openVault, resolverFor } from "@crabby/vault";
 import { parseTail, unknownFlagMessage } from "../args.ts";
 import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
@@ -166,7 +167,16 @@ async function runStart(
   // §3.3's other configuration path — "Configured through `crabby provider add` **or configuration**" — composed here
   // rather than inside the Gateway, because the party that starts the process is also the party that can print a
   // refusal and its fix once, at startup, instead of leaving it to a route to explain later.
-  const providers = composeProviders(loaded.config.provider, loaded.limits);
+  // §7's store, opened by the composition root so the process holds one vault and the routes act on it. On a
+  // keychain platform the values never sit in this process's memory; on the file platform the session starts
+  // locked and `POST /api/v1/vault/unlock` opens it — D-031's "startup must not block forever for a passphrase".
+  const vault = openVault({ vaultDir: layout.vaultDir, platform: process.platform });
+  const resolveSecret = resolverFor(vault);
+  // The array is this process's one provider list, mutable in contents (D-139's hot re-compose swaps it) and
+  // fixed in identity — `composeProviders` answers a readonly view, so the root owns the copy.
+  const providers: ProviderComposition[] = [
+    ...composeProviders(loaded.config.provider, loaded.limits, resolveSecret),
+  ];
   /** §4.1's other half — the executor's declarations, so `GET /api/v1/tools` can answer the five fields
    *  `PENDING_RECORD_FIELDS` names from the party that executes them instead of printing them as pending (F-55, D-098).
    *  Composed here rather than inside the Gateway for the reason the providers are: the party that starts the process is
@@ -442,6 +452,19 @@ async function runStart(
     startedAt,
     listenerMode: "local",
     providers,
+    vault,
+    recomposeProviders: () => {
+      // D-139's hot half: re-run the same pass with the vault's resolver and swap the array in place — the
+      // identity stays, so every route holding `deps` sees the new composition without a re-registration.
+      const fresh = composeProviders(loaded.config.provider, loaded.limits, resolveSecret);
+      providers.splice(0, providers.length, ...fresh);
+      return {
+        composed: fresh.filter((entry) => entry.ok).length,
+        refused: fresh.flatMap((entry) =>
+          entry.ok ? [] : [{ id: entry.id, reason: entry.reason }],
+        ),
+      };
+    },
     // D-115's context section, handed to the Gateway rather than read there (the same rule `drive` follows):
     // this command is the composition root, and a Gateway that loaded its own configuration could not be
     // tested against a second one. Absent when the file has none, which is exactly the defaults.

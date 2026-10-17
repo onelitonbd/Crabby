@@ -15,7 +15,10 @@ import type { SqliteDb } from "./db.ts";
 export const REPLAY_WINDOW_EVENTS = 200;
 
 export interface AppendEventInput {
-  readonly event: Event;
+  /** A *task-scoped* event: the journal is the task_event table, and §4.4's replay is per-task. The system
+   *  family (`system.ready`, `system.vault.unlocked`, …) publishes over the bus without journalling — its
+   *  replayable truth is the status routes — so the type here keeps the fields the table's primary key needs. */
+  readonly event: Event & { readonly taskId: string; readonly sessionId: string };
   /** Where overflow bytes go. When omitted, a too-large payload is truncated without a reference — which the contract
    *  allows (the marker is what a client reads), but the Gateway always passes a scratch path. */
   readonly scratchDir?: string | undefined;

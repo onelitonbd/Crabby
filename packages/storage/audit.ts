@@ -26,6 +26,9 @@ export const AUDIT_KINDS = [
   "extension_install",
   "tunnel",
   "job_delete",
+  /** M5's vault transitions (§3.7, D-139): the attempt and its outcome are the trail's business — the
+   *  passphrase never is, and the row's detail carries the action and the counts, never the credential. */
+  "vault",
 ] as const;
 export type AuditKind = (typeof AUDIT_KINDS)[number];
 

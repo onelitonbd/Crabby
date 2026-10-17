@@ -38,7 +38,7 @@ export async function runStatus(layout: DataLayout, renderer: Renderer): Promise
     const info = health.body as {
       uptimeMs: number;
       listener: { mode: string; host: string; port: number };
-      vault: { managed: boolean };
+      vault: { managed: boolean; kind?: string; state?: string; note?: string };
     };
     renderer.line(
       "gateway",
@@ -56,7 +56,9 @@ export async function runStatus(layout: DataLayout, renderer: Renderer): Promise
     );
     renderer.line(
       "vault",
-      info.vault.managed ? "managed" : "unmanaged — no secret store in this build (M2)",
+      info.vault.managed
+        ? `${info.vault.kind ?? "store"} · ${info.vault.state ?? "unknown"}${info.vault.state === "locked" ? " — `crabby vault unlock` opens it" : ""}`
+        : "unmanaged — this Gateway carries no secret store",
     );
     const runs = diagnostics.runs;
     renderer.line(

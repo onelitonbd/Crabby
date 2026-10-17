@@ -430,6 +430,7 @@ def main() -> int:
         "status": r"\bstatus",
         "tasks": r"\btask",
         "tools": r"\btool",
+        "vault": r"vault|secret",
         "tunnel": r"tunnel",
         "whoami": r"whoami",
     }

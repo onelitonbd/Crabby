@@ -63,7 +63,12 @@ export function createSqliteJournal(deps: {
         ...(correlationId === undefined ? {} : { correlationId }),
         payload,
       };
-      const appended = appendEvent(db, { event, scratchDir: taskScratch(layout, taskId) });
+      const appended = appendEvent(db, {
+        // Task-scoped by construction: the fields are the row's own ids, and the journal's narrowed parameter
+        // type is the type system learning what this site already knew.
+        event: event as typeof event & { taskId: string; sessionId: string },
+        scratchDir: taskScratch(layout, taskId),
+      });
       return { ...event, seq: appended.seq };
     },
     transact: (body) => transact(db, body),

@@ -39,7 +39,7 @@ describe("the SSE frames", () => {
   });
 
   it("names the control frames and gives them no id, because neither is replayable", () => {
-    const gap = gapFrame(event.taskId);
+    const gap = gapFrame(event.taskId ?? "tsk_none");
     const end = endFrame("revoked");
 
     assert.ok(

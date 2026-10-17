@@ -292,3 +292,25 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   (D-138/O-075, slices 39–74), §3-র শেষ-তিন-স্লাইস = 72/73/74, T5-06 ও T17-05 এন্ট্রি "answered"; parity ৪৭ routes।
 - **lint-নোট:** লক করা biome 2.5.15 পুরনো integration টেস্টের `any`-গুলো ধরেছে (audit/memory/models) — repo-র চিরচেনা
   per-line `biome-ignore` + কারণ দিয়ে ১৯ জায়গায় স্থগিত; নীতি-পরিবর্তন নয়।
+## Slice 10 — M5 শুরু: ভল্ট (D-031/D-139, F-56 বন্ধ) — 2026-10-17
+
+- **`packages/vault`:** এক facade, দুই back end — keychain (macOS `security` / Linux `secret-tool`, PATH থেকে detect,
+  value Crabby-র মেমোরিতে আসে না) আর D-066-র scrypt envelope (N=2^15/r=8/p=1 + node `maxmem` 96MiB — নইলে বাউন্ডারিতে
+  ফেল; per-install salt কখনো rotate নয়; per-write GCM IV; KDF params ফাইলেই pinned)। ভুল passphrase = GCM tag দিয়ে
+  clean refusal। CLI test-এ ছোট N (`kdf` override — শুধু টেস্ট)।
+- **compose resolver:** `composeProviders(entries, limits, resolve?)` — resolver দিলে keyed entry compose হয়; না দিলে
+  view-refusal ("crabby vault status দেখুন"); locked/missing-এ vault-নিজের কারণসহ refuse। Gateway `deps.vault` +
+  `recomposeProviders` (array in-place splice — identity অটুট)।
+- **routes:** `GET /vault`, `POST /vault/unlock`, `POST /vault/lock` (+ `vault` audit kind, schema **v16** — CHECK-এ
+  kind বাড়ায় rebuild-and-copy)। unlock = session খোলা + re-compose + উত্তরে প্রতি-entry সিদ্ধান্ত + runner sentence;
+  ভুল passphrase = `vault` rejected ট্রেইল রো (credential ছাড়া); unset-এ `409 vault_unset` (create শুধু `crabby vault
+  set`-এ, মানুষ যেই passphrase টাইপ করবে)। `/health`-এ managed/kind/state/note; `/status`-এ vault রো + extensions রো
+  এখন সত্যি উত্তর দেয়। `system.vault.locked/unlocked` bus-event ( journaled নয় — replayable সত্য `/vault`);
+  Event schema-তে sessionId/taskId optional (system family), AppendEventInput narrowed।
+- **CLI `vault`:** status/set/get/list/delete/unlock/lock — stdin-only (TTY-তে muted prompt, pipe-এ লাইন), argv-তে
+  secret কখনোই নয়; set-ই rotation; get = মালিকের টার্মিনাল; disclosure create-এর উত্তরে।
+- **doctor:** vault check এখন openVault-এর status থেকে — unset/locked/unlocked + fix lines।
+- **docs:** INTERFACES §4.4-তে ৩টা vault রো + §4.1-এ `vault` kind + §7.1 CLI রো; DATA_AND_MEMORY §4-এ schema v16;
+  DECISIONS **D-139** (counter 139) + 4A ম্যাপ; CONSISTENCY_REVIEW **F-56 answered**; ROADMAP 75th slice;
+  parity **৫০ routes**।
+- **টেস্ট:** vault.test.ts ৭/৭, vault HTTP ৩/৩, vault CLI ৩/৩, compose ১৭/১৭।

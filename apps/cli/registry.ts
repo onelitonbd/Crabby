@@ -526,6 +526,58 @@ export const COMMANDS: readonly CommandSpec[] = [
     milestone: "M2 (`GET /audit`)",
   },
   {
+    // M5 (D-031/D-139): the secrets surface — names on list, the value only to the owner's terminal, and the
+    // weaker-store disclosure printed where the file store is the one the device has.
+    noun: "vault",
+    verb: "status",
+    summary: "which store this device has, and its lock state — here and on the running Gateway",
+    flags: ["--json"],
+    status: "ready",
+  },
+  {
+    noun: "vault",
+    verb: "set",
+    summary: "store or rotate a secret by name (passphrase and value arrive on stdin, never argv)",
+    flags: ["--json"],
+    status: "ready",
+  },
+  {
+    noun: "vault",
+    verb: "get",
+    summary:
+      "print one secret to this terminal — the one surface that shows a value (SECURITY.md §7)",
+    flags: ["--json"],
+    status: "ready",
+  },
+  {
+    noun: "vault",
+    verb: "list",
+    summary: "entry names only — a list that printed values would undo §7 at the keystroke",
+    flags: ["--json"],
+    status: "ready",
+  },
+  {
+    noun: "vault",
+    verb: "delete",
+    summary: "revoke one secret; provider entries referencing it refuse with that reason",
+    flags: ["--json"],
+    status: "ready",
+  },
+  {
+    noun: "vault",
+    verb: "unlock",
+    summary: "hand the running Gateway the passphrase its locked session is missing (D-139)",
+    flags: ["--json"],
+    status: "ready",
+  },
+  {
+    noun: "vault",
+    verb: "lock",
+    summary: "close the running Gateway's session; keyed providers refuse until the next unlock",
+    flags: ["--json"],
+    status: "ready",
+  },
+  {
     // C-E1: the same skeleton the Web button produces, and it prints the path it wrote.
     noun: "ext",
     verb: "init",

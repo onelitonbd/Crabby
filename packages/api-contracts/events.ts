@@ -89,8 +89,13 @@ export const Event = Type.Object(
       pattern: "^(task|message|tool|approval|provider|extension|system)\\.[a-z][a-z.-]{1,62}$",
     }),
     ts: Type.String({ format: "date-time" }),
-    sessionId: SessionId,
-    taskId: TaskId,
+    // Optional for the system family: `system.ready` / `system.vault.unlocked` happen to no session and no
+    // task, and minting a well-shaped id for a session that does not exist would be a lie in an id — the one
+    // place a lie is stable enough to outlive the process that told it. Task-scoped families keep them
+    // required in practice (the loop always has both); the schema says "optional" so the type is honest about
+    // the events the vocabulary already names.
+    sessionId: Type.Optional(SessionId),
+    taskId: Type.Optional(TaskId),
     correlationId: Type.Optional(RequestId),
     seq: Type.Integer({ minimum: 0 }),
     payload: Type.Record(Type.String(), Type.Unknown()),

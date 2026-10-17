@@ -139,33 +139,35 @@ async function boot(options: {
   const built = await buildApp({
     db: handle.db,
     layout,
-    providers: composeProviders({
-      local: {
-        baseUrl: "http://127.0.0.1:8080/v1",
-        models: {
-          "qwen2.5:3b": {
-            contextWindow: 4096,
-            maxOutputTokens: 512,
-            supports: {
-              streaming: true,
-              toolCalling: true,
-              parallelToolCalls: false,
-              systemRole: true,
-              structuredOutput: false,
-              imageInput: false,
-              audioInput: false,
-              reasoning: false,
-              promptCaching: false,
-              jsonSchemaValidation: false,
+    providers: [
+      ...composeProviders({
+        local: {
+          baseUrl: "http://127.0.0.1:8080/v1",
+          models: {
+            "qwen2.5:3b": {
+              contextWindow: 4096,
+              maxOutputTokens: 512,
+              supports: {
+                streaming: true,
+                toolCalling: true,
+                parallelToolCalls: false,
+                systemRole: true,
+                structuredOutput: false,
+                imageInput: false,
+                audioInput: false,
+                reasoning: false,
+                promptCaching: false,
+                jsonSchemaValidation: false,
+              },
+              cancellation: "best-effort",
+              rateLimits: null,
+              cost: "local",
+              batching: null,
             },
-            cancellation: "best-effort",
-            rateLimits: null,
-            cost: "local",
-            batching: null,
           },
         },
-      },
-    }),
+      }),
+    ],
     log: createLogger({ level: "info", write: (line) => lines.push(line) }, "config-test"),
     version: "test",
     startedAt: new Date(),

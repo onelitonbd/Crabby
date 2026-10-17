@@ -94,8 +94,8 @@ async function boot(
   const built = await buildApp({
     db: handle.db,
     layout,
-    providers:
-      options.fake === undefined
+    providers: [
+      ...(options.fake === undefined
         ? composeProviders(options.document?.provider ?? {})
         : ([
             {
@@ -106,7 +106,8 @@ async function boot(
               warnings: [],
               overrides: {},
             },
-          ] satisfies ProviderComposition[]),
+          ] satisfies ProviderComposition[])),
+    ],
     log: createLogger({ level: "error", write: () => {} }, "models-test"),
     version: "test",
     startedAt: new Date(),

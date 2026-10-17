@@ -75,7 +75,7 @@ interface BootOptions {
   readonly platformFacts?: { isTermux: boolean };
   /** What `crabby gateway start` composes from `config.json`'s `provider.*` entries and hands in (§3.3's "or
    *  configuration"). A test that composed none is the honest default, and the reason `GET /status` reports `absent`. */
-  readonly providers?: readonly ProviderComposition[];
+  readonly providers?: ProviderComposition[];
   /** What `crabby gateway start` composes from `config.json`'s `workspace.roots` and hands in, so `GET /api/v1/tools` can
    *  merge §4.1's runtime fields instead of printing them as pending (F-55). A test that composes none is the honest
    *  default and is also the assertion that matters: with nothing composed, every row must still name all five. */
@@ -289,7 +289,7 @@ describe("gateway over http", () => {
         models: { "llama-3.3-70b": {} },
       },
     });
-    const local = await boot({ providers: composed });
+    const local = await boot({ providers: [...composed] });
     try {
       const body = (await local.client.status()).body as {
         subsystems: Record<
@@ -538,7 +538,13 @@ describe("gateway over http", () => {
     await reader.cancel().catch(() => undefined);
 
     // Now the case §5.4 is about: something happened while the client was away, so the reconnect must be handed it.
-    appendEvent(h.db, { event: { ...first, id: newId("evt"), type: "task.progress", seq: 0 } });
+    // `first` came from the wire, so its ids are strings and the journal's narrowed input is satisfied as typed.
+    appendEvent(h.db, {
+      event: { ...first, id: newId("evt"), type: "task.progress", seq: 0 } as typeof first & {
+        taskId: string;
+        sessionId: string;
+      },
+    });
     const after = await fetch(`${h.url}/api/v1/events?taskId=${taskId}`, {
       headers: { authorization: `Bearer ${h.token}`, "last-event-id": first.id },
     });

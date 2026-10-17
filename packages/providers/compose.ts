@@ -3,14 +3,16 @@
 // one M2 can have: the verb is M4's (`docs/ROADMAP.md` §6, `apps/cli/registry.ts`'s `provider add/ls/rm` rows) and
 // writes the same entry this reads.
 //
-// What composes here is narrow, and the narrowness is the whole content of this file. **An entry composes when it needs
-// no secret.** §3.7 keeps a key in the vault and hands an adapter "a handle that yields the value at call time";
-// nothing in this build resolves a `vault://` reference (`docs/CONSISTENCY_REVIEW.md` F-56, and `docs/ROADMAP.md` §7
-// puts the vault in M5), so an entry carrying one is refused with that reason rather than composed with an empty
-// credential — an adapter that silently dropped a key would answer `401` from the endpoint and read as a broken
-// network. What is left is the keyless endpoint, which is not a consolation prize on the primary platform: D-066 and
-// O-034 both settle local inference on Android as "supported only through an external server the user runs", and a
-// `llama-server` or an Ollama OpenAI-compatible listener on `127.0.0.1` asks for no key at all.
+// What composes here is narrow, and the narrowness is the whole content of this file. §3.7 keeps a key in the vault
+// and hands an adapter "a handle that yields the value at call time" — which is the `resolve` parameter: the party
+// composing hands a resolver in (`@crabby/vault`'s `resolverFor`), and an entry whose key is a `vault://` reference
+// composes only when the resolver yields the value. A caller with no resolver — the config *views*: `provider list`,
+// `doctor` — keeps the F-56 shape of the refusal (names only, the value never enters the answer), because a view of
+// the configuration has no call for the secret and the vault may not even be open. An adapter that silently dropped
+// a key would answer `401` from the endpoint and read as a broken network; refusing at composition is how the vault
+// state becomes the named reason instead. The keyless endpoint remains the primary platform's first-class path:
+// D-066 and O-034 both settle local inference on Android as "supported only through an external server the user
+// runs", and a `llama-server` or an Ollama OpenAI-compatible listener on `127.0.0.1` asks for no key at all.
 //
 // Three more refusals are decisions rather than gaps, and each is stated where it fires:
 //
@@ -68,18 +70,26 @@ const ABSENT_FAMILIES: Readonly<Record<string, string>> = {
     "would let a task reach `completed` with no model behind it, which is the demo this phase has refused to ship",
 };
 
+/** The one way a `vault://name` becomes a value: the composition root hands the vault's own resolver in. Views
+ *  (CLI lists, doctor) omit it on purpose — they price names, and §7 keeps the value out of serializers. */
+export type SecretResolve = (
+  reference: string,
+) => { ok: true; secret: string } | { ok: false; reason: string };
+
 export function composeProviders(
   entries: Readonly<Record<string, ProviderEntryConfig>> | undefined,
   limits?: LimitsConfig,
+  resolve?: SecretResolve | undefined,
 ): readonly ProviderComposition[] {
   if (entries === undefined) return [];
-  return Object.entries(entries).map(([id, entry]) => composeOne(id, entry, limits));
+  return Object.entries(entries).map(([id, entry]) => composeOne(id, entry, limits, resolve));
 }
 
 function composeOne(
   id: string,
   entry: ProviderEntryConfig,
   limits: LimitsConfig | undefined,
+  resolve: SecretResolve | undefined,
 ): ProviderComposition {
   const refused = (reason: string): ProviderComposition => ({ id, ok: false, reason });
 
@@ -103,17 +113,30 @@ function composeOne(
         `'${id}' holds a key value where §3.7 allows only a \`vault://\` name, and the value is withheld here rather ` +
           "than printed (§7's obligation is at the serializer, and a startup banner is one). `crabby config get " +
           `provider.${id}.key\` shows it in the terminal that owns the file, and \`crabby doctor\` prints the fix. ` +
-          "Nothing resolves a reference yet either — the vault arrives in M5 (docs/CONSISTENCY_REVIEW.md F-56) — so on " +
-          "this build an endpoint that needs a key cannot be configured, which on this platform means a local server " +
-          "the user runs (D-066, O-034)",
+          `Move the value into the vault with \`crabby vault set ${id}\` and point this field at \`vault://${id}\` — ` +
+          "on this platform an endpoint that needs a key and no vault means a local server the user runs (D-066, O-034)",
       );
     }
-    return refused(
-      `'${id}' supplies its key by reference (${entry.key}), and nothing in this build resolves a vault reference — ` +
-        "the vault arrives in M5 (docs/ROADMAP.md §7, docs/CONSISTENCY_REVIEW.md F-56). Until then an endpoint that " +
-        "needs no key composes and one that does not cannot be configured, which on this platform means a local server " +
-        "the user runs (D-066, O-034)",
-    );
+    if (resolve === undefined) {
+      // A view, not a run: the composition the caller asked for prices names, and the vault's state is not this
+      // caller's business to change. The sentence names the state question rather than pretending to answer it.
+      return refused(
+        `'${id}' supplies its key by reference (${entry.key}), and this view resolves no references — ` +
+          "`crabby vault status` names the store and its state, and a Gateway that composes with the vault " +
+          "unlocked resolves it there (crabby gateway start)",
+      );
+    }
+    const resolved = resolve(entry.key);
+    if (!resolved.ok) {
+      return refused(
+        `'${id}' supplies its key by reference (${entry.key}), and the vault cannot hand the value over right ` +
+          `now: ${resolved.reason}. The entry composes again when that is fixed — \`crabby vault status\` names ` +
+          "the state, `crabby vault unlock` opens it, and a Gateway restart arms the runner with the composed keys",
+      );
+    }
+    // Resolved. The value travels into the adapter's own config and nowhere else — not into the composition
+    // result, not into a log, not into an event (§7: the agent uses a credential without reading it).
+    return composeRest(id, entry, kind, limits, resolved.secret);
   }
 
   // An entry a user is still building. §3.3 requires "name, base URL, model name(s)" of a *working* endpoint, and the
@@ -133,11 +156,26 @@ function composeOne(
     );
   }
 
-  const config = { baseUrl: entry.baseUrl };
+  return composeRest(id, entry, kind, limits, undefined);
+}
+
+/** Everything after the key question, shared by the keyless and the resolved paths — the shape checks, §3.8's
+ *  overrides, the adapter construction. `apiKey` is the resolved value on the keyed path and absent on the
+ *  keyless one; it reaches the adapter's config and nothing else. `baseUrl` arrives already guarded (both
+ *  callers refused the empty case above), so the config type is the adapter's own. */
+function composeRest(
+  id: string,
+  entry: ProviderEntryConfig,
+  kind: string,
+  limits: LimitsConfig | undefined,
+  apiKey: string | undefined,
+): ProviderComposition {
+  const refused = (reason: string): ProviderComposition => ({ id, ok: false, reason });
+  const config = { baseUrl: entry.baseUrl ?? "", ...(apiKey === undefined ? {} : { apiKey }) };
   const validation = validateProviderConfig(config);
   if (!validation.ok) return refused(validation.reason);
 
-  const modelList = Object.entries(models).map(([modelId, descriptor]) => ({
+  const modelList = Object.entries(entry.models ?? {}).map(([modelId, descriptor]) => ({
     id: modelId,
     descriptor,
   }));

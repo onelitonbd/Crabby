@@ -339,7 +339,8 @@ pipeable and free of color when not a TTY.
 | Providers | `provider add/list/remove`, `model list`, `model edit <p>/<m>`, `model probe <p>/<m>` |
 | Auth | `auth pair`, `auth list`, `auth revoke <id>` |
 | Config | `config get/set/path/schema` |
-| Extensions | `ext init`, `ext validate`, `ext check-compat`, `ext install`, `ext list`, `ext info`, `ext update`, `ext uninstall` |
+| Extensions | `ext init`, `ext validate`, `ext check-compat`, `ext install`, `ext list`, `ext info`, `ext update`, `ext uninstall` — all ready except `ext update` (C-E10's show-the-diff-before-replacing needs the source re-run) |
+| MCP (client only, D-040) | `mcp add <file>` — the C-2 import: names kept, env/header values dropped, report written, nothing approved by the act; `mcp list`; `mcp restart` stays planned until a runtime connects automatically (§10) |
 | Interfaces | `gateway start/stop/restart/status`, `web open`, `telegram start`, `tui`, `tunnel on/off/status` |
 | Data | `history export`, `history delete-session`, `memory list/search/forget`, `logs`, `audit` |
 | Context | `context show <id>`, `context pin <id> [ref] [--remove]`, `session compact <id>`, `tools ls` — C10-01/C10-02/C10-05 (D-120) |

@@ -249,7 +249,7 @@ export async function runExt(
         );
         return EXIT.usage;
       }
-      const out = tail.values["out"] ?? process.cwd();
+      const out = tail.values.out ?? process.cwd();
       const target = join(resolve(out), name);
       if (existsSync(target)) {
         renderer.line(
@@ -258,7 +258,7 @@ export async function runExt(
         );
         return EXIT.failure;
       }
-      const description = tail.values["description"] ?? `The ${name} skill.`;
+      const description = tail.values.description ?? `The ${name} skill.`;
       const written = extInit(target, { name, description });
       renderer.line("scaffolded", written);
       renderer.line(
@@ -314,7 +314,7 @@ export async function runExt(
           "the AI-assisted explanation is §6 step 8 and rides a later slice; the verdict above is the deterministic check and will not change when it arrives",
         );
       }
-      if (tail.values["diff"] !== undefined) {
+      if (tail.values.diff !== undefined) {
         // C-E5: the diff is between two *reports* on disk, so the answer is evidence rather than a re-rendering.
         if (target.installedName === undefined) {
           renderer.line(
@@ -331,7 +331,7 @@ export async function runExt(
           );
           return EXIT.failure;
         }
-        const olderWanted = tail.values["diff"] ?? "";
+        const olderWanted = tail.values.diff ?? "";
         const fileName = (file: string): string => file.split(/[\\/]/).pop() ?? file;
         const older = reports.find((file) => fileName(file).includes(olderWanted));
         if (older === undefined) {

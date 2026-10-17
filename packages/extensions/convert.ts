@@ -77,7 +77,7 @@ function uniqueReportName(reportsDir: string, now: Date): string {
 /** The §6.1 names an upstream tool name maps to, for the report only. The alias table is explicit (upstream name ⇒
  *  capability) so the mapping itself is reviewable data, not a heuristic — and a name outside the table maps to
  *  nothing, loudly, rather than to its nearest-looking neighbor. */
-const TOOL_ALIASES: Readonly<Record<string, string>> = {
+export const TOOL_ALIASES: Readonly<Record<string, string>> = {
   bash: "shell.run",
   shell: "shell.run",
   sh: "shell.run",

@@ -1522,6 +1522,29 @@ reading its flag under the wrong key since slice 3 and silently ignoring the fil
 dash-less keys, and now the verb obeys it. Gates: ext-cli 6/6, extensions 41/41, full sweep, typecheck, biome,
 parity, docs:check.
 
+**Seventy-second slice — the §10 MCP client, with its C-2 import (D-040, D-137).** Crabby dials the outside tool
+world through the small, stable slice of the protocol an MCP client needs — `initialize` with the
+`notifications/initialized` follow-up, `tools/list`, `tools/call` — over the two transports §10 ships and no third:
+stdio as one JSON message per line to a child process, and HTTP as POST JSON-RPC accepting both `application/json`
+and `text/event-stream` answers, with the `Mcp-Session-Id` the server assigns echoed on every later call. The two
+questions the tables left open are now decisions (D-137). Server entries live in `<stateDir>/mcp/servers.json`, not
+the config document — the config file is the token-guarded restart surface, while server entries are the `mcp`
+verbs' managed state, the file the truth and the reports beside it the history — and environment **names** enter
+that file, never values: the C-2 import reads the Claude-style `{ mcpServers: … }` shape (plus the two mapping
+shapes), drops every env and header value by name with a warning each, preserves unrecognizable entries verbatim in
+a never-overwritten report, merges rather than clobbers, and touches the source file never. Discovery registers
+through policy's own gate: a tool becomes `mcp:<server>:<tool>`, maps through the same alias table the C-1 report
+uses to exactly one §6.1 capability, and lands at the T2 floor — a server-declared tier is never read, because
+§10's "MCP is not a trust level" is a statement about exactly the field a server would lie in; a tool no capability
+name fits is **not registered**, and policy's refusal sentence stands in the discovery report verbatim. The caps are
+Crabby's: output past the tool cap cut with a marker naming both numbers, two calls in flight per server, a timeout
+of the tool-class deadline plus the priced 5 s adapter overhead, and a server that will not start or dies mid-call
+answered by a typed `mcp_server_error` naming the phase — never an empty tool list. On the terminal, `mcp add` is
+the import and `mcp list` reads the file; `mcp restart` stays planned until something connects automatically, which
+nothing does yet — wiring the client into the runner is the slice that has a runner to wire into, and connecting a
+server no task can call would be registration as theater. Gates: mcp 12/12 (a real child process and a real HTTP
+server, both stood up by the test), mcp-cli 2/2, extensions 41/41, full sweep, typecheck, biome, parity, docs:check.
+
 ## 6. Phase M4 — Providers, memory, extensions
 
 - Provider adapters: `openai-compatible` (+ user-defined endpoints, D-041), `ollama`, `anthropic`, `gemini`, each

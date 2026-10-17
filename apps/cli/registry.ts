@@ -593,22 +593,20 @@ export const COMMANDS: readonly CommandSpec[] = [
     status: "ready",
   },
   {
-    // C-E13's three verbs arrive with the MCP client (D-040); client-only, so the help never implies Crabby can
-    // *be* an MCP server.
+    // C-E13: client-only, so the help never implies Crabby can *be* an MCP server. `add` is the C-2 import:
+    // names kept, values dropped, report written, nothing approved by the act (D-137).
     noun: "mcp",
     verb: "add",
-    summary: "add an MCP server entry from its config",
+    summary: "import a foreign servers.json into the MCP server list (C-2)",
     flags: [],
-    status: "planned",
-    milestone: "M4 (the MCP client, D-040)",
+    status: "ready",
   },
   {
     noun: "mcp",
     verb: "list",
-    summary: "configured MCP servers and their transports",
+    summary: "configured MCP servers: name, transport, command or URL, env/header names",
     flags: ["--json"],
-    status: "planned",
-    milestone: "M4 (the MCP client, D-040)",
+    status: "ready",
   },
   {
     noun: "mcp",
@@ -616,7 +614,8 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: "restart an MCP server connection",
     flags: [],
     status: "planned",
-    milestone: "M4 (the MCP client, D-040)",
+    milestone:
+      "the slice that wires the client into the runner — nothing connects automatically today (§10)",
   },
   {
     noun: "gateway",

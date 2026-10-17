@@ -41,6 +41,7 @@ import { runExt } from "./commands/ext.ts";
 import { type GatewayVerb, runGateway } from "./commands/gateway.ts";
 import { runInit } from "./commands/init.ts";
 import { type JobVerb, runJob } from "./commands/job.ts";
+import { runMcp } from "./commands/mcp.ts";
 import { type MemoryVerb, runMemory } from "./commands/memory.ts";
 import { type ModelVerb, type ProviderVerb, runModel, runProvider } from "./commands/provider.ts";
 import { runSession, type SessionVerb } from "./commands/session.ts";
@@ -312,6 +313,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     case "memory": {
       return runMemory(verb as MemoryVerb | undefined, rest, layout, renderer);
+    }
+    case "mcp": {
+      // C-E13: the servers file is the MCP verbs' own state (D-137), read and written here like the extensions
+      // repo is — no Gateway round trip, because no route answers for this file.
+      return runMcp(verb, rest, layout, renderer);
     }
     case "ext": {
       // Region C-E: the extensions repo lives in the state dir, so `--data-dir` is the one fact these verbs need

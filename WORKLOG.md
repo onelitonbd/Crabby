@@ -240,3 +240,25 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - **টেস্ট:** tests/unit/ext-cli.test.ts ৬/৬ (spawnSync-এ exit code+আউটপুট: init overwrite/bad-name, validate exit-2+key,
   install স্টেপ-লাইন+unsafe-থামা+nothing-written, info --json, নন-TTY exit-3, uninstall ডিসক্লোজার+workspace-রিফিউজ,
   tool-kind রিফিউজাল)। হাতে-যাচাই: init→validate→install→list→info→diff→uninstall, collision লাইন, purge-data।
+
+## করলাম (M4 slice 7 — §10 MCP client + C-2 import, D-040/D-137)
+
+- **D-137 রেকর্ড** (দুই স্থাপন-সিদ্ধান্ত): (১) সার্ভার-এন্ট্রি `<stateDir>/mcp/servers.json`-এ, কনফিগ-ডকুমেন্টে নয় —
+  কনফিগ ফাইল If-Match-এর restart-সারফেস, সার্ভার-এন্ট্রি mcp verb-দের নিজস্ব state; env **নাম** ঢোকে, value কখনো নয়।
+  (২) ডিসকভারি policy-র `registerTool` গেট দিয়ে — `mcp:<server>:<tool>` নেমস্পেস, C-1-র alias টেবিলেই এক §6.1
+  capability, T2 floor (সার্ভার-ঘোষিত tier পড়া হয় না); capability-অনামযোগ্য টুল **রেজিস্টার হয় না** — refusal-বাক্য
+  রিপোর্টে হুবহু। ক্যাপ Crabby-র: output MAX_TOOL_OUTPUT_BYTES-এ cut+marker, সার্ভারপ্রতি in-flight ২, timeout =
+  tool-class deadline + extensionAdapterOverheadMs (fs 15s / net 25s / shell 125s), মৃত সার্ভার = typed
+  `mcp_server_error` (phase নামে: start/handshake/list/call/connection)। counter 136→137 (§4A traceability-ও)।
+- **packages/extensions:** `mcp-config.ts` (নেটিভ servers.json স্ট্রিক্ট পার্স — unknown-field reject, env-name shape,
+  stdio/http দুই entry), `mcp-import.ts` (C-2: mcpServers/servers-mapping/servers-array আকৃতি; env/header value
+  নাম-ধরে drop+warning; unknown verbatim; রিপোর্ট never-overwritten; বিদ্যমান ফাইলের সাথে merge, সোর্স অস্পৃশ্য),
+  `mcp.ts` (StdioTransport: spawn+newline JSON-RPC+initialize handshake+stderr-tail; HttpTransport: POST JSON-RPC,
+  application/json + text/event-stream দুই উত্তরই, Mcp-Session-Id echo; discovery→registerTool)।
+- **CLI:** `crabby mcp add <file>` (C-2 import; উত্তরে value-drop গুনে + রিপোর্ট-পাথ + "approves nothing" fix-line),
+  `crabby mcp list [--json]`; `mcp restart` planned (কিছুই স্বয়ংক্রিয়ভাবে connect করে না — runner-বিহীন wiring থিয়েটার)।
+- **টেস্ট ১৪:** mcp.test.ts ১২/১২ (আসল child process + আসল HTTP সার্ভার — framing প্রমাণিত; oversized-cut marker,
+  timeout "Crabby's cap", dead-server typed error, T2-floor registration, unnameable-refusal, alias-map, C-2 চার কেস),
+  mcp-cli.test.ts ২/২ (state dir-এ secret-value-অনুপস্থিতি-ই মূল assertion)।
+- **শিক্ষা:** erasableSyntaxOnly-তে constructor parameter-property নিষিদ্ধ; template literal-এ `\n` আসল newline হয় —
+  fixture-এ `\\n`; biomet-এর --unsafe fix গ্রহণযোগ্য যেখানে key লিটারেল নিশ্চিত।

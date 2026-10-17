@@ -1722,6 +1722,17 @@ bug to file. `docs/TROUBLESHOOTING.md` is the symptom → sentence Crabby actual
 drawn from the refusals the build really answers with. `docs/DEVELOPMENT.md` §9's release bar now has the page it
 always meant. Gates: docs:check (29 documents), full sweep, parity.
 
+**Eighty-fourth slice — the bare name, and the hidden graph it exposed (D-145).** The owner's first on-device
+install ended in command-not-found, and the fix is the OpenClaw ergonomics bought without OpenClaw's mechanism:
+`sh scripts/link-global.sh` writes one symlink ($PREFIX/bin on Termux, ~/.local/bin elsewhere) pointing into the
+checkout — nothing fetched, nothing registered, update stays `git pull`, uninstall is `rm` of one link; release-
+time npm publishing stays M6's separate bullet and will be scoped. Building it surfaced what hoisting had been
+hiding for months: eight packages imported undeclared workspace neighbours (the CLI alone used eight), a fresh
+clone's `crabby doctor` failed on `@crabby/vault` from any directory but the repo root — twenty-one additions
+across eight package.json files later, the module graph is declarative, and the proof is a fresh clone plus the
+link plus `crabby doctor` exit 0 from an unrelated directory. Gates: tsc, biome, full sweep, parity,
+docs:check (145 accepted), and the fresh-clone rehearsal.
+
 ## 8. Phase M6 — Release readiness
 
 *Everything this repository can ship is shipped (2026-10-17, slices 79–83): backup/restore (D-142), the changelog

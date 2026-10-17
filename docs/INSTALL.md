@@ -25,11 +25,17 @@ node apps/cli/crabby.ts doctor          # the unambiguous form, works anywhere i
 npx --no-install crabby doctor          # the workspace bin, after npm install
 ```
 
-For the bare name, use an alias — the ergonomic form of "no global install":
+For the bare name, one script writes the symlink npm's `-g` would have (D-145) — nothing fetched, nothing
+registered, updates stay `git pull` because the link points into the checkout:
 
 ```sh
-echo "alias crabby='node $HOME/Crabby/apps/cli/crabby.ts'" >> ~/.bashrc && source ~/.bashrc
+sh scripts/link-global.sh          # $PREFIX/bin/crabby on Termux, ~/.local/bin/crabby elsewhere
+crabby doctor                      # now works from any directory
+sh scripts/link-global.sh --remove # undo — the checkout itself is never touched
 ```
+
+An alias (`echo "alias crabby='node $HOME/Crabby/apps/cli/crabby.ts'" >> ~/.bashrc`) is the equivalent that
+touches nothing outside your shell config.
 
 **Never a bare `npx crabby` from outside the checkout**: with no local install under it, npx is allowed to fetch
 whichever registry package answers to that name — a stranger's code with our name, which is exactly the

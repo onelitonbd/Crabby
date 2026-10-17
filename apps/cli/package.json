@@ -12,9 +12,17 @@
     "./*": "./*.ts"
   },
   "dependencies": {
+    "@crabby/agent-runtime": "0.0.0",
     "@crabby/api-contracts": "0.0.0",
     "@crabby/core": "0.0.0",
     "@crabby/extensions": "0.0.0",
-    "@crabby/platform": "0.0.0"
+    "@crabby/gateway": "0.0.0",
+    "@crabby/platform": "0.0.0",
+    "@crabby/policy": "0.0.0",
+    "@crabby/providers": "0.0.0",
+    "@crabby/storage": "0.0.0",
+    "@crabby/telegram": "0.0.0",
+    "@crabby/tools": "0.0.0",
+    "@crabby/vault": "0.0.0"
   }
 }

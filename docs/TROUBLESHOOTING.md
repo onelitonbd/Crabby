@@ -8,8 +8,9 @@ else does (D-050 named it the recovery tool).
 ## "No command crabby found" — and the shell suggesting cabal/caddy/ruby
 
 Nothing is broken: D-050 ships no global binary, so the name is only reachable inside the checkout. Run
-`node apps/cli/crabby.ts doctor` (or `npx --no-install crabby …` after `npm install`), or add the alias from
-`docs/INSTALL.md`'s "the name `crabby`" section. If even the `node` form fails with a syntax error, your Node is
+`node apps/cli/crabby.ts doctor` (or `npx --no-install crabby …` after `npm install`) — or put the name on PATH
+properly with `sh scripts/link-global.sh` (D-145, one symlink into your checkout; `docs/INSTALL.md`'s "the name
+`crabby`" section). If even the `node` form fails with a syntax error, your Node is
 older than the `engines.node` pin — `node --version`, then upgrade (Termux: `pkg upgrade nodejs-lts`).
 
 ## "Gateway" — nothing answers

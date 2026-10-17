@@ -438,3 +438,11 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - Termux-এ `crabby doctor` → command-not-found (D-050-র ফল, বাগ নয়)। INSTALL.md-তে "the name `crabby`" সেকশন
   (alias = no-global-install-এর ergonomic রূপ) + **bare `npx crabby` সতর্কতা** (রেজিস্ট্রির অচেনা প্যাকেজ —
   সাপ্লাই-চেইন-প্রত্যাখ্যান); TROUBLESHOOTING-এ প্রথম এন্ট্রি।
+## Slice 20 — M6 slice-6: bare `crabby` নাম PATH-এ (D-145) + undeclared-dep গ্রাফ ঠিক — 2026-10-17
+
+- **`scripts/link-global.sh`:** এক symlink (`$PREFIX/bin`/`~/.local/bin` → checkout); কিছু নামায় না, আপডেট =
+  `git pull`, আনইনস্টল = `rm`; `--remove` সহ। (স্ক্রিপ্টের প্রথম সংস্করণের echo-তে backtick command-substitution
+  বাগ ছিল — smoke test-এ ধরা পড়ে ঠিক।)
+- **আসল বাগ:** fresh clone-এ `doctor` যেকোনো cwd থেকে `@crabby/vault` পেত না — ৮টা প্যাকেজ ২১টা cross-import
+  ডিক্লেয়ারই করেনি (hoisting ঢেকে রাখছিল)। সব declared → links সত্যি → মডিউল-গ্রাফ এখন সৎ।
+- **প্রমাণ:** fresh clone + link-global → যেকোনো ডিরেক্টরি থেকে `crabby doctor` exit 0, `backup` ok।

@@ -3,12 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The §3.1 provider contract, §3.2 descriptors, §3.5 error taxonomy with D-064's retry schedule, §3.3's configuration rules, the openai-compatible adapter, the fake reference adapter, and the §7 conformance suite",
+  "description": "The \u00a73.1 provider contract, \u00a73.2 descriptors, \u00a73.5 error taxonomy with D-064's retry schedule, \u00a73.3's configuration rules, the openai-compatible adapter, the fake reference adapter, and the \u00a77 conformance suite",
   "exports": {
     ".": "./index.ts",
     "./*": "./*.ts"
   },
   "dependencies": {
+    "@crabby/api-contracts": "0.0.0",
     "@crabby/core": "0.0.0"
   }
 }

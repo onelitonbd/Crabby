@@ -7,7 +7,9 @@ import { redact, redactText } from "./redact.ts";
 export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
-const RANK: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
+/** Exported for `GET /logs`'s level filter: one ranking, so a route and the logger cannot disagree about which
+ *  level outranks which. */
+export const RANK: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
 export interface LogRecord {
   ts: string;

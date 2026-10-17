@@ -291,7 +291,7 @@ describe("upgrading", () => {
     db.exec(
       "DELETE FROM schema_migration; DROP TABLE approval; DROP TABLE checkpoint; DROP TABLE message; " +
         "DROP TABLE memory_reference; DROP TABLE memory_search; DROP TABLE memory_search_fts; DROP TABLE memory; " +
-        "DROP TABLE job_run; DROP TABLE job; DROP TABLE session; " +
+        "DROP TABLE audit_log; DROP TABLE job_run; DROP TABLE job; DROP TABLE session; " +
         "ALTER TABLE task DROP COLUMN cancellation_json; ALTER TABLE task DROP COLUMN model; " +
         "ALTER TABLE task DROP COLUMN model_switch_json; ALTER TABLE task DROP COLUMN origin_json",
     );
@@ -300,8 +300,8 @@ describe("upgrading", () => {
       new Date(0).toISOString(),
     );
     assert.deepEqual(migrate(db), {
-      applied: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
-      version: 13,
+      applied: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+      version: 14,
     });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,

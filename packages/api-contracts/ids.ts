@@ -4,11 +4,13 @@
 // sixth (`msg_`) the way the documents allow one to be added — the decision first, §6's list beside it, and the test's
 // assertion moved with them, so the test still says "exactly what §6 lists" rather than a number. D-135 added the
 // seventh (`mem_`) the same way, for M4's memory entries: a memory id appears in a `/memory` route, a `crabby memory
-// forget` command, a tool argument and an audit line, which makes it a wire fact and not a table detail.
+// forget` command, a tool argument and an audit line, which makes it a wire fact and not a table detail. D-138 added
+// the eighth (`aud_`) for the §14 audit log: an audit row is addressed by `GET /audit`'s cursor and cited by id in the
+// route tests, so it is addressed on the wire like every other record the Gateway answers for.
 import { randomBytes as cryptoBytes } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 
-export const ID_PREFIXES = ["evt", "ses", "apr", "req", "tsk", "msg", "mem"] as const;
+export const ID_PREFIXES = ["evt", "ses", "apr", "req", "tsk", "msg", "mem", "aud"] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 
 /** The documents show `evt_01H…`, which is time-sortable, so ids are generated that way: a lowercase base32 encoding

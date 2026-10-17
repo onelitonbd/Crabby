@@ -142,8 +142,11 @@ import {
   configDocument,
   configSchema,
   differingPaths,
+  LOG_LEVELS,
   type Logger,
+  type LogLevel,
   loadConfig,
+  RANK,
   writeConfig,
 } from "@crabby/core";
 import type { DataLayout } from "@crabby/platform";
@@ -190,6 +193,7 @@ import {
   getSession,
   getTask,
   type Identity,
+  listAudit,
   listIdentities,
   listMessages,
   listSessions,
@@ -209,6 +213,7 @@ import {
   REPLAY_WINDOW_EVENTS,
   readEvents,
   recall,
+  recordAudit,
   redeemPairingCode,
   remember,
   requestHash,
@@ -620,7 +625,23 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
     if (route === CLIENTS_PATH || route.startsWith(`${CLIENTS_PATH}/`)) {
       requireLoopback(request, "identity management");
     }
-    request.crabbyClient = requireToken(db, request);
+    // §14: auth attempts and failures are the trail's first rows. A rejected request is recorded with what was
+    // attempted and nothing about the credential — the token itself is never a detail (§7).
+    try {
+      request.crabbyClient = requireToken(db, request);
+    } catch (error) {
+      if (error instanceof GatewayError && error.body.code.startsWith("auth_")) {
+        recordAudit(db, {
+          ts: new Date().toISOString(),
+          kind: "auth_attempt",
+          outcome: "rejected",
+          actor: "anonymous",
+          correlationId: requestId,
+          detail: { path: route, reason: error.body.code },
+        });
+      }
+      throw error;
+    }
   });
 
   app.setErrorHandler((error: unknown, request: FastifyRequest, reply: FastifyReply) => {
@@ -1242,6 +1263,94 @@ function registerSystemRoutes(
       streams: { subscribers: bus.subscriberCount },
     });
   });
+
+  // D-133's diagnostics trio. The log route reads the ring buffer the logger already keeps redacted — `GET /logs`
+  // cannot offer an unredacted view, because the words do not exist by the time the route runs (§14). The cursor is
+  // an offset into the *current* window and says so, because a ring that wrapped under a pager is a fact about the
+  // answer, not a defect to hide.
+  app.get<{ Querystring: Record<string, string> }>("/api/v1/logs", async (request, reply) => {
+    const level = request.query.level;
+    if (level !== undefined && !(LOG_LEVELS as readonly string[]).includes(level)) {
+      throw new GatewayError({
+        code: "logs_unknown_level",
+        message: `'${level}' is not a log level — ${LOG_LEVELS.join(", ")}`,
+        class: "validation",
+        retryable: false,
+      });
+    }
+    const limit = boundedLimit(request.query.limit, 200);
+    const start = positiveInt(request.query.cursor, 0);
+    const rank = level === undefined ? 0 : RANK[level as LogLevel];
+    const all = deps.log
+      .records()
+      .filter((record) => (rank === 0 ? true : RANK[record.level] >= rank));
+    const window = all.slice(start, start + limit);
+    return reply.send({
+      records: window,
+      cursor: start + window.length,
+      hasMore: start + window.length < all.length,
+      bufferLines: all.length,
+      sortedBy: "ts",
+      ...(start > 0
+        ? {
+            note: "the buffer is a ring; a cursor is an offset into the current window, and the oldest lines may have rotated away",
+          }
+        : {}),
+    });
+  });
+
+  // §14's trail, read back. Append-only by construction, so the cursor is the last id seen and a row once read
+  // cannot change under the reader.
+  app.get<{ Querystring: Record<string, string> }>("/api/v1/audit", async (request, reply) => {
+    const limit = boundedLimit(request.query.limit, 100);
+    const taskId = request.query.taskId;
+    const cursor = request.query.cursor;
+    const page = listAudit(deps.db, {
+      ...(cursor === undefined || cursor.length === 0 ? {} : { cursor }),
+      ...(taskId === undefined || taskId.length === 0 ? {} : { taskId }),
+      limit,
+    });
+    const last = page.rows[page.rows.length - 1];
+    return reply.send({
+      records: page.rows,
+      sortedBy: page.sortedBy,
+      cursor: last?.id,
+      hasMore: page.rows.length === limit,
+      ...(taskId !== undefined && taskId.length > 0 ? { taskId } : {}),
+    });
+  });
+
+  // T5-06's capability line, as a route (D-133): who the caller is, what they hold, and what surface this process
+  // would actually run — read from the composition (`declares`), so a wrong "shell: on" cannot be printed by a
+  // route that never asked the executor.
+  app.get("/api/v1/whoami", async (request, reply) => {
+    const identity = request.crabbyClient as Identity;
+    const declares = deps.declares;
+    const surface =
+      declares === undefined
+        ? undefined
+        : {
+            fs: declares("fs.read") !== undefined || declares("fs.write") !== undefined,
+            net: declares("net.fetch") !== undefined || declares("http.request") !== undefined,
+            shell: declares("shell.run") !== undefined,
+          };
+    return reply.send({
+      client: {
+        id: identity.id,
+        name: identity.name,
+        interface: identity.interface,
+        capabilities: identity.capabilities,
+        createdAt: identity.createdAt,
+        ...(identity.lastUsedAt === undefined ? {} : { lastUsedAt: identity.lastUsedAt }),
+      },
+      surface,
+      ...(surface === undefined
+        ? {
+            note: "no executor is composed, so the surface line would be a default wearing a fact's clothes (T5-06)",
+          }
+        : {}),
+    });
+  });
 }
 
 // ------------------------------------------------------------------ policy registry (§8's "List tools + tiers" row)
@@ -1411,6 +1520,19 @@ function registerConfigRoutes(app: FastifyInstance, deps: GatewayDeps): void {
         etag: after.token,
         ...(client === undefined ? {} : { by: client.id, via: client.interface }),
         ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      // §14's config-change row: key *paths* and the fact of the write, never a value — the same rule the log line
+      // above states, now in the trail a `GET /audit` reader sees.
+      recordAudit(deps.db, {
+        ts: new Date().toISOString(),
+        kind: "config_change",
+        outcome: "ok",
+        ...(client === undefined ? {} : { actor: client.id }),
+        ...(client === undefined ? {} : { interface: client.interface }),
+        ...(request.crabbyRequestId === undefined
+          ? {}
+          : { correlationId: request.crabbyRequestId }),
+        detail: { changed, ...(changedKeys.length === 0 ? {} : { keys: changedKeys }) },
       });
       const body: ConfigWriteBody = {
         ...after.body,
@@ -1907,6 +2029,17 @@ function registerAuthRoutes(
     async (request, reply) => {
       const result = redeemPairingCode(deps.db, request.body.code);
       if (!result.ok) {
+        // §14: a failed pairing attempt is a trail row with the reason and none of the code.
+        recordAudit(deps.db, {
+          ts: new Date().toISOString(),
+          kind: "auth_attempt",
+          outcome: "rejected",
+          actor: "pairing-code",
+          ...(request.crabbyRequestId === undefined
+            ? {}
+            : { correlationId: request.crabbyRequestId }),
+          detail: { action: "redeem", reason: result.reason ?? "unknown" },
+        });
         throw new GatewayError({
           code: `pairing_${result.reason ?? "unknown"}`,
           // §3.2: "failure text names the next action, never a bare 'invalid code'".
@@ -1915,6 +2048,17 @@ function registerAuthRoutes(
           retryable: false,
         });
       }
+      recordAudit(deps.db, {
+        ts: new Date().toISOString(),
+        kind: "auth_attempt",
+        outcome: "ok",
+        actor: result.clientId ?? "unknown",
+        interface: "cli",
+        ...(request.crabbyRequestId === undefined
+          ? {}
+          : { correlationId: request.crabbyRequestId }),
+        detail: { action: "redeem" },
+      });
       return reply.send({ clientId: result.clientId, token: result.token });
     },
   );
@@ -1959,6 +2103,22 @@ function registerAuthRoutes(
       // caller who did not ask has just learned what a fresh identity holds. `mintPairingCode` returns the pairing
       // record itself (`{code, clientId, expiresAt}`), which is about the code and not about the authority behind it —
       // so the field is added here rather than by widening a storage type whose name says what it is.
+      recordAudit(deps.db, {
+        ts: new Date().toISOString(),
+        kind: "auth_attempt",
+        outcome: "ok",
+        actor: minted.clientId,
+        interface: request.body.interface,
+        ...(request.crabbyRequestId === undefined
+          ? {}
+          : { correlationId: request.crabbyRequestId }),
+        detail: {
+          action: "mint",
+          name: request.body.name,
+          restricted: request.body.restrict !== undefined,
+          capabilities: restricted.capabilities,
+        },
+      });
       return reply.code(201).send({ ...minted, capabilities: restricted.capabilities });
     },
   );
@@ -1982,6 +2142,16 @@ function registerAuthRoutes(
     // one in a migration is a schema change the documents have not asked for. The durable record of "this identity
     // was ended on this date" belongs in §14's audit table, which is M2's — O-071 keeps that from being forgotten.
     if (!revoke(deps.db, id)) throw notFound(`client ${id}`);
+    // O-071's "the durable record belongs in §14's audit table" — this is that row.
+    recordAudit(deps.db, {
+      ts: new Date().toISOString(),
+      kind: "auth_attempt",
+      outcome: "ok",
+      actor: request.crabbyClient?.id ?? "local",
+      ...(request.crabbyClient === undefined ? {} : { interface: request.crabbyClient.interface }),
+      ...(request.crabbyRequestId === undefined ? {} : { correlationId: request.crabbyRequestId }),
+      detail: { action: "revoke", revoked: id },
+    });
     // §3.1's second half, and the reason the stream route records which identity opened it: a revoked client must not
     // keep watching a device it has just been told it may not touch. Each live stream gets an `end` frame naming the
     // reason before its socket closes, because a stream that simply stops is what §5.4 tells a client to recover from by
@@ -3397,6 +3567,23 @@ function registerApprovalRoutes(
         resumed: woken.resumed,
         note: woken.note,
       };
+      // §14's approval row: who decided, from which surface, on what tier, with what outcome. The payload already
+      // rides the task event above; this is the trail a reader who is not reading one task's journal sees.
+      recordAudit(deps.db, {
+        ts: new Date().toISOString(),
+        kind: "approval",
+        outcome: outcome.result.ok ? "ok" : "error",
+        actor: client.id,
+        interface: client.interface,
+        taskId: outcome.result.record.request.taskId,
+        ...(correlationId === undefined ? {} : { correlationId }),
+        detail: {
+          approvalId: outcome.result.record.id,
+          decision: body.decision,
+          tier: outcome.result.record.request.tier,
+          tool: outcome.result.record.request.tool,
+        },
+      });
       if (hasKey && typeof key === "string") {
         remember(deps.db, { key, route, requestHash: hash, response });
       }
@@ -3566,6 +3753,18 @@ function requireLoopback(request: FastifyRequest, what: "pairing" | "identity ma
       retryable: false,
     });
   }
+}
+
+/** Query limits for the diagnostics reads: a bounded integer, defaulted, never trusted. */
+function boundedLimit(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || !/^\d+$/.test(raw)) return fallback;
+  const value = Number(raw);
+  return Math.min(Math.max(value, 1), 500);
+}
+
+function positiveInt(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || !/^\d+$/.test(raw)) return fallback;
+  return Number(raw);
 }
 
 function requireToken(db: SqliteDb, request: FastifyRequest): Identity {

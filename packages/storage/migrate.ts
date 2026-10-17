@@ -499,6 +499,32 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // §14's audit trail: append-only by construction — the store exports no update or delete, and the table has no
+    // foreign keys a cascade could follow, because an audit row that could be removed by deleting the task it names
+    // would be a trail an agent could erase (§14's own refusal).
+    version: 14,
+    name: "audit",
+    up(db) {
+      db.exec(`
+        CREATE TABLE audit_log (
+          id             TEXT PRIMARY KEY,
+          ts             TEXT NOT NULL,
+          kind           TEXT NOT NULL CHECK (kind IN
+                         ('auth_attempt', 'approval', 'config_change', 'tool_invocation', 'extension_install', 'tunnel', 'job_delete')),
+          actor          TEXT,
+          interface      TEXT,
+          session_id     TEXT,
+          task_id        TEXT,
+          correlation_id TEXT,
+          outcome        TEXT NOT NULL CHECK (outcome IN ('ok', 'rejected', 'error')),
+          detail         TEXT
+        );
+        CREATE INDEX audit_kind ON audit_log (kind, ts);
+        CREATE INDEX audit_task ON audit_log (task_id, ts);
+      `);
+    },
+  },
 ];
 
 export function schemaVersion(db: SqliteDb): number {

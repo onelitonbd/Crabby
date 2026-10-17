@@ -6,6 +6,7 @@
 // table to own until its milestone does. Splitting a file to keep a diagram pretty remains the kind of structure this
 // project has already decided against.
 export * from "./approvals.ts";
+export * from "./audit.ts";
 export * from "./checkpoints.ts";
 export * from "./clients.ts";
 export * from "./db.ts";

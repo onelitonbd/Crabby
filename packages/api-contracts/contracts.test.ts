@@ -46,7 +46,7 @@ describe("identifiers", () => {
     // Five until D-112 added `msg_` for a conversation turn, six until D-135 added `mem_` for a memory entry; the
     // assertion is the list rather than a count, so the next decision that adds a prefix has to touch this line on
     // purpose rather than by accident.
-    assert.deepEqual([...ID_PREFIXES], ["evt", "ses", "apr", "req", "tsk", "msg", "mem"]);
+    assert.deepEqual([...ID_PREFIXES], ["evt", "ses", "apr", "req", "tsk", "msg", "mem", "aud"]);
     for (const prefix of ID_PREFIXES) {
       const id = newId(prefix);
       assert.ok(isId(prefix, id), `${id} must match ${idPattern(prefix)}`);

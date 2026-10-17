@@ -357,10 +357,10 @@ function providerChecks(input: DoctorInput): Check[] {
 
   const out: Check[] = [];
   if (ready.length === 0) {
-    // `deferred` when every refusal is a subsystem that arrives later, `warn` when at least one is a mistake the user
-    // can correct now. Decided from the configuration rather than from the reason text, so rewording a refusal cannot
-    // silently move a check between the two.
-    const deferred = refused.every((entry) => {
+    // `warn` when the user can correct the configuration now — which, since the vault arrived (M5, D-139),
+    // a keyed entry is: the fix is two commands. Decided from the configuration rather than from the reason
+    // text, so rewording a refusal cannot silently move a check between the two.
+    const keyed = refused.every((entry) => {
       const config = entries[entry.id];
       return (
         config?.key !== undefined ||
@@ -369,11 +369,11 @@ function providerChecks(input: DoctorInput): Check[] {
     });
     out.push({
       id: "provider",
-      status: deferred ? "deferred" : "warn",
+      status: "warn",
       summary: `no provider entry composes (${refused.length} refused)`,
       detail: refused.map((entry) => `${entry.id}: ${refusalOf(entry)}`).join("; "),
-      fix: deferred
-        ? "an endpoint that needs no key composes now; a keyed one waits for the vault (M5, F-56)"
+      fix: keyed
+        ? "`crabby vault set <provider-id>` stores the key (stdin, never argv), then `crabby gateway restart` composes the entry with it"
         : "crabby config schema --json prints the shape an entry must have",
     });
     out.push({

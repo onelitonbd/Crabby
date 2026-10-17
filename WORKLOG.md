@@ -314,3 +314,22 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   DECISIONS **D-139** (counter 139) + 4A ম্যাপ; CONSISTENCY_REVIEW **F-56 answered**; ROADMAP 75th slice;
   parity **৫০ routes**।
 - **টেস্ট:** vault.test.ts ৭/৭, vault HTTP ৩/৩, vault CLI ৩/৩, compose ১৭/১৭।
+## Slice 11 — M5 slice-2: Quick Tunnel (§13, D-066-র lifecycle) — 2026-10-17
+
+- **`packages/gateway/tunnel.ts`:** `QuickTunnel` host — `cloudflared tunnel --url <loopback>` নিজের process group-এ
+  (stop = group signal, D-066-র ৫s drain → SIGKILL; orphan মানেই exposure বেঁচে থাকা); URL `*.trycloudflare.com`
+  pattern দিয়ে stdout/stderr থেকে discover (৬০s wall — না এলে failed start, শিশুর শেষ কথাসহ); `CRABBY_TUNNEL_COMMAND`
+  override; টেস্ট inject করা command/script দিয়ে।
+- **routes:** `POST /tunnel` (body-তে `confirm: true` বাধ্যতামূলক — T3 confirm flag; উত্তরে fresh URL + reachable
+  identities; ready/starting-এ `409 tunnel_active`; ব্যর্থতায় `tunnel_start_failed`), `DELETE /tunnel` (পুরো বন্ধ;
+  দ্বিতীয়বার 404)। `/health`-র listener.mode live tunnel-এ `tunnel`; `/status`-র tunnel রো host-এর snapshot থেকে;
+  `tunnel` audit রো (start/stop); `system.tunnel.started/stopped` bus-event; `onClose`-তে host.stop()।
+- **CLI `tunnel on/off/status`:** on = T3 প্রম্পট (reachable list ছাপে, §13-র বাক্য), `--yes` স্ক্রিপ্ট-পথ; off =
+  revoke; status = Gateway-র live state (URL মনে রাখে না — D-066 discover-don't-assume)। Registry-র ৩টা planned রো
+  এখন ready।
+- **contracts:** `packages/api-contracts/tunnel.ts` (TunnelBody{confirm}, TunnelAnswer{url,reachable})।
+- **টেস্ট:** tunnel.test.ts ৬/৬ (fake binary — URL pattern, stderr discover, group-kill pgrep-প্রমাণিত, silent-exit
+  last-words, double-start refuse, absent binary); tunnel HTTP ২/২ (confirm-gate, reachable list, mode flip, 409,
+  stop→404, audit)।
+- **docs:** INTERFACES §4.4-র দুই tunnel রো নতুন চুক্তি + §7.1 ready; ROADMAP 76th slice + §7-তে M5 underway নোট;
+  parity **৫১ routes**।

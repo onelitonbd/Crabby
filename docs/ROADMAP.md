@@ -1605,7 +1605,24 @@ extension routes over the installed-record store — the exit gate is asserted w
 report's `mapped`/`unknown`/`allowedTools.granted: never` in `packages/extensions/convert.test.ts`, the routes and
 trail in `tests/integration/extensions.test.ts`, the terminal verbs in `tests/unit/ext-cli.test.ts`.
 
+**Seventy-sixth slice — the Quick Tunnel: reachability as one confirmed decision (§13, M5's second slice).**
+`POST /api/v1/tunnel` carries `confirm: true` in its body — the flag the interfaces' approval text ends in, after
+it lists the paired identities that become remotely reachable — and the answer carries the fresh URL and that list.
+The host is an injected `TunnelHost`: the default spawns `cloudflared tunnel --url <loopback target>` in its own
+process group, discovers the `*.trycloudflare.com` URL from the child's output within a 60 s wall, and `stop`
+signals the *group* (D-066's 5 s drain, then SIGKILL), because an orphaned cloudflared is exposure that outlived
+the decision to stop. The route holds the one-decision rule (`409 tunnel_active`), a start whose child dies or
+goes silent fails with the child's last words, `DELETE` is idempotent truth (`404` on nothing-to-stop), `/health`'s
+listener mode flips to `tunnel` while one is live, `/status`'s row answers from the host, the trail records start
+and stop, and `system.tunnel.started/stopped` publish on the bus. The CLI's `tunnel on/off/status` turn planned:
+`on` prints the reachable-identity sentence before asking, `--yes` is the scripting path, `off` revokes, `status`
+reads the Gateway's live state rather than remembering a URL (D-066: clients discover, never assume). Gates:
+tunnel 6/6 (fake binary), tunnel HTTP 2/2, full sweep, typecheck, biome, parity (51 routes), docs:check.
+
 ## 7. Phase M5 — Security hardening, remote access, isolation decision
+
+*Underway (2026-10-17): the vault (slice 75, D-139) and the Quick Tunnel (slice 76) are done; the pairing/last-seen
+data, §4.5's runtime re-evaluation, the O-008 decision, the §17 Termux suite and `crabby doctor --security` remain.*
 
 - Secrets vault: OS keychain where available, encrypted-file fallback with lock state everywhere (D-031).
 - Pairing and revocation finished across all four interfaces (D-030), plus `crabby auth list` last-seen data.

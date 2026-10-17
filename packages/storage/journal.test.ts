@@ -339,8 +339,8 @@ describe("the SQLite journal", () => {
     // code until the migration runs. That is why every process migrates on startup rather than lazily, and why this test
     // asserts the upgrade instead of the state before it.
     assert.deepEqual(migrate(db), {
-      applied: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-      version: 15,
+      applied: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+      version: 16,
     });
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS c FROM task").get() as { c: number } | undefined)?.c,

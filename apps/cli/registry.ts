@@ -686,28 +686,29 @@ export const COMMANDS: readonly CommandSpec[] = [
     milestone: "M2 (restart is T3 and needs the approval service)",
   },
   {
+    // M5 (§13, D-066's lifecycle): on is the T3 act — the prompt lists which paired identities become
+    // remotely reachable, and the answer prints the fresh URL with the never-assume sentence.
     noun: "tunnel",
     verb: "on",
-    summary: "expose the Gateway through a tunnel (T3, SECURITY.md §13)",
-    flags: [],
-    status: "planned",
-    milestone: "the tunnel slice — SECURITY.md §13 keeps tunnels out of the initial release",
+    summary: "expose the Gateway through a Quick Tunnel (T3, SECURITY.md §13)",
+    flags: ["--json", "--yes"],
+    status: "ready",
   },
   {
     noun: "tunnel",
     verb: "off",
-    summary: "revoke exposure and close the listener",
-    flags: [],
-    status: "planned",
-    milestone: "the tunnel slice — SECURITY.md §13 keeps tunnels out of the initial release",
+    summary:
+      "revoke exposure — the child process group is signalled and the listener closes (D-066 drain)",
+    flags: ["--json"],
+    status: "ready",
   },
   {
     noun: "tunnel",
     verb: "status",
-    summary: "the current URL and which identities are reachable",
+    summary:
+      "the live state from the Gateway, and the URL when one is ready — discovered, never remembered",
     flags: ["--json"],
-    status: "planned",
-    milestone: "the tunnel slice — SECURITY.md §13 keeps tunnels out of the initial release",
+    status: "ready",
   },
   {
     noun: "web",

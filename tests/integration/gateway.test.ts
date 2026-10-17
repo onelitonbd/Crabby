@@ -193,29 +193,32 @@ describe("gateway over http", () => {
     // on?" answerable by someone holding a phone and a backup.
     assert.equal(
       body.storage.schemaVersion,
-      15,
+      16,
       "M2's `approval` table advanced the ledger from 1 to 2, §6.2's cancellation column (D-091) from 2 to 3, D-065's " +
         "checkpoint table (D-095) from 3 to 4, §4.5's `job` and `job_run` tables (D-046, D-057) from 4 to 5, the " +
         "`session` record §2.1's conversations need (D-104) from 5 to 6, D-108's per-task model pin from 6 to 7, " +
         "§3.6 stage 3's switch the record has to show from 7 to 8, the identity a task belongs to (D-111) from 8 to 9, " +
         "§2.5's message table (D-112) from 9 to 10, D-116's summary coverage columns from 10 to 11, D-119's pins from 11 to 12 " +
         "and M4's memory tables — provenance, references and an FTS5 index (D-073, D-065, D-135) — from 12 to 13, " +
-        "D-133's audit trail from 13 to 14 and the run history's release from its job from 14 to 15, and this " +
-        "literal is why a migration cannot land quietly",
+        "D-133's audit trail from 13 to 14, the run history's release from its job from 14 to 15, and M5's vault " +
+        "kind on the trail (D-139) from 15 to 16 — and this literal is why a migration cannot land quietly",
     );
   });
 
-  it("reports readiness over exactly §4.1's five subsystems", async () => {
+  it("reports readiness over exactly §4.1's six subsystems", async () => {
     const body = (await h.client.status()).body as {
       ready: boolean;
       subsystems: Record<string, { state: string; reason?: string }>;
     };
+    // The vault joined at M5 (D-139) — a subsystem with its own lock state is one a readiness row owes an
+    // answer about, the same reason the tunnel and the scheduler are rows.
     assert.deepEqual(Object.keys(body.subsystems).sort(), [
       "extensions",
       "providers",
       "scheduler",
       "storage",
       "tunnel",
+      "vault",
     ]);
     assert.equal(body.subsystems.storage?.state, "ready");
     assert.equal(

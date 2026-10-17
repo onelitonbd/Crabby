@@ -21,5 +21,6 @@ export * from "./models.ts";
 export * from "./session.ts";
 export * from "./task.ts";
 export * from "./tools.ts";
+export * from "./tunnel.ts";
 export * from "./validate.ts";
 export * from "./vault.ts";

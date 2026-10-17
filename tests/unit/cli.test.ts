@@ -529,14 +529,16 @@ test("`doctor` defers a keyed provider instead of failing it, and names the mile
   );
   const { code, payload } = doctor(state);
   const provider = checkIn(payload, "provider");
-  assert.equal(provider?.status, "deferred", provider?.detail ?? "");
-  assert.equal(code, 0, "a subsystem this build does not have is not a broken install (F-28)");
+  // The vault arrived (M5, D-139, closing F-56), so a keyed entry is no longer `deferred` on a missing
+  // subsystem — it is a configuration the user can complete now, and the fix is the two commands.
+  assert.equal(provider?.status, "warn", provider?.detail ?? "");
+  assert.equal(code, 0, "a refused entry is a warning about configuration, not a broken install (F-28)");
   assert.match(
     provider?.fix ?? "",
-    /M5/,
-    "the fix names the milestone, so `deferred` is a plan and not a shrug",
+    /vault set/,
+    "the fix names the commands: the store, then the restart that composes with it",
   );
-  assert.match(provider?.detail ?? "", /F-56/);
+  assert.match(provider?.detail ?? "", /vault:\/\/groq/, "the detail quotes the reference, never a value");
   assert.equal(checkIn(payload, "model")?.status, "warn");
 });
 
@@ -1202,10 +1204,18 @@ test("there is no `crabby session delete`: the destructive verb lives under `his
     .filter((line) => /delete|destroy|forget/i.test(line))
     .map((line) => line.trim().split(/\s+/).slice(0, 3).join(" "))
     .sort();
+  // `vault delete` (M5, D-139) is the fourth destructive verb and destroys no record of work: it revokes a
+  // secret (§7's rotation-and-revocation pair), and the trail stays — so the count that matters (commands that
+  // destroy a conversation or its history) is still exactly one.
   assert.deepEqual(
     destructive,
-    ["crabby history delete-session", "crabby memory forget", "crabby memory forget-topic"].sort(),
-    `three destructive verbs in the grammar and still exactly one of them destroys a conversation; found ${JSON.stringify(destructive)}`,
+    [
+      "crabby history delete-session",
+      "crabby memory forget",
+      "crabby memory forget-topic",
+      "crabby vault delete",
+    ].sort(),
+    `four destructive verbs and still exactly one of them destroys a conversation; found ${JSON.stringify(destructive)}`,
   );
   assert.ok(
     !destructive.some((line) => line.startsWith("crabby session")),

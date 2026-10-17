@@ -144,6 +144,9 @@ import {
   TaskId,
   type TaskRecord,
   type TaskState,
+  type TunnelAnswerT,
+  TunnelBody,
+  type TunnelBodyT,
   type VaultLockAnswerT,
   type VaultStatusBodyT,
   type VaultUnlockAnswerT,
@@ -271,6 +274,7 @@ import {
   validationError,
 } from "./errors.ts";
 import { comment, frame, gapFrame, HEARTBEAT_MS, openStream, type StreamState } from "./sse.ts";
+import { QuickTunnel, type TunnelSnapshot } from "./tunnel.ts";
 
 /** What a run needs that only the party that started the process knows. These four arrive together or not at all, and
  *  the bundling is the point: an executor with no model, or a model with no executor, is not a runner, and four
@@ -296,6 +300,15 @@ export interface DriveFacts {
    *  into its own banner but handed the loop the defaults would be a configuration that answers questions and changes
    *  nothing. */
   readonly limits?: Partial<LoopLimits> | undefined;
+}
+
+/** The tunnel's host interface: one start, one stop, a snapshot. A route holds this, never a child process,
+ *  so a test can inject a host that answers without a binary (§17's "security-relevant tests must run without
+ *  live …" applies to a Cloudflare handshake doubly). */
+export interface TunnelHost {
+  start(target: string): Promise<{ ok: true; url: string } | { ok: false; reason: string }>;
+  stop(): Promise<void>;
+  snapshot(): TunnelSnapshot;
 }
 
 export interface GatewayDeps {
@@ -327,6 +340,10 @@ export interface GatewayDeps {
    *  status row answers the real state, and the unlock/lock routes act — absent means this Gateway carries no
    *  vault at all, and the rows say that rather than implying a protection that does not exist. */
   readonly vault?: Vault | undefined;
+  /** §13's tunnel host, when the composition root wants this Gateway able to open one. Absent means the
+   *  routes refuse with the honest reason rather than spawning a binary a test cannot control; the default
+   *  composition root supplies a `QuickTunnel`. */
+  readonly tunnel?: TunnelHost | undefined;
   /** D-139's hot half of unlock: re-run the composition root's provider pass with the vault's resolver and
    *  swap `providers` in place, so `/status`, `/models` and the probe see the unlocked keys without a restart.
    *  The runner is deliberately *not* rebuilt — it keeps the composition it started with, and the unlock
@@ -401,6 +418,9 @@ const CLIENTS_PATH = "/api/v1/auth/clients";
 export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   const { db, log } = deps;
   const bus = createEventBus();
+  // The default host spawns `cloudflared` (or CRABBY_TUNNEL_COMMAND); a test that injects `tunnel` never
+  // reaches this line. Created here so the shutdown hook below always has the same object the routes used.
+  const tunnelHost: TunnelHost = deps.tunnel ?? new QuickTunnel({ log });
   /** §4.1's `availability` predicate needs a fact this file must not read from `process.env` inside a handler, and a
    *  runner needs the same fact for the same reason — so it is resolved once, at composition, and both read the answer
    *  rather than each asking the process again (`RunnerDeps.platform`, `deps.platformFacts`). */
@@ -735,11 +755,17 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
       .send(errorEnvelope(error.body));
   });
 
-  registerSystemRoutes(app, deps, bus, runner, scheduler, jobStore);
+  registerSystemRoutes(app, deps, bus, runner, scheduler, jobStore, tunnelHost);
   registerPolicyRoutes(app, deps, platform);
   registerConfigRoutes(app, deps);
   registerModelRoutes(app, deps);
   registerMemoryRoutes(app, deps, memoryStore);
+  registerTunnelRoutes(app, deps, tunnelHost, bus);
+  // §13's teardown is D-066's drain: a clean shutdown stops the tunnel with the listener, so exposure never
+  // outlives the process that decided it.
+  app.addHook("onClose", async () => {
+    await tunnelHost.stop();
+  });
   registerVaultRoutes(app, deps, (name) => {
     // §3.6's system family: the lock transitions are events every interface knows how to carry, and a screen
     // that was showing "locked" learns "unlocked" without a poll. Not journaled — the status routes are the
@@ -1274,6 +1300,7 @@ function registerSystemRoutes(
   runner: Runner | undefined,
   scheduler: Scheduler | undefined,
   jobStore: JobStore,
+  tunnelHost: TunnelHost,
 ): void {
   app.get("/api/v1/health", async (_request, reply) => {
     const listener = boundAddress(app);
@@ -1281,7 +1308,13 @@ function registerSystemRoutes(
       status: "ok",
       version: deps.version,
       uptimeMs: Math.max(0, Math.round(Date.now() - deps.startedAt.getTime())),
-      listener: { mode: deps.listenerMode, host: listener.host, port: listener.port },
+      // §13: the mode a remote client needs told apart from local is the tunnel's live state, not the
+      // startup fact — a Gateway that opened a tunnel at 14:02 is `tunnel` at 14:03.
+      listener: {
+        mode: tunnelHost.snapshot().state === "ready" ? ("tunnel" as const) : deps.listenerMode,
+        host: listener.host,
+        port: listener.port,
+      },
       // §7's "lock state is visible" on the liveness row: managed when a store was opened, with its state;
       // `managed: false` is the honest answer for a Gateway composed without a vault, and `locked: false` would
       // claim a protection that does not exist.
@@ -1304,10 +1337,7 @@ function registerSystemRoutes(
           : { state: "ready" as const },
       providers: providersRow(deps.providers, runner !== undefined),
       extensions: extensionsRow(deps.layout.stateDir),
-      tunnel: {
-        state: "absent",
-        reason: "no tunnel in this process — POST /api/v1/tunnel starts one (§13)",
-      },
+      tunnel: tunnelRow(tunnelHost),
       vault: vaultRow(deps.vault),
     } as const;
     return reply.send({
@@ -2251,6 +2281,146 @@ function registerModelRoutes(app: FastifyInstance, deps: GatewayDeps): void {
  *
  *  **No memory *content* reaches the log** (§12): the lines carry ids, counts and lengths — the audit question is
  *  "who forgot which entry", never "what did it say". */
+/** The status row's answer from the live host: `ready` carries the URL (§13: discovered, printed, never
+ *  assumed), the transient states carry their own word, and `off` names the route that starts one. */
+function tunnelRow(host: TunnelHost): { state: string; url?: string; reason?: string } {
+  const snapshot = host.snapshot();
+  if (snapshot.state === "ready")
+    return { state: "ready", ...(snapshot.url === undefined ? {} : { url: snapshot.url }) };
+  if (snapshot.state === "starting")
+    return {
+      state: "starting",
+      reason: "the tunnel process is up and the URL has not arrived yet",
+    };
+  if (snapshot.state === "failed") {
+    return {
+      state: "failed",
+      reason: `${snapshot.error ?? "the tunnel failed"} — DELETE /api/v1/tunnel clears it, POST starts another`,
+    };
+  }
+  return {
+    state: "absent",
+    reason: "no tunnel in this process — POST /api/v1/tunnel starts one (§13)",
+  };
+}
+
+/** §13's two routes. Enabling is the T3 act and the body carries `confirm: true` — the interfaces' approval
+ *  text (which lists the paired identities that become remotely reachable) ends in this flag, and a tunnel
+ *  that started on an unconfirmed body would be the one T3 the wire could flip by accident. The audit row and
+ *  the `system.tunnel.*` event record the transitions; the URL is not a secret — in §13's own words it is
+ *  reachability only, and the token is still the authentication. */
+function registerTunnelRoutes(
+  app: FastifyInstance,
+  deps: GatewayDeps,
+  host: TunnelHost,
+  bus: ReturnType<typeof createEventBus>,
+): void {
+  app.post<{ Body: TunnelBodyT }>(
+    "/api/v1/tunnel",
+    { schema: { body: TunnelBody } },
+    async (request, reply) => {
+      // The route holds the one-decision rule (a host that refuses is not enough — the state question is the
+      // route's): a ready or starting tunnel answers 409 and names the stop that clears it.
+      const existing = host.snapshot();
+      if (existing.state === "ready" || existing.state === "starting") {
+        throw new GatewayError({
+          code: "tunnel_active",
+          message:
+            existing.state === "ready"
+              ? `a tunnel is already active (${existing.url ?? "url unknown"}) — DELETE /api/v1/tunnel stops it before another starts`
+              : "a tunnel is still starting — DELETE /api/v1/tunnel cancels it",
+          class: "conflict",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      const listener = boundAddress(app);
+      const opened = await host.start(`http://${listener.host}:${String(listener.port)}`);
+      const auditTransition = (
+        action: string,
+        outcome: "ok" | "rejected" | "error",
+        detail: Record<string, unknown>,
+      ): void => {
+        recordAudit(deps.db, {
+          ts: new Date().toISOString(),
+          kind: "tunnel",
+          outcome,
+          ...(request.crabbyClient === undefined ? {} : { actor: request.crabbyClient.id }),
+          ...(request.crabbyClient === undefined
+            ? {}
+            : { interface: request.crabbyClient.interface }),
+          ...(request.crabbyRequestId === undefined
+            ? {}
+            : { correlationId: request.crabbyRequestId }),
+          detail: { action, ...detail },
+        });
+      };
+      if (!opened.ok) {
+        auditTransition("start", "rejected", { reason: opened.reason });
+        throw new GatewayError({
+          code: "tunnel_start_failed",
+          message: opened.reason,
+          class: "platform-unsupported",
+          retryable: true,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      }
+      // §13's required sentence, carried in the answer: which paired identities just became remotely reachable.
+      const reachable = listIdentities(deps.db).map((identity) => ({
+        name: identity.name,
+        interface: identity.interface,
+      }));
+      auditTransition("start", "ok", { url: opened.url, reachable: reachable.length });
+      deps.log.info("tunnel started", {
+        url: opened.url,
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      bus.publish(systemEvent("tunnel.started", { url: opened.url }));
+      const answer: TunnelAnswerT = { url: opened.url, reachable };
+      return reply.code(201).send(answer);
+    },
+  );
+
+  app.delete("/api/v1/tunnel", async (request, reply) => {
+    const snapshot = host.snapshot();
+    if (snapshot.state === "off") {
+      throw notFound("tunnel", request.crabbyRequestId);
+    }
+    await host.stop();
+    recordAudit(deps.db, {
+      ts: new Date().toISOString(),
+      kind: "tunnel",
+      outcome: "ok",
+      ...(request.crabbyClient === undefined ? {} : { actor: request.crabbyClient.id }),
+      ...(request.crabbyClient === undefined ? {} : { interface: request.crabbyClient.interface }),
+      ...(request.crabbyRequestId === undefined ? {} : { correlationId: request.crabbyRequestId }),
+      detail: { action: "stop", ...(snapshot.url === undefined ? {} : { url: snapshot.url }) },
+    });
+    deps.log.info("tunnel stopped", {
+      ...(request.crabbyClient === undefined ? {} : { by: request.crabbyClient.id }),
+      ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+    });
+    bus.publish(systemEvent("tunnel.stopped", {}));
+    return reply.send({ stopped: true });
+  });
+}
+
+/** The one system-event shape for the tunnel and vault routes: bus-only (the status routes are the replayable
+ *  truth), with no session or task invented for an event that belongs to neither. */
+function systemEvent(
+  name: "tunnel.started" | "tunnel.stopped" | "vault.locked" | "vault.unlocked",
+  payload: Record<string, unknown>,
+): import("@crabby/api-contracts").Event {
+  return {
+    id: newId("evt"),
+    schemaVersion: SCHEMA_VERSION,
+    type: `system.${name}`,
+    ts: new Date().toISOString(),
+    seq: 0,
+    payload,
+  };
+}
+
 /** §7's lock state on the liveness row — a shape, not a string, so an interface can colour it without parsing. */
 function vaultHealth(vault: Vault | undefined): {
   managed: boolean;

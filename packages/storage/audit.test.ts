@@ -107,7 +107,7 @@ describe("the audit store (§14)", () => {
     );
   });
 
-  it("knows the seven kinds §14 lists and refuses nothing else at the type level but filters at the store's edge", () => {
+  it("knows the eight kinds §14 lists and refuses nothing else at the type level but filters at the store's edge", () => {
     assert.deepEqual(
       [...AUDIT_KINDS],
       [
@@ -118,6 +118,7 @@ describe("the audit store (§14)", () => {
         "extension_install",
         "tunnel",
         "job_delete",
+        "vault",
       ],
     );
     // The CHECK constraint is the database's own opinion; a bad kind is refused at the boundary.

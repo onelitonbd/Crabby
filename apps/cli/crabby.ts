@@ -50,6 +50,7 @@ import { runTask, type TaskVerb } from "./commands/task.ts";
 import { runTelegramStart } from "./commands/telegram.ts";
 import { runTools } from "./commands/tools.ts";
 import { runTuiCommand } from "./commands/tui.ts";
+import { runTunnel } from "./commands/tunnel.ts";
 import { runVault } from "./commands/vault.ts";
 import { readVersion, runVersion } from "./commands/version.ts";
 import { runWebOpen } from "./commands/web.ts";
@@ -319,6 +320,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       // C-E13: the servers file is the MCP verbs' own state (D-137), read and written here like the extensions
       // repo is — no Gateway round trip, because no route answers for this file.
       return runMcp(verb, rest, layout, renderer);
+    }
+    case "tunnel": {
+      // §13's lifecycle: every verb is a Gateway round trip — the URL is the Gateway's discovery to make,
+      // never the CLI's memory to keep.
+      return await runTunnel(verb ?? "", rest, layout, renderer);
     }
     case "vault": {
       // M5's secrets verbs: the store is opened per command (a process that kept the key would be a second

@@ -242,6 +242,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
           termuxVersion: facts.termuxVersion,
         },
         renderer,
+        // M5's posture summary: the security subset with plain-language sentences beside it.
+        { security: rest.includes("--security") },
       );
     }
     case "config": {

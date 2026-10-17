@@ -336,7 +336,7 @@ pipeable and free of color when not a TTY.
 
 | Area | Commands |
 | --- | --- |
-| Setup | `init`, `doctor`, `status`, `version` |
+| Setup | `init`, `doctor` (`--security` prints the plain-language posture summary — M5), `status`, `version` |
 | Chat | `chat "…"` (one-shot), `chat --session <id>` |
 | Tasks | `task run "…"`, `task ls`, `task show <id>`, `task watch <id>`, `task cancel <id>`, `task resume <id>` |
 | Approvals | `approval ls`, `approval approve <id>`, `approval deny <id>` |

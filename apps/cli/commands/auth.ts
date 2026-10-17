@@ -205,7 +205,11 @@ function describe(item: Record<string, unknown>): string {
       : live === 1
         ? "connected, 1 live stream"
         : `connected, ${live} live streams`;
-  return `${String(item.name)} · ${String(item.interface)} · paired ${String(item.createdAt)} · ${seen}${caps}`;
+  // M5's last-seen row: an identity that authenticated but never returned reads differently from one that
+  // never authenticated at all, because "this token has been sitting unused since the 14th" is a different
+  // decision than "this token is in active use" — and revocation is the decision these rows feed.
+  const lastUsed = typeof item.lastUsedAt === "string" ? ` · last seen ${item.lastUsedAt}` : " · never used";
+  return `${String(item.name)} · ${String(item.interface)} · paired ${String(item.createdAt)} · ${seen}${lastUsed}${caps}`;
 }
 
 function defaultName(): string {

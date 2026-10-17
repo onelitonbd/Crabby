@@ -1619,6 +1619,16 @@ and stop, and `system.tunnel.started/stopped` publish on the bus. The CLI's `tun
 reads the Gateway's live state rather than remembering a URL (D-066: clients discover, never assume). Gates:
 tunnel 6/6 (fake binary), tunnel HTTP 2/2, full sweep, typecheck, biome, parity (51 routes), docs:check.
 
+**Seventy-seventh slice — the last-seen row and the posture summary: the M5 odds that were left in a list.**
+`crabby auth list` now prints each identity's `lastUsedAt` beside its paired-at — the roadmap's "last-seen data",
+which the route always carried and the terminal never showed; "idle since the 14th" and "in active use" are
+different revocation decisions, and the row is what tells them apart. `crabby doctor --security` prints the
+security-relevant subset of the same checks the full run collects — no second collector, so the two cannot
+disagree — with plain-language posture sentences beside them: what stands between a stranger and this device's
+agent, in the user's words (workspace confinement, ask-first approvals, the vault's actual state, and the §15
+no-sandbox sentence on Termux), riding both the human lines and the `--json` document. Gates: cli 55/55, full
+sweep, typecheck, biome, parity, docs:check.
+
 ## 7. Phase M5 — Security hardening, remote access, isolation decision
 
 *Underway (2026-10-17): the vault (slice 75, D-139) and the Quick Tunnel (slice 76) are done; the pairing/last-seen

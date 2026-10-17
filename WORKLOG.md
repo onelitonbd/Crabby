@@ -333,3 +333,11 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   stop→404, audit)।
 - **docs:** INTERFACES §4.4-র দুই tunnel রো নতুন চুক্তি + §7.1 ready; ROADMAP 76th slice + §7-তে M5 underway নোট;
   parity **৫১ routes**।
+## Slice 12 — M5 slice-3: auth last-seen + `doctor --security` posture — 2026-10-17
+
+- **`crabby auth list`:** প্রতি রোতে `last seen <ts>` / `never used` (route আগে থেকেই lastUsedAt দিত, CLI দেখাত না) —
+  revocation সিদ্ধান্তের তথ্য।
+- **`crabby doctor --security`:** security-relevant check-উপসেট (data.dir/config/workspace/vault/shell/tunnel — একই
+  collector, দ্বিতীয় collector নয়) + plain-language posture বাক্য (workspace confinement, ask-first, vault-অবস্থা,
+  Termux no-sandbox §15 বাক্য); human লাইন + `--json` `posture[]` দুই চ্যানেলেই। registry-র doctor রো flag-সহ।
+- **টেস্ট:** cli 55/55 (নতুন: --security subset + posture assertions)।

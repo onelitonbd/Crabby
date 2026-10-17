@@ -464,6 +464,28 @@ function doctor(state: string): { code: number | null; payload: DoctorPayload; r
   return { code: run.code, payload: JSON.parse(run.out) as DoctorPayload, raw: run.out + run.err };
 }
 
+function doctorSecurity(state: string): { code: number | null; payload: DoctorPayload } {
+  const run = crabby(["doctor", "--security", "--json"], state);
+  return { code: run.code, payload: JSON.parse(run.out) as DoctorPayload };
+}
+
+test("`doctor --security` prints the security subset with a plain-language posture, and omits the rest", () => {
+  const root = tempDir();
+  const state = path.join(root, ".crabby");
+  crabby(["init"], state);
+  const { code, payload } = doctorSecurity(state);
+  assert.equal(code, 0);
+  // The subset: security-relevant ids only — the Node version and the native toolchain are not posture.
+  const ids = payload.checks.map((check) => check.id);
+  assert.ok(ids.every((id) => /^(data\.dir|config|workspace|vault|shell|tunnel)/.test(id)), ids.join(","));
+  assert.ok(ids.includes("vault"), "the vault is the first row a posture reader looks for");
+  // Plain language: the sentences name the user's life, not the build's subsystems.
+  const raw = JSON.stringify(payload);
+  assert.match(raw, /workspace roots/);
+  assert.match(raw, /ask first/, "the approval sentence is the posture's core promise");
+});
+
+
 function checkIn(payload: DoctorPayload, id: string) {
   return payload.checks.find((check) => check.id === id);
 }

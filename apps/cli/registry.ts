@@ -28,8 +28,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     noun: "doctor",
-    summary: "environment, Node, native modules, Termux constraints, vault, data dir",
-    flags: ["--json"],
+    summary: "environment, Node, native modules, Termux constraints, vault, data dir; --security prints the plain-language posture",
+    flags: ["--json", "--security"],
     status: "ready",
   },
   {

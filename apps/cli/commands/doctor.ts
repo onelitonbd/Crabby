@@ -49,12 +49,22 @@ export interface DoctorInput {
   readonly termuxVersion: string | undefined;
 }
 
-export function runDoctor(input: DoctorInput, renderer: Renderer): ExitCode {
+export function runDoctor(
+  input: DoctorInput,
+  renderer: Renderer,
+  options: { security?: boolean } = {},
+): ExitCode {
   // `SECURITY.md` §14: "Diagnostics commands must be safe to paste into a bug report: redaction is verified by tests,
   // not by hope." A validation problem can quote the offending value, so every string this command prints goes
   // through the same text filter the log serializer uses — before the renderer sees it, because that is the last
   // point where a paste-ready document is still under our control.
-  const checks = collectChecks(input).map(redactCheck);
+  const collected = collectChecks(input).map(redactCheck);
+  // M5's `--security` (the roadmap's "plain-language posture summary"): the security-relevant subset of the
+  // same checks, with one sentence a person can act on. Same collector, same redaction — a second collector
+  // would be a second opinion about what is security-relevant, and the two would drift.
+  const checks = options.security
+    ? collected.filter((check) => SECURITY_CHECK_IDS.some((prefix) => check.id.startsWith(prefix)))
+    : collected;
   let failed = 0;
   for (const check of checks) {
     if (check.status === "fail") failed += 1;
@@ -66,7 +76,15 @@ export function runDoctor(input: DoctorInput, renderer: Renderer): ExitCode {
       if (check.fix) renderer.fix(check.fix);
     }
   }
-  const payload = { checks, summary: tally(checks) };
+  // The posture rides both channels like a fix line does: a human reads the sentences as lines, a script gets
+  // them in the document — a summary a script cannot read would be a summary for nobody.
+  const posture = options.security ? postureSentences(checks, input) : [];
+  for (const sentence of posture) renderer.line("posture", sentence);
+  const payload = {
+    checks,
+    summary: tally(checks),
+    ...(posture.length === 0 ? {} : { posture: [...posture] }),
+  };
   if (failed > 0) {
     renderer.fail({
       ...payload,
@@ -76,6 +94,50 @@ export function runDoctor(input: DoctorInput, renderer: Renderer): ExitCode {
     return EXIT.failure;
   }
   return renderer.done(payload);
+}
+
+/** The check-id prefixes `--security` reads: everything that answers a §4 threat row or a §5–§13 rule. A new
+ *  check that belongs here joins this list in the same slice that adds it — a check nobody classified is a
+ *  check the posture summary silently omits. */
+const SECURITY_CHECK_IDS = ["data.dir", "config", "workspace", "vault", "shell", "tunnel"] as const;
+
+/** The plain-language posture: what stands between a stranger and this device's agent, in sentences whose
+ *  subject is the user's life, not the build's subsystems. A sentence is printed for each area the checks
+ *  covered; an area with a failing check says what that means in the world, not in the table. */
+function postureSentences(checks: readonly Check[], input: DoctorInput): readonly string[] {
+  const sentences: string[] = [];
+  const failing = checks.filter((check) => check.status === "fail");
+  if (failing.length > 0) {
+    sentences.push(
+      `${failing.length} security check(s) fail — fix them before trusting this install with a task ` +
+        "(the ✗ lines above name the fixes)",
+    );
+  }
+  // The vault check's *summary* names the state; the check's status only knows ok/warn — so the sentence is
+  // chosen from what the summary says, which is the detail the collector actually recorded.
+  const vaultCheck = checks.find((check) => check.id === "vault");
+  const vaultUnset = vaultCheck?.summary.includes("no vault yet");
+  sentences.push(
+    vaultCheck === undefined
+      ? "no vault check ran — `crabby doctor` without --security prints the full set"
+      : vaultUnset === true
+        ? "no vault yet — any provider key must stay out of config.json, and `crabby vault set <name>` creates the store"
+        : (vaultCheck.status === "ok"
+            ? "secrets are in the vault and it is unlocked; a locked vault means keyed providers wait, they never fall back to plaintext"
+            : "the vault needs attention (the ! line above names the fix) — keyed providers wait rather than fall back to plaintext, which is the design working"),
+  );
+  sentences.push(
+    "every file tool is confined to your workspace roots, and reads outside them (including ~/.ssh and the Crabby data dir) are denied",
+  );
+  sentences.push(
+    "dangerous actions ask first: shell commands, network fetches to new hosts and destructive writes pause for your approval on the paired interface you answer from",
+  );
+  if (input.facts.isTermux) {
+    sentences.push(
+      "on Termux there is no sandbox between Crabby and other Termux processes — the vault protects against casual disclosure, not against someone who already controls this account",
+    );
+  }
+  return sentences;
 }
 
 const SYMBOL: Record<CheckStatus, string> = {

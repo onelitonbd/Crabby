@@ -411,3 +411,25 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - **`docs/LIMITATIONS.md`:** §18-09-এর user-facing পেজ — no-sandbox, no local inference, no executable extension,
   once-only approvals, forward-only migration, tunnel fresh-URL, weaker file-store — প্রতিটা লাইনে সিদ্ধান্ত-লিংক।
 - **`docs/TROUBLESHOOTING.md`:** লক্ষণ → বিল্ড আসলে যে বাক্য ছাপে → টাইপ করার কমান্ড; doctor = triage entry।
+
+## বাকি-হিসাব — M6 (sandbox অংশ) শেষে (2026-10-17) — Telegram লগবুকের WORKLOG-mirror
+
+*টোকেন নেই → নিয়ম ৭ অনুযায়ী এখানেই মিরর।*
+
+**M6-র রিপো-সাইড সম্পূর্ণ ✅** — ৫টি slice, ৫টি push (M5-সমেত মোট ৯টি এই ফেজে):
+1. `e600186` — `crabby backup` (D-142): online backup, integrity-verified, secrets-excluded + manifest; restore §8-এ manual।
+2. `02dfa42` — CHANGELOG.md (D-143): Unreleased জমে, `v0.1.0` = M6 exit bar-এ।
+3. `dc24789` — license:audit + THIRD-PARTY-NOTICES.md + LICENSE (D-144): ৬০ প্যাকেজ, সব allowlist-এ।
+4. `1b0f20f` — docs/INSTALL.md + `engines.node >=22.22` (P1-মাপা): সতেজ clone-এ রিহার্সড।
+5. `6bf20fe` — রিলিজ-পেজ: README সত্য-বলা অবস্থায়, LIMITATIONS (§18-09), TROUBLESHOOTING।
+
+**গেট:** sweep 1492/1492 · tsc ✓ · biome 0 · parity 51 routes · docs:check ✓ (29 docs, 144 accepted · 11 proposed · 75 open)।
+
+**মালিকের হাতে যা বাকি (release bar):**
+1. `TG_BOT_TOKEN=… npm run telegram:check` → M3-র চার-ইন্টারফেস ডেমো।
+2. Termux-এ clean install rehearsal (docs/INSTALL.md-র ধাপ; O-001-র শেষ ক্লজ)।
+3. Performance pass (startup/memory/idle CPU/battery/WAL)।
+4. Probes-এর phone কলাম (P-003/P-004/P-010/P-011) + `termux-keystore` probe।
+5. এগুলো মিললে **`v0.1.0` কাটা** — "নতুন ব্যবহারকারী শুধু ডক পড়ে ফোনে একটা multi-step task শেষ করবে, LIMITATIONS-এ না-লেখা কিছুতে আটকাবে না।"
+
+**Post-v1:** O-008 strategy half, O-065, O-052, O-064, O-001-র ক্লজটি ছাড়া সব বন্ধ।

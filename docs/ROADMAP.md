@@ -1724,9 +1724,11 @@ always meant. Gates: docs:check (29 documents), full sweep, parity.
 
 ## 8. Phase M6 — Release readiness
 
-*Underway (2026-10-17): the backup/restore mechanics are shipped (D-142, slice 79); the install docs, license
-audit, notices, changelog and the release page remain. The performance pass is a phone measurement the owner's
-device owes, like the M3 demo.*
+*Everything this repository can ship is shipped (2026-10-17, slices 79–83): backup/restore (D-142), the changelog
+(D-143), the license audit and notices (D-144), the install path written and rehearsed, and the release pages
+(README, LIMITATIONS, TROUBLESHOOTING). What remains is the exit bar itself, and it is owner-device: a clean
+Termux install rehearsal (O-001's last clause), the performance pass, and a new user completing a multi-step task
+on the docs alone — the release bar, not "all features work." Then `v0.1.0` is cut.*
 
 - Install path for Termux, Linux, macOS written and rehearsed from a clean device; O-012 closed (install, update,
   rollback, backup, recovery).

@@ -150,7 +150,9 @@ Checklist:
 - Semver with an honest `0.x` phase: minor bumps may break, and each break is written in the changelog with the
   migration step.
 - `CHANGELOG.md` is user-facing: features, fixes, security notes, and **platform limitation changes**. Every change
-  to what a platform supports is a documented change, not an implementation detail.
+  to what a platform supports is a documented change, not an implementation detail. It exists as of M6 slice 2
+  (D-143): `Unreleased` accumulates, the version field stays `0.0.0` until the first release, and `v0.1.0` is cut
+  at this phase's exit bar.
 - Tag `v0.x.y`; publish from CI against a clean install check on Linux, macOS, and Termux.
 - Data migrations ship with a tested downgrade stance: if downgrade is unsupported, say so in the changelog and in
   `crabby doctor`.

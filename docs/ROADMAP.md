@@ -1679,6 +1679,17 @@ writes local files, the same class of local-only act as `init` and `vault set`. 
 back, the ledger stays honest, the file still answers as the version it was. Gates: backup 4/4, storage 29/29,
 cli 56/56, full sweep, typecheck, biome, parity, docs:check.
 
+**Eightieth slice — the changelog exists, and the 0.x policy has a home for it (D-143).** `docs/DEVELOPMENT.md` §9
+had decided the policy long ago — semver with an honest `0.x` phase, minor bumps may break, each break written in
+the changelog with its migration step — so the slice only gave it the file: `CHANGELOG.md`, user-facing, newest
+first, `Unreleased` accumulating per phase with the security notes and platform-limitation changes §9 demands. The
+version field stays `0.0.0` until the first release, and **`v0.1.0` is cut at this phase's exit bar**; the tag is
+the release commit's. The per-slice detail stays in the ROADMAP's one paragraph per slice — a changelog that
+duplicated it would be a second hand-maintained list, which is F-08's lesson — so the changelog names phases and
+decisions, and the reader who wants the slice walks one hop. The three standing docs:check advisories that cited
+the not-yet-written file are resolved, and `docs/CONSISTENCY_REVIEW.md`'s "M9" got a dated correction note: it was
+that file's stale name for the release-readiness phase. Gates: docs:check (25 documents, 143 accepted), parity.
+
 ## 8. Phase M6 — Release readiness
 
 *Underway (2026-10-17): the backup/restore mechanics are shipped (D-142, slice 79); the install docs, license

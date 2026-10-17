@@ -687,7 +687,10 @@ comment instead of by the specification that is supposed to be able to overrule 
 second mention in one of them — made the line advertise output the tool had not shown. Nothing failed, which is how a
 reporter bug survives: the check it belongs to is advisory by design, because a reference to a planned document is a
 promise and not an error. That part is correct and stays — `CHANGELOG.md` is owed to M9's release process, and the
-advisory list is where a reviewer sees the debt without a build going red for it.
+advisory list is where a reviewer sees the debt without a build going red for it. *(2026-10-17: the file now
+exists — M6 slice 2, D-143 — and the three advisories it owed are resolved. The "M9" in this paragraph was this
+file's stale name for the release-readiness phase, which `docs/ROADMAP.md` §8 has always numbered M6; the
+paragraph itself is history and stays as written.)*
 
 What was fixed is the arithmetic: the list is deduplicated first and its length is what is printed, so the number is
 computed from the thing beneath it rather than from an earlier snapshot of the same data. The general rule, which

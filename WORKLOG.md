@@ -381,3 +381,11 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   scratch/, backups/ — সব manifest-এ নাম-কারণসহ।
 - **Restore manual (D-065):** DATA_AND_MEMORY §8-এ ৪ ধাপ (sidecar-সতর্কতাসহ); verb-এর fix line সেখাই পয়েন্ট করে।
 - **migration-fail টেস্ট** storage.test.ts-এ — rollback + ledger-সততা + আগের সংস্করণ অক্ষত (D-065-র ক্লজ, এখন টেস্ট)।
+## Slice 15 — M6 slice-2: CHANGELOG.md + 0.x-পলিসির ঘর (D-143) — 2026-10-17
+
+- **`CHANGELOG.md`:** user-facing, newest-first, `Unreleased` ফেজ-ধরে জমে; M-D→M6 পর্যন্ত সব ফেজের সারি, সিকিউরিটি
+  নোট ও platform-limitation পরিবর্তনসহ (DEVELOPMENT §9-র নিয়ম)।
+- **D-143:** version field `0.0.0`-ই থাকে; **`v0.1.0` কাটা হয় M6-র exit bar-এ**; প্রতি-slice বিবরণ ROADMAP-এই —
+  ডাবল হাতে-লেখা তালিকা নয় (F-08-এর শিক্ষা)।
+- README-র "দুটি ফাইল ইচ্ছাকৃত নেই" লাইন → এখন শুধু LICENSE বাকি; CONSISTENCY_REVIEW-র "M9"-এ dated সংশোধন-নোট;
+  docs:check-এর ৩টি standing advisory মিলে গেছে (25 documents, 143 accepted)।

@@ -44,8 +44,8 @@ document may claim an implementation exists. `python3 scripts/count-inventory.py
 `DECISIONS.md` states, so progress is pasted rather than remembered, and `python3 scripts/review-scan.py` re-runs the
 element-review criteria a row at a time whenever an inventory changes.
 
-`CHANGELOG.md` and `LICENSE` are the two files this set deliberately does not have yet: the first is written at the
-first release, the second at the moment code is distributed.
+`LICENSE` is the one file this set still waits on: it is written at the moment code is distributed. `CHANGELOG.md`
+now exists (D-143) — `Unreleased` accumulates per phase until `v0.1.0` is cut at M6's exit bar.
 
 ## Where the work stands
 

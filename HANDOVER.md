@@ -57,8 +57,9 @@ verified copy and a named-exclusions manifest, secrets excluded by default, rest
 (`docs/DATA_AND_MEMORY.md` §8 has the four moves), and the migration-failure clause finally a test. The changelog
 exists (`CHANGELOG.md`, D-143 — `Unreleased` accumulates, `v0.1.0` is cut at this phase's exit bar), the license
 audit is `npm run license:audit` (D-144 — allowlist, fails on anything outside it) and `LICENSE` (MIT) plus
-`THIRD-PARTY-NOTICES.md` are in the repository. What the phase still owes: the written install path for
-Termux/Linux/macOS rehearsed from a clean device, the README/troubleshooting/limitations release pages — and the
+`THIRD-PARTY-NOTICES.md` are in the repository. The install path is written and rehearsed (`docs/INSTALL.md`,
+D-050's path; `engines.node >=22.22` pinned from the P1 measurement; the Termux column and the performance pass
+are owner-device work). What the phase still owes: the README/troubleshooting/limitations release pages — and the
 performance pass, which is a phone measurement the owner's device owes.
 
 | Workstream | State |

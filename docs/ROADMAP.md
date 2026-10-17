@@ -1699,6 +1699,18 @@ nobody can answer is a distribution blocker. SPDX-ish expressions pass only when
 files, verbatim. `LICENSE` (MIT) now exists, so README's waiting-list is empty; §9's re-check-at-release is running
 this script, not remembering it. Gates: license:audit exit 0, docs:check (144 accepted), parity.
 
+**Eighty-second slice — the install path written, and the pin that doctor was asking for (D-050's path, D-070's
+field).** `engines.node` is filled with the number the M0 P1 measurement produced — `>=22.22` — so doctor's
+runtime check answers "satisfies engines.node" instead of warning that the authoritative field is missing, and
+`docs/INSTALL.md` carries the path D-050 decided: checkout plus `npm install`, `--build-from-source` on Termux
+(the pkg list included), `crabby doctor` as the recovery tool, the no-global-install/no-updater rule stated as
+what it is, WSL-only Windows and unsupported-on-Android inference repeated where a new user will read them, and
+the update/rollback stance (migrations are forward-only; the rollback path is the backup, not an old checkout on
+a migrated file). The rehearsal ran on a fresh clone in this environment — clone, install, init, doctor exit 0,
+version, backup, gateway start with schema v16 applied and the auth gate refusing unauthenticated calls, clean
+drain — and the page records exactly that, with the Termux column named as owner-device work, which is also
+O-001's last clause. Gates: doctor's node check green, docs:check (27 documents), full sweep, parity.
+
 ## 8. Phase M6 — Release readiness
 
 *Underway (2026-10-17): the backup/restore mechanics are shipped (D-142, slice 79); the install docs, license

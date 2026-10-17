@@ -396,3 +396,11 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - **THIRD-PARTY-NOTICES.md:** জেনারেটেড, সাজানো, প্রতিটা প্যাকেজের নিজের লাইসেন্স-টেক্সট verbatim — আজ ৬০টা
   প্যাকেজ, সব allowlist-এ।
 - **`LICENSE` (MIT)** এখন আছে — README-র অপেক্ষার তালিকা খালি।
+## Slice 17 — M6 slice-4: INSTALL.md + engines-পিন — 2026-10-17
+
+- **`engines.node = ">=22.22"`** — M0 P1-র মাপা সংখ্যা (D-070-র single pin অবশেষে ভরা); doctor-র node চেক এখন ok।
+- **`docs/INSTALL.md`:** D-050-র পথ (checkout + npm install; Termux-এ --build-from-source + pkg তালিকা;
+  doctor = recovery), clone→প্রথম conversation পর্যন্ত ধাপ, update/rollback (migration forward-only — rollback
+  মানে backup), rehearsed বক্স (linux/x64, আজ; Termux কলাম = মালিক-ডিভাইস, O-001-র শেষ ক্লজ)।
+- **রিহার্সাল:** সতেজ clone → install → init/doctor exit 0 → backup integrity ok → gateway start (v16, pairing
+  কোড, auth gate, clean drain)।

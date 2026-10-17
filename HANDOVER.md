@@ -42,23 +42,43 @@ SKILL.md import shows every transferred key in its report, and imported content 
 names are read for the capability diff and granted never. Full sweep 1466/1466, typecheck, biome, parity
 (47 routes, 45 tools, 32 capabilities), docs:check.
 
+**M5 is complete (2026-10-17).** All of its scope landed: the vault (D-139 — scrypt/GCM file store with the
+unset→locked→unlocked state machine, `crabby vault set/unlock/lock`, hot unlock re-composition, and the `vault://`
+resolution F-56 asked for), the quick tunnel (D-066's O-009 mechanics as the confirm-gated `POST /api/v1/tunnel`
+with its `tunnel_active` conflict, plus `crabby tunnel on/off/status`), §4.5's read-through (D-141 — the vault-job
+defer clause is satisfied by the composition's visible reasons, no new run state), and O-008's gate made final
+(D-140) with §17's injection fixtures (`tests/security/injection.test.ts`) proving the import path's four attack
+shapes. The auth list shows each identity's last-seen time, and `crabby doctor --security` prints the security
+subset with plain-language posture sentences. Full sweep 1486/1486, typecheck, biome, parity (51 routes, 45 tools,
+32 capabilities), docs:check.
+
 | Workstream | State |
 | --- | --- |
 | CLI | **Largely done.** 30 commands live; the registry (`apps/cli/registry.ts`) is the authority on what is `ready`. |
 | TUI | **Built.** All six panes draw real content, and the views inside them are wired: `chat` (composer with the real cursor, T5-02; input history on ↑/↓, T5-09; the overflow warning, T8-08), `tasks` (T6-01's filter row), `approvals` (T-A's modal), `jobs` (T17), `models` (T11, editor included, plus T12's tools view on `t`), `logs` (T15's decisions + diagnostics, T14's access view and T13's config view on `v`). The log/audit *views* still name their route gaps (see §7) and `model probe` names its own (T11-07). |
 | Web UI | **Built** (slices 64, D-068/D-067) — the Gateway serves `apps/web` as no-build custom elements; eight screens, §13's asset/API token split tested; route-less places name their gaps by name. |
-| Telegram | **Built** (slice 65, D-132) — `packages/telegram` over grammY: silent gate, in-chat pairing to per-chat identities, 36-row command table, `apr:<id>:<nonce>` approvals, paced delivery with recorded failures, SSE watch, `telegram.json` state (D-078's sixth file). **Never run against a live token yet** — the owner's first was revoked; a fresh one arrived on 2026-10-16, but the build sandbox cannot reach `api.telegram.org` (its egress allowlist cuts the TLS handshake), so `npm run telegram:check` was added: it exercises `getMe`/`setMyCommands`/`getUpdates` through the adapter's own transport and is meant to run **on the host**. The wire check is pending that run; `vault://` resolution is M5 (F-56). |
+| Telegram | **Built** (slice 65, D-132) — `packages/telegram` over grammY: silent gate, in-chat pairing to per-chat identities, 36-row command table, `apr:<id>:<nonce>` approvals, paced delivery with recorded failures, SSE watch, `telegram.json` state (D-078's sixth file). **Never run against a live token yet** — the owner's first was revoked; a fresh one arrived on 2026-10-16, but the build sandbox cannot reach `api.telegram.org` (its egress allowlist cuts the TLS handshake), so `npm run telegram:check` was added: it exercises `getMe`/`setMyCommands`/`getUpdates` through the adapter's own transport and is meant to run **on the host**. The wire check is pending that run; `vault://` resolution **landed with M5** (D-139, F-56). |
 
 **Phase exit for M3** (`docs/ROADMAP.md` §5): the parity test walks `docs/INTERFACES_AND_API.md` §8 with every blank cell
 carrying an accepted limitation — **that half passes** — and one task is started on Telegram, watched from Web, approved in
 the TUI, cancelled from the CLI — in one demo, documented as the release test. **The demo is the remaining M3 work, and it
 needs a live Telegram token.**
 
-Decisions run to **D-138**; open questions to **O-075**. `docs/ROADMAP.md` has one paragraph per slice (39–74) — read the
+Decisions run to **D-141**; open questions to **O-075**. O-008's gate is final (D-140) — the strategy half is post-v1. `docs/ROADMAP.md` has one paragraph per slice (39–78) — read the
 last three to know what just happened and why.
 
 ## 3. The last three slices, and the bugs they found
 
+- **75 (D-139)** — the vault: scrypt/GCM file store whose KDF parameters are pinned inside the file, per-session
+  lock over the running Gateway's routes, hot unlock re-composition, `vault://` resolution at compose time (F-56),
+  and the audit trail's eighth kind.
+- **76** — the quick tunnel: one confirmed decision over the wire (§13), `tunnel_active` conflict, the URL printed
+  per start and never redirected, the `tunnel` audit kind, `crabby tunnel on/off/status`.
+- **77** — the last-seen row (`auth list` finally shows `lastUsedAt`) and `doctor --security`'s plain-language
+  posture, riding both the rendered lines and the `--json` document.
+- **78 (D-140/D-141)** — O-008's gate made final, §17's injection corpus, §4.5's read-through, and the documents
+  caught up with the decisions (§19's stale still-open list, §18's met-markers, §20's test column, D-078's sixth
+  file name).
 - **72 (D-040/D-137)** — the §10 MCP client: `initialize` + `tools/list` + `tools/call` over stdio (one JSON per line)
   and HTTP (POST JSON-RPC, SSE answers tolerated, `Mcp-Session-Id` echoed); server entries in `<stateDir>/mcp/
   servers.json` (env names only, never values), and the C-2 import turns a `claude mcp` config into Crabby entries at
@@ -145,10 +165,9 @@ log is the only place the answer is.
    accepted rows, gaps named where routes are absent.
 5. ~~**Telegram**~~ — **built** (slice 65, D-132): polling, not the tunnel — v1 is getUpdates over the loopback-owned
    Gateway. The un-run verification is one command on the host: `TG_BOT_TOKEN=… npm run telegram:check` (token from
-   @BotFather; env-only, G1-03). **M3 is otherwise closed; M4 starts** per `docs/ROADMAP.md` §6 — provider adapters
-   and the conformance suite first (D-042's presets), then the overrides' loop half (D-126's named remainder),
-   memory (D-065's FTS5), skills (D-035), MCP client (D-040), importer C-1/C-2 — with the M3 demo folded in the day
-   the token check passes.
+   @BotFather; env-only, G1-03). **M3 is otherwise closed; M4 and M5 are complete** (see §2) — the demo remains the one
+   open item, and it folds in the day the token check passes. What follows M5 is post-v1: O-008's isolation
+   strategy (a candidate implementation to point D-140's corpus at) and O-065's Termux sandbox measurement.
 
 ## 7. Things that are open and belong to the owner
 

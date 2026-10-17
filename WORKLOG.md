@@ -341,3 +341,16 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   collector, দ্বিতীয় collector নয়) + plain-language posture বাক্য (workspace confinement, ask-first, vault-অবস্থা,
   Termux no-sandbox §15 বাক্য); human লাইন + `--json` `posture[]` দুই চ্যানেলেই। registry-র doctor রো flag-সহ।
 - **টেস্ট:** cli 55/55 (নতুন: --security subset + posture assertions)।
+## Slice 13 — M5 slice-4: O-008-এর গেট চূড়ান্ত (D-140), §17 injection fixtures, §4.5 রিড-থ্রু (D-141) — 2026-10-17
+
+- **D-140:** O-008-এর hard gate চূড়ান্ত — অবিশ্বস্ত executable কোড যেকোনো পথে বন্ধ, যতক্ষণ না কোনো candidate
+  primary-platform-এ §17-র fixture-corpus পাস করে; strategy (filtered in-process vs child-process RPC) post-v1-এ
+  খোলা, candidate implementation-এর অপেক্ষায়।
+- **`tests/security/injection.test.ts` (৪টি fixture, ৪/৪):** self-grant `allowed-tools` → পড়া হয়, কখনো দেওয়া হয় না;
+  permission-সদৃশ unknown key → named line; wrapper-closer content → nonce ধরে রাখে; call-এর নিজের nonce বহন করা
+  content → attack হিসেবে refuse।
+- **D-141:** §4.5-র vault-job defer বুলেট = composition-এর visible reasons (keys eager-compose; runner-less হলে
+  `driven:false`+note, 501 `scheduler_absent`) — নতুন কোনো run state নেই।
+- **ডক:** SECURITY §17/§18(03·06·08)/§19(O-009·O-018·O-019 বন্ধ হিসেবে স্বীকৃত)/§20 (টেস্ট-কলামসহ T-map);
+  EXTENSIONS §15; PROVIDERS §4.5; DECISIONS (D-140, D-141, O-008, D-078-এর ষষ্ঠ নাম `telegram.json`); HANDOVER
+  (M5-complete, D-141 পর্যন্ত counts); ROADMAP ৭৮তম slice + §7 complete।

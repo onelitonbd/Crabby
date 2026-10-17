@@ -638,7 +638,11 @@ A timer is the one feature that can quietly turn "one approval" into "approval f
 - A job inherits no ambient authority from the user who created it beyond its own recorded capability set, and it
   runs under the identity that created it, so audit records name a person rather than "cron".
 - Jobs are cancellable like tasks (`task.cancel`), and a paused/unlocked vault (§3.7) means the job defers with a
-  visible reason rather than failing opaquely.
+  visible reason rather than failing opaquely. The read-through that closed this bullet (D-141): keys resolve
+  eagerly at compose time, so a composed runner cannot be stranded by a mid-life lock, and a Gateway that started
+  locked does not fire at all — `GET /jobs` answers `driven:false` with the reason, writes answer
+  501 `scheduler_absent`, and diagnostics reports `jobs.composed:false`. The visible reason is the mechanism; no
+  `deferred` run state exists.
 - On a device that killed Termux overnight, jobs are evaluated against their recorded schedule and must not fire a
   burst of backlogged runs on resume without telling the user.
 

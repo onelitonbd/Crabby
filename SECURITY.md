@@ -431,7 +431,7 @@ The test suite must include, at minimum (see also `docs/DEVELOPMENT.md`):
 - **Policy unit tests:** every capability check has a positive and a negative case; unparsable or unknown input denies.
 - **Boundary tests:** file tools reject traversal, symlink escape, and absolute paths outside roots; on both POSIX and WSL path shapes.
 - **Approval tests:** approval is bound to the exact action; material change re-prompts; no remembered-approval path exists in v1, and a request for one is refused (`D-052`); a restart does not silently satisfy a pending approval.
-- **Injection fixtures:** corpus of adversarial tool outputs and imported skill text; expected behavior is denial or reporting, never execution.
+- **Injection fixtures:** corpus of adversarial tool outputs and imported skill text; expected behavior is denial or reporting, never execution — shipped as `tests/security/injection.test.ts` (D-140): self-granted `allowed-tools` is read for the report and granted to nothing, permission-shaped unknown keys are named lines, wrapper-closer content cannot close D-098's nonce frame, and content carrying the call's own nonce is refused as the attack it is.
 - **Redaction tests:** inject a fake secret through every path (tool error, provider error, extension crash, audit payload) and assert it appears nowhere.
 - **Auth tests:** unauthorized Telegram sender, wrong token, missing Origin header, expired/revoked token — all rejected, with no capability leak in the error text.
 - **Tunnel tests:** remote mode refuses without auth and reverts to loopback on stop.
@@ -447,12 +447,12 @@ The security design is ready for implementation planning when:
 01. Capability vocabulary and risk tiers are defined, and every initial tool is classified.
 02. A client authentication mechanism is selected and specified — closed by D-030 (mechanism) and D-051 (format and
    lifetime); the pairing-screen UX is decided in D-067 (`docs/INTERFACES_AND_API.md` §3.2) and does not block M1.
-03. Secrets storage behavior is decided per platform, with an explicit weaker-fallback disclosure (O-018).
+03. Secrets storage behavior is decided per platform, with an explicit weaker-fallback disclosure (O-018) — **met (D-066/D-139):** keychain back ends where they exist, the scrypt file everywhere else, the weaker-fallback sentence riding every file-store status and create answer.
 04. Approval payload content, binding rules, and revocation UX are specified for all four interfaces.
 05. The untrusted-content policy is written into tool and importer implementations as a requirement, not a convention.
-06. Remote-mode requirements are complete enough that no implementer must invent a security rule.
+06. Remote-mode requirements are complete enough that no implementer must invent a security rule — **met (D-032/D-066):** loopback default, pairing-granted capabilities, and the quick tunnel behind one confirmed decision whose URL is printed per start and never redirected.
 07. Audit redaction rules are decided (O-022 closed by D-065) and covered by tests.
-08. Threat model rows T-01…T-15 each map to at least one concrete mitigation and at least one test.
+08. Threat model rows T-01…T-15 each map to at least one concrete mitigation and at least one test — **met:** §20's map names the tests beside the sections.
 09. Platform limitations are documented in user-facing docs, not only in this file.
 10. `DECISIONS.md` reflects the accepted/open status of every choice referenced above.
 
@@ -465,10 +465,17 @@ strategy, remote posture, and `termux-api` exposure.
 
 Still open:
 
-- **O-008** Extension isolation strategy and supported trust levels.
-- **O-009** Tunnel lifecycle details (URL rotation, reconnect, shutdown ordering).
-- **O-018** (remainder) Android `keystore` reachability from Termux; KDF and encryption parameters for the fallback.
-- **O-019** (remainder) Pairing-code presentation on a phone-sized terminal. Format and expiry are decided (D-051).
+- **O-008** Extension isolation — the **gate is final (D-140)**: untrusted executable code stays off until a
+  candidate passes §17's injection corpus on the primary platform. The strategy half (candidate ordering,
+  `EXTENSIONS.md` §15) stays open for post-v1 and waits for a candidate implementation, not a rule.
+- ~~**O-009**~~ — **closed (D-066).** Non-sticky quick-tunnel URL printed on every start, the old one never
+  redirected, 5 s drain on shutdown; shipped in M5 as the confirm-gated `POST /api/v1/tunnel` with its
+  `tunnel_active` conflict and the `tunnel` audit kind.
+- ~~**O-018**~~ — **closed (D-066/D-139).** The scrypt parameters are pinned inside the vault file itself, so a
+  future change reads old files instead of corrupting them; the `termux-keystore` probe remains **owner-device
+  measurement** (like the Telegram wire check), not an open decision — the file fallback is the floor either way.
+- ~~**O-019**~~ — **closed (D-067).** URL and 8-character code on their own lines, the code consumed by the Web
+  first-run field; format and expiry were D-051's, and the presentation shipped with M3's pairing screen.
 - ~~**O-020**~~ Per-tool risk-tier assignment — **closed (D-046)**; table in `PROVIDERS_AND_TOOLS.md` §4.2.
 - ~~**O-021**~~ — **closed (D-065).** Content from a file, a web fetch or a tool result is tagged with its source and treated as data: no privileged parsing, no instruction-following, and the `external content` marker of §10 is what the user sees. Importing text and importing an instruction are the same bug in every agent product, so this is a hard rule rather than a mitigation.
 - ~~**O-022**~~ — **closed (D-065).** Logs and exports carry no secret-shaped values and no credential material, including under `--debug`. The audit record keeps the **exact target in plaintext**: an approval whose path was hashed cannot be reviewed later, and the record exists to be read after the fact. Where a path itself is the secret, the user is told to expect it in the audit and offered `history.deleteTask` (D-025's deletion path), so the choice is made once, in the open, instead of by a hash nobody can undo.
@@ -477,16 +484,16 @@ Still open:
 
 ## 20. Threat-to-Mitigation Summary
 
-| Threat | Where the mitigation lives |
-| --- | --- |
-| T-01, T-02 | §10 + §11 sanitization + Policy Engine at B3 |
-| T-03, T-13 | §11 + §16 + O-008 gate |
-| T-04, T-15 | §5 + §12 + §13 |
-| T-05, T-06 | §6 (binding, per-action approval, single enforcement point) |
-| T-07 | `AGENT_RUNTIME.md` §7.2 (auto-resume cannot authorize) |
-| T-08 | §7 + §14 + `docs/DATA_AND_MEMORY.md` §2.6 |
-| T-09, T-12 | §12 + `docs/DATA_AND_MEMORY.md` §7 |
-| T-10, T-11, T-14 | §8 + §9 + §15 |
+| Threat | Where the mitigation lives | Witnessed by (§18's criterion 08) |
+| --- | --- | --- |
+| T-01, T-02 | §10 + §11 sanitization + Policy Engine at B3 | `tests/security/injection.test.ts` (the four-shape corpus, D-140); `packages/tools/tools.test.ts` (D-098's nonce frame); `packages/extensions/convert.test.ts` (granted-never) |
+| T-03, T-13 | §11 + §16 + O-008's gate, final (D-140) | `packages/extensions/check.test.ts` (the gate's refusals); the injection fixtures on the import path; no registry exists to supply-chain (D-035/D-050: install-by-path and git-URL only) |
+| T-04, T-15 | §5 + §12 + §13 | `tests/security/policy-surface.test.ts` (baselines, remote-never-wider); `tests/integration/tunnel.test.ts` (confirm gate); `tests/integration/jobs.test.ts` + `packages/agent-runtime/cancellation.test.ts` (caps, propagation) |
+| T-05, T-06 | §6 (binding, per-action approval, single enforcement point) | `packages/agent-runtime/approvals.test.ts` (exact-action binding, material-change re-prompt, no remembered path); `tests/security/approvals-surface.test.ts`; `tests/integration/approvals.test.ts` |
+| T-07 | `AGENT_RUNTIME.md` §7.2 (auto-resume cannot authorize) | `packages/agent-runtime/checkpoint.test.ts` (the idempotence rule); `tests/integration/recovery.test.ts` |
+| T-08 | §7 + §14 + `docs/DATA_AND_MEMORY.md` §2.6 | `packages/storage/audit.test.ts` + `tests/integration/audit.test.ts` (redaction before delivery); `packages/vault/vault.test.ts` (scrypt/GCM, wrong-passphrase refusal); `tests/integration/vault.test.ts` (route-level) |
+| T-09, T-12 | §12 + `docs/DATA_AND_MEMORY.md` §7 | `tests/integration/memory.test.ts` (deletion, retention); `tests/integration/jobs.test.ts` (backlog honesty, budgets) |
+| T-10, T-11, T-14 | §8 + §9 + §15 (documented limitation) | `packages/tools/tools.test.ts` + `packages/tools/shell.test.ts` (traversal/symlink/absolute refusals, classifier); `tests/security/policy-surface.test.ts` (`shell.run` never in a baseline); T-14's at-rest half is `packages/vault/vault.test.ts` — the limitation itself is §15's honesty, documented rather than testable |
 
 ---
 

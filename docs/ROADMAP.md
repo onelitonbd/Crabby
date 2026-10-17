@@ -1629,10 +1629,27 @@ agent, in the user's words (workspace confinement, ask-first approvals, the vaul
 no-sandbox sentence on Termux), riding both the human lines and the `--json` document. Gates: cli 55/55, full
 sweep, typecheck, biome, parity, docs:check.
 
+**Seventy-eighth slice — the gate made final, and the corpus that proves the one safe channel (D-140/D-141).**
+O-008's answer is D-140: the hard gate — untrusted executable code stays off — is **final even where the isolation
+strategy is not**, and the "hostile-extension test on Termux" blocker narrows to a candidate implementation, because
+§17's injection fixtures now exist (`tests/security/injection.test.ts`, four shapes: a SKILL.md that grants itself
+tools is read for the report and granted to nothing; permission-shaped unknown frontmatter keys are named lines and
+nothing else; wrapper-closer content cannot close D-098's nonce frame; content carrying the call's own nonce is
+refused as the attack it is — 4/4, pure TypeScript, so Termux runs it like CI). §4.5's vault-job bullet got its
+read-through (D-141): keys resolve eagerly at compose time, so the "defers with a visible reason" clause is satisfied
+by the composition's existing visible reasons — `driven:false` with the note, 501 `scheduler_absent`, diagnostics'
+`jobs.composed:false` — rather than a new run state. `SECURITY.md` §19 caught up with `DECISIONS.md` (O-009/O-018/
+O-019 were closed there but still listed open here), §18's criteria 03/06/08 carry their met-markers, and §20's
+threat map now names the tests that witness each row. HANDOVER's stale counts were fixed in the same change, per its
+own rule, and D-078 recorded the sixth file name (`telegram.json`) its Telegram row had been citing. Gates:
+injection 4/4, full sweep, typecheck, biome, parity, docs:check.
+
 ## 7. Phase M5 — Security hardening, remote access, isolation decision
 
-*Underway (2026-10-17): the vault (slice 75, D-139) and the Quick Tunnel (slice 76) are done; the pairing/last-seen
-data, §4.5's runtime re-evaluation, the O-008 decision, the §17 Termux suite and `crabby doctor --security` remain.*
+*Complete (2026-10-17): the vault (slice 75, D-139), the Quick Tunnel (slice 76), the last-seen row and the posture
+summary (slice 77), and O-008's gate made final with §17's injection corpus and §4.5's read-through (slice 78,
+D-140/D-141). The one remainder is owner-device: the Telegram wire check (`npm run telegram:check`) and with it the
+M3 four-interface demo.*
 
 - Secrets vault: OS keychain where available, encrypted-file fallback with lock state everywhere (D-031).
 - Pairing and revocation finished across all four interfaces (D-030), plus `crabby auth list` last-seen data.

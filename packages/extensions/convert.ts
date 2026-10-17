@@ -61,6 +61,19 @@ export type ImportResult =
     }
   | { readonly ok: false; readonly reason: string; readonly problems?: readonly string[] };
 
+/** §11 rule 2's "stored with the artifact" — one file per install, never overwritten: the millisecond timestamp is
+ *  enough for humans, and the `-2`, `-3` suffixes are there so a scripted double-install cannot rewrite history. */
+function uniqueReportName(reportsDir: string, now: Date): string {
+  const stem = `report-${now.toISOString().replace(/[:.]/g, "-")}`;
+  let candidate = `${stem}.json`;
+  let counter = 2;
+  while (existsSync(join(reportsDir, candidate))) {
+    candidate = `${stem}-${counter}.json`;
+    counter += 1;
+  }
+  return candidate;
+}
+
 /** The §6.1 names an upstream tool name maps to, for the report only. The alias table is explicit (upstream name ⇒
  *  capability) so the mapping itself is reviewable data, not a heuristic — and a name outside the table maps to
  *  nothing, loudly, rather than to its nearest-looking neighbor. */
@@ -119,6 +132,7 @@ export function importSkillPack(input: {
   mkdirSync(installDir, { recursive: true });
 
   let lastName = "";
+  let lastReportFile = "";
   const reports: ConversionReport[] = [];
   for (const dir of folders) {
     const folderName = basename(dir);
@@ -219,8 +233,9 @@ export function importSkillPack(input: {
       warnings: parsed.report.warnings.map((warning) => `${warning.path}: ${warning.message}`),
       scan: { unsafe: false, patterns: [] },
     };
-    const reportName = `report-${now.toISOString().replace(/[:.]/g, "-")}.json`;
+    const reportName = uniqueReportName(reportsDir, now);
     const reportPath = join(reportsDir, reportName);
+    lastReportFile = reportPath;
     writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     reports.push(report);
     lastName = fm.name;
@@ -239,7 +254,7 @@ export function importSkillPack(input: {
     name: lastName,
     installedAt: join(installDir),
     report: reports[reports.length - 1] as ConversionReport,
-    reportPath: join(installDir, lastName, "reports"),
+    reportPath: lastReportFile,
     warnings,
   };
 }

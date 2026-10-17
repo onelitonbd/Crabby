@@ -1504,6 +1504,24 @@ a grant in disguise. §4.1's name uniqueness lands where both collections are vi
 the overlap is reported as a collision. Gates: extensions 41/41 (manifest 9, frontmatter 8, checker 9, conversion 8,
 repo 3, workspace 4), full sweep, typecheck, biome, parity, docs:check.
 
+**Seventy-first slice — `crabby ext` reaches the terminal (D-035's verbs, C-E1…C-E12).** Seven of Region C-E's verbs
+are ready — `init`, `validate`, `check-compat`, `install`, `list`, `info`, `uninstall` — because the verbs are thin:
+every rule they enforce lives in `@crabby/extensions`, so the CLI cannot have a private opinion about what is safe to
+install. The rows' interaction prices are paid where they were written: `validate` exits `2` with the failing key
+named (C-E2); the install is verdict → capability diff → one size line → approval, and an `unsafe` verdict stops the
+command with no override flag to search for (C-E6/C-E7); the report's path is part of the answer, one file per
+install, never overwritten (C-E4); `check-compat <name> --diff <older>` prints a unified diff of the two reports on
+disk, because "what changed between v1 and v2" is the question the report format exists to answer (C-E5); uninstall
+discloses what it takes in two lines, refuses a workspace skill — the author's source is not an installed copy — and
+`--purge-data` answers honestly that skills record no owner data in this build (C-E11); a native executable-kind
+manifest is refused with the version-lock reason, never half-installed (C-E12). A non-terminal install without
+`--yes` is exit `3`, not a hang. `ext update` stays planned on purpose — C-E10's show-the-diff-before-replacing needs
+the source re-run flow, not just the checker — and `mcp add/list/restart` are registered as planned for D-040 so
+`--help` is honest about the next slice too. One latent bug fell out: `crabby memory list --status S` had been
+reading its flag under the wrong key since slice 3 and silently ignoring the filter; the parser's convention is
+dash-less keys, and now the verb obeys it. Gates: ext-cli 6/6, extensions 41/41, full sweep, typecheck, biome,
+parity, docs:check.
+
 ## 6. Phase M4 — Providers, memory, extensions
 
 - Provider adapters: `openai-compatible` (+ user-defined endpoints, D-041), `ollama`, `anthropic`, `gemini`, each

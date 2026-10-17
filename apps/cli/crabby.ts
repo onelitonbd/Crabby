@@ -37,6 +37,7 @@ import { type ConfigVerb, runConfig } from "./commands/config.ts";
 import { type ContextVerb, runContext } from "./commands/context.ts";
 import { runDiagnostics } from "./commands/diagnostics.ts";
 import { runDoctor } from "./commands/doctor.ts";
+import { runExt } from "./commands/ext.ts";
 import { type GatewayVerb, runGateway } from "./commands/gateway.ts";
 import { runInit } from "./commands/init.ts";
 import { type JobVerb, runJob } from "./commands/job.ts";
@@ -311,6 +312,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     case "memory": {
       return runMemory(verb as MemoryVerb | undefined, rest, layout, renderer);
+    }
+    case "ext": {
+      // Region C-E: the extensions repo lives in the state dir, so `--data-dir` is the one fact these verbs need
+      // and no Gateway round trip exists yet (the routes are a later slice; the repo on disk is the truth).
+      return runExt(verb, rest, layout, renderer);
     }
   }
 

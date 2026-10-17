@@ -223,3 +223,20 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   structurally অসম্ভব (folder=name হলে), তাই সেটি repo↔workspace মার্জে ধরা হয়; `docs/extensions/PACKAGES.md` +
   `docs/extensions/REPO.md` (অ্যাডভাইজরি ব্যাখ্যা: first-party-র লোডিং কোথায়, ইমপোর্ট-পাইপলাইনের লেআউট কী)।
 - **ডক:** ROADMAP-এ সপ্ততম slice। yaml@2.9.1 রুট-dependency (--ignore-scripts)।
+
+## করলাম (M4 slice 6 — `crabby ext` CLI verbs, C-E1…C-E12)
+
+- **apps/cli/commands/ext.ts** — সাত verb ready: init/validate/check-compat/install/list/info/uninstall (update
+  planned — C-E10-র show-diff-before-replace সোর্স-রিরান ফ্লো চায়; mcp add/list/restart planned রো registry-তে, D-040)।
+- verb-রা পাতলা: সব নিয়ম @crabby/extensions-এ; CLI শুধু ইন্টারঅ্যাকশন-দাম দেয় — validate exit 2+ফেলিং-কি (C-E2);
+  install = verdict→capability diff→size লাইন→approval, unsafe থামে override-হীন (C-E6/C-E7); রিপোর্ট-পাথ উত্তরেই
+  (C-E4, never-overwrite suffix -2/-3); `check-compat --diff OLDER` = দুই রিপোর্টের unified diff (নিজস্ব LCS, C-E5);
+  uninstall ২ লাইনে ডিসক্লোজার + ওয়ার্কস্পেস-স্কিল রিফিউজ + --purge-data-র সৎ উত্তর (C-E11); executable-kind রিফিউজাল
+  O-008/D-038-বাক্যে (C-E12); নন-TTY --yes-ছাড়া install = exit 3।
+- **repo-র বাসস্থান:** `<stateDir>/extensions` (dataLayout থেকে) — গেটওয়ে route (slice-7) একই ফোল্ডার পড়বে; workspace
+  স্ক্যান `<cwd>/skills` থাকলেই। apps/cli package.json-এ @crabby/extensions ডিপেন্ডেন্সি।
+- **পাওয়া-শিক্ষা:** parseTail-এর value-key ড্যাশ-হীন (`tail.values["out"]`) — এই সূত্রে ধরা পড়ল **slice-3-র latent
+  bug**: `crabby memory list --status S` কখনো ফিল্টার পড়ত না (key ছিল "--status") → ঠিক করা।
+- **টেস্ট:** tests/unit/ext-cli.test.ts ৬/৬ (spawnSync-এ exit code+আউটপুট: init overwrite/bad-name, validate exit-2+key,
+  install স্টেপ-লাইন+unsafe-থামা+nothing-written, info --json, নন-TTY exit-3, uninstall ডিসক্লোজার+workspace-রিফিউজ,
+  tool-kind রিফিউজাল)। হাতে-যাচাই: init→validate→install→list→info→diff→uninstall, collision লাইন, purge-data।

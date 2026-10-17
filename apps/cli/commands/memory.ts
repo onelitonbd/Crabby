@@ -75,7 +75,7 @@ export async function runMemory(
 
   try {
     if (verb === "list") {
-      const status = tail.values["--status"];
+      const status = tail.values["status"];
       const route =
         status === undefined
           ? "/api/v1/memory"

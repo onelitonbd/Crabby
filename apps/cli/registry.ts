@@ -526,68 +526,97 @@ export const COMMANDS: readonly CommandSpec[] = [
     milestone: "M2 (`GET /audit`)",
   },
   {
+    // C-E1: the same skeleton the Web button produces, and it prints the path it wrote.
     noun: "ext",
     verb: "init",
-    summary: "scaffold a local extension",
-    flags: [],
-    status: "planned",
-    milestone: "M4 (extensions, docs/ROADMAP.md §6)",
+    summary: "scaffold a skill in place (a SKILL.md stub, never overwritten)",
+    flags: ["--description TEXT", "--out DIR"],
+    status: "ready",
   },
   {
+    // C-E2: one line per check; exit 2 on a bad manifest, with the failing key named.
     noun: "ext",
     verb: "validate",
-    summary: "validate a SKILL.md or extension directory",
-    flags: [],
-    status: "planned",
-    milestone: "M4 (extensions)",
+    summary: "run the deterministic checker over a path (§6) — CI-usable",
+    flags: ["--json"],
+    status: "ready",
   },
   {
+    // C-E3/C-E5: the verdict with the exact failed check; the report diff between two installs.
     noun: "ext",
     verb: "check-compat",
-    summary: "report which capabilities an extension needs that this build lacks",
-    flags: [],
-    status: "planned",
-    milestone: "M4 (extensions)",
+    summary: "the compat verdict for a path or an installed name, with the failed check named",
+    flags: ["--json", "--diff OLDER", "--explain"],
+    status: "ready",
   },
   {
+    // C-E6/C-E7: validate → verdict → capability diff → size → approval; an unsafe verdict stops with no override.
     noun: "ext",
     verb: "install",
-    summary: "install an extension (T2/T3 by kind; executable kinds are blocked, D-038)",
+    summary:
+      "import a SKILL.md pack into the extensions repo (C-1); executable kinds are blocked, D-038",
     flags: ["--yes"],
-    status: "planned",
-    milestone: "M4 (extensions)",
+    status: "ready",
   },
   {
+    // C-E8: one line per extension; --json for scripts; workspace/repo collisions reported inline.
     noun: "ext",
     verb: "list",
-    summary: "installed extensions and their metadata",
+    summary: "installed extensions: name, kind, version, source, verdict, state",
     flags: ["--json"],
-    status: "planned",
-    milestone: "M4 (extensions)",
+    status: "ready",
   },
   {
+    // C-E9: one extension, everything known about it, in ≤20 lines.
     noun: "ext",
     verb: "info",
-    summary: "one extension's manifest and reports",
+    summary: "one extension's description, tool requests, reports and current verdict",
     flags: ["--json"],
-    status: "planned",
-    milestone: "M4 (extensions)",
+    status: "ready",
   },
   {
+    // C-E10 stays planned on purpose: it shows the report diff and the new verdict *before* replacing anything,
+    // which needs the source-of-truth re-run flow to be wired to the update verb, not just the checker.
     noun: "ext",
     verb: "update",
     summary: "update an extension from its source",
     flags: [],
     status: "planned",
-    milestone: "M4 (extensions)",
+    milestone: "M4 (the converter re-run with the report diff shown before replacing, C-E10)",
   },
   {
+    // C-E11: two lines — what was removed, and the residual-data answer; `--purge-data` is the distinct action.
     noun: "ext",
     verb: "uninstall",
-    summary: "remove an extension; `--purge-data` is T3",
+    summary: "remove an imported extension, disclosing what it took with it; `--purge-data` is T3",
     flags: ["--purge-data"],
+    status: "ready",
+  },
+  {
+    // C-E13's three verbs arrive with the MCP client (D-040); client-only, so the help never implies Crabby can
+    // *be* an MCP server.
+    noun: "mcp",
+    verb: "add",
+    summary: "add an MCP server entry from its config",
+    flags: [],
     status: "planned",
-    milestone: "M4 (extensions)",
+    milestone: "M4 (the MCP client, D-040)",
+  },
+  {
+    noun: "mcp",
+    verb: "list",
+    summary: "configured MCP servers and their transports",
+    flags: ["--json"],
+    status: "planned",
+    milestone: "M4 (the MCP client, D-040)",
+  },
+  {
+    noun: "mcp",
+    verb: "restart",
+    summary: "restart an MCP server connection",
+    flags: [],
+    status: "planned",
+    milestone: "M4 (the MCP client, D-040)",
   },
   {
     noun: "gateway",

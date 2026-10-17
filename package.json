@@ -39,7 +39,8 @@
     "probe:p7": "node probes/p7.mjs",
     "probe:results": "node probes/to-results.mjs",
     "test:termux": "node probes/run.mjs --device",
-    "format:check": "biome format ."
+    "format:check": "biome format .",
+    "license:audit": "node scripts/license-audit.ts"
   },
   "dependencies": {
     "yaml": "^2.9.1"

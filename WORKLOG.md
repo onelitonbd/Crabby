@@ -389,3 +389,10 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   ডাবল হাতে-লেখা তালিকা নয় (F-08-এর শিক্ষা)।
 - README-র "দুটি ফাইল ইচ্ছাকৃত নেই" লাইন → এখন শুধু LICENSE বাকি; CONSISTENCY_REVIEW-র "M9"-এ dated সংশোধন-নোট;
   docs:check-এর ৩টি standing advisory মিলে গেছে (25 documents, 143 accepted)।
+## Slice 16 — M6 slice-3: লাইসেন্স অডিট + notices + LICENSE (D-144) — 2026-10-17
+
+- **`npm run license:audit`:** production-closure ওয়াক (workspace dependencies, transitive, যা আসলে install আছে),
+  allowlist-বাইরে হলে **ব্যর্থ** (MIT/ISC/BSD/Apache-2.0/0BSD/Unlicense/CC0/BlueOak); SPDX OR-branch সবই পাস লাগে।
+- **THIRD-PARTY-NOTICES.md:** জেনারেটেড, সাজানো, প্রতিটা প্যাকেজের নিজের লাইসেন্স-টেক্সট verbatim — আজ ৬০টা
+  প্যাকেজ, সব allowlist-এ।
+- **`LICENSE` (MIT)** এখন আছে — README-র অপেক্ষার তালিকা খালি।

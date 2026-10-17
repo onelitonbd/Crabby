@@ -156,7 +156,9 @@ Checklist:
 - Tag `v0.x.y`; publish from CI against a clean install check on Linux, macOS, and Termux.
 - Data migrations ship with a tested downgrade stance: if downgrade is unsupported, say so in the changelog and in
   `crabby doctor`.
-- Supported Node range and dependency licenses are re-checked at release, not only at first publish.
+- Supported Node range and dependency licenses are re-checked at release, not only at first publish — the license
+  half is `npm run license:audit`, which regenerates `THIRD-PARTY-NOTICES.md` and fails on anything outside the
+  allowlist (D-144).
 
 ## 10. Debugging and Diagnostics
 

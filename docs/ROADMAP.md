@@ -1690,6 +1690,15 @@ decisions, and the reader who wants the slice walks one hop. The three standing 
 the not-yet-written file are resolved, and `docs/CONSISTENCY_REVIEW.md`'s "M9" got a dated correction note: it was
 that file's stale name for the release-readiness phase. Gates: docs:check (25 documents, 143 accepted), parity.
 
+**Eighty-first slice — the license audit, and the notices file nobody hand-keeps (D-144).** `npm run
+license:audit` walks the production closure — every workspace `dependencies`, transitively, through what is
+actually installed, devDependencies excluded because the builder's tooling is not what Crabby distributes — checks
+each license against the permissive allowlist, and **fails** on anything outside it, because a license question
+nobody can answer is a distribution blocker. SPDX-ish expressions pass only when every branch passes. Today's walk:
+60 third-party packages, all inside the allowlist, and `THIRD-PARTY-NOTICES.md` regenerated from their own license
+files, verbatim. `LICENSE` (MIT) now exists, so README's waiting-list is empty; §9's re-check-at-release is running
+this script, not remembering it. Gates: license:audit exit 0, docs:check (144 accepted), parity.
+
 ## 8. Phase M6 — Release readiness
 
 *Underway (2026-10-17): the backup/restore mechanics are shipped (D-142, slice 79); the install docs, license

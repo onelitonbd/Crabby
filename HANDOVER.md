@@ -55,10 +55,11 @@ subset with plain-language posture sentences. Full sweep 1486/1486, typecheck, b
 **M6 is underway (2026-10-17).** Its first slice shipped `crabby backup` (D-142): the online backup verb with a
 verified copy and a named-exclusions manifest, secrets excluded by default, restore kept a documented manual step
 (`docs/DATA_AND_MEMORY.md` §8 has the four moves), and the migration-failure clause finally a test. The changelog
-exists (`CHANGELOG.md`, D-143 — `Unreleased` accumulates, `v0.1.0` is cut at this phase's exit bar). What the phase
-still owes: the written install path for Termux/Linux/macOS rehearsed from a clean device, the license audit and
-third-party notices, the README/troubleshooting/limitations release pages — and the performance pass, which is a
-phone measurement the owner's device owes.
+exists (`CHANGELOG.md`, D-143 — `Unreleased` accumulates, `v0.1.0` is cut at this phase's exit bar), the license
+audit is `npm run license:audit` (D-144 — allowlist, fails on anything outside it) and `LICENSE` (MIT) plus
+`THIRD-PARTY-NOTICES.md` are in the repository. What the phase still owes: the written install path for
+Termux/Linux/macOS rehearsed from a clean device, the README/troubleshooting/limitations release pages — and the
+performance pass, which is a phone measurement the owner's device owes.
 
 | Workstream | State |
 | --- | --- |
@@ -72,7 +73,7 @@ carrying an accepted limitation — **that half passes** — and one task is sta
 the TUI, cancelled from the CLI — in one demo, documented as the release test. **The demo is the remaining M3 work, and it
 needs a live Telegram token.**
 
-Decisions run to **D-143**; open questions to **O-075**. O-008's gate is final (D-140) — the strategy half is post-v1. O-008's gate is final (D-140) — the strategy half is post-v1. `docs/ROADMAP.md` has one paragraph per slice (39–80) — read the
+Decisions run to **D-144**; open questions to **O-075**. O-008's gate is final (D-140) — the strategy half is post-v1. O-008's gate is final (D-140) — the strategy half is post-v1. `docs/ROADMAP.md` has one paragraph per slice (39–81) — read the
 last three to know what just happened and why.
 
 ## 3. The last three slices, and the bugs they found

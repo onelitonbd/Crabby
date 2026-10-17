@@ -69,6 +69,7 @@ async function raw(
   h: Harness,
   route: string,
   init: { method?: string; body?: unknown } = {},
+  // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
 ): Promise<{ status: number; body: any }> {
   const response = await fetch(`${h.url}${route}`, {
     method: init.method ?? "GET",

@@ -51,6 +51,26 @@ test("ext init scaffolds, prints the path, and refuses an overwrite or a bad nam
   assert.match(bad.out, /not a skill name/);
 });
 
+test("ext install --json without --yes answers a document, never an empty stdout", () => {
+  const dir = scratch("install-json");
+  const dataDir = path.join(dir, "data");
+  const skill = scaffoldSkill(dir, "weekly-report");
+  const run = crabby(["ext", "install", "--json", skill], { dataDir });
+  assert.equal(
+    run.code,
+    3,
+    'exit 3 is the approval exit, and a script reads it as "answer missing"',
+  );
+  assert.doesNotThrow(
+    () => JSON.parse(run.out),
+    "the document is the whole answer: a script that asked for --json got one, not prose and not silence",
+  );
+  const body = JSON.parse(run.out) as { ok: boolean; code: string };
+  assert.equal(body.ok, false);
+  assert.equal(body.code, "approval_required");
+  assert.ok(!existsSync(path.join(dataDir, "extensions", "weekly-report")), "nothing was written");
+});
+
 test("ext validate exits 2 with the failing key named, and 0 with the verdict on a good skill", () => {
   const dir = scratch("validate");
   const dataDir = path.join(dir, "data");

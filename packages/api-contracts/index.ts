@@ -12,6 +12,7 @@ export * from "./config.ts";
 export * from "./error.ts";
 export * from "./events.ts";
 export * from "./exit-codes.ts";
+export * from "./extensions.ts";
 export * from "./formats.ts";
 export * from "./ids.ts";
 export * from "./job.ts";

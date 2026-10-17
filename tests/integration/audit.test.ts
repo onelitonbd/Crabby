@@ -61,6 +61,7 @@ async function boot(): Promise<Harness> {
 
 interface Answer {
   readonly status: number;
+  // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
   readonly body: any;
 }
 
@@ -135,6 +136,7 @@ describe("D-133's three read routes over http", () => {
 
     const unknown = await raw(h, "/api/v1/logs?level=loud");
     assert.equal(unknown.status, 400);
+    // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
     assert.equal((unknown.body as any).error.code, "logs_unknown_level");
 
     const errors = await raw(h, "/api/v1/logs?level=error");

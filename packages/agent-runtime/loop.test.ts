@@ -106,8 +106,10 @@ describe("§14's tool_invocation trail (D-133)", () => {
     assert.equal(entry?.tier, "T0");
     assert.equal(entry?.code, undefined);
     assert.ok((entry?.durationMs ?? 0) >= 0);
-    assert.ok(!("args" in (entry as unknown as Record<string, unknown>)),
-      "the trail carries no arguments — SECURITY.md §7 keeps the model's words out of the record that outlives the task");
+    assert.ok(
+      !("args" in (entry as unknown as Record<string, unknown>)),
+      "the trail carries no arguments — SECURITY.md §7 keeps the model's words out of the record that outlives the task",
+    );
     assert.equal(entry?.origin?.interface, "cli", "the origin names who drove the task");
     assert.equal(entry?.origin?.clientId, "cli_tester");
   });
@@ -128,7 +130,11 @@ describe("§14's tool_invocation trail (D-133)", () => {
     assert.ok(entry !== undefined, "the refused act is on the trail");
     assert.equal(entry.outcome, "rejected", "nothing ran, and the row says so");
     assert.equal(entry.tier, "T2", "file.delete inside the workspace prices at T2 in this harness");
-    assert.equal(entry.approvalId, run.approvalId, "the row names the approval it was refused under");
+    assert.equal(
+      entry.approvalId,
+      run.approvalId,
+      "the row names the approval it was refused under",
+    );
     assert.equal(harness.executions.length, 0, "the executor was never touched");
   });
 });

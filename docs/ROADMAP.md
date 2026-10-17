@@ -1569,6 +1569,21 @@ row, and reports the claims it has no transport for as `unprobed` rather than in
 no live key, and a probe that cannot run says so in its row rather than in a 500. Gates: storage 33/33, scheduler
 22/22, jobs HTTP 13/13, models HTTP 11/11, loop 50/50, cli 54/54, full sweep, typecheck, biome, parity, docs:check.
 
+**Seventy-fourth slice — the installed records answer a second interface, and M4's last route gap closes.**
+§4.6's four extension paths exist over the repo `crabby ext install` already maintains — `<stateDir>/extensions`,
+folders the truth, §13's reconcile reading either face — so a phone installing through `POST /extensions/install`
+and a terminal listing through `crabby ext list` cannot hold two opinions about what is installed. The list carries
+each pack's verdict beside it (W11-04's "greyed with the reason", answered in one request rather than N per render);
+install runs the CLI's own verdict first, because C-E6's no-override rule is §6.2's and not a terminal preference —
+`unsafe` and `incompatible` stop before anything is written, and a re-install is D-039's update path with the reports
+never overwriting; `GET /extensions/{id}/reports` answers newest first, the two-version history D-065 closed O-027
+with; uninstall removes the folder, the originals and the reports, and the trail says they were here. Both faces
+write §14's `extension_install` row — the CLI's `ext install` now opens its own database and records what the route
+records, because the trail holds the event, not the interface that happened to perform it. The slice also fixed
+`ext install --json`'s empty stdout: a scripting call without `--yes` gets a document (`code: "approval_required"`,
+exit 3) rather than prose a script cannot parse or silence — a prompt was never a scripting answer. Gates:
+extensions HTTP 4/4, ext-cli 7/7, full sweep, typecheck, biome, parity, docs:check.
+
 ## 6. Phase M4 — Providers, memory, extensions
 
 - Provider adapters: `openai-compatible` (+ user-defined endpoints, D-041), `ollama`, `anthropic`, `gemini`, each
@@ -1584,6 +1599,11 @@ no live key, and a probe that cannot run says so in its row rather than in a 500
 Exit gate: a user imports an OpenClaw/Claude-style `SKILL.md`, sees exactly what transferred and what did not, and
 the imported content cannot elevate anything. Third-party executable loading remains blocked (D-038) unless M5
 changed that with evidence.
+
+**Status (2026-10-17): complete.** Slices 64–74 landed every bullet and both importer phases, ending with §4.6's
+extension routes over the installed-record store — the exit gate is asserted where its halves live: the conversion
+report's `mapped`/`unknown`/`allowedTools.granted: never` in `packages/extensions/convert.test.ts`, the routes and
+trail in `tests/integration/extensions.test.ts`, the terminal verbs in `tests/unit/ext-cli.test.ts`.
 
 ## 7. Phase M5 — Security hardening, remote access, isolation decision
 

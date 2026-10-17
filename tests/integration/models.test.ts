@@ -137,6 +137,7 @@ async function boot(
 interface Answer {
   readonly status: number;
   readonly etag: string | null;
+  // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
   readonly body: any;
 }
 
@@ -170,8 +171,10 @@ async function raw(
   };
 }
 
+// biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
 function storedFile(h: Harness | undefined): Record<string, any> {
   if (h === undefined) throw new Error("the harness is not booted");
+  // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
   return JSON.parse(readFileSync(h.configPath, "utf8")) as Record<string, any>;
 }
 
@@ -194,6 +197,7 @@ describe("§4.4's GET /models — the difference §3.8 exists to serve, in one b
     );
     const answer = await raw(open.at(-1), "/api/v1/models");
     assert.equal(answer.status, 200);
+    // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
     const composed = answer.body.providers.find((row: any) => row.id === "local");
     assert.ok(composed, "the healthy entry has a row");
     const model = composed.models[0];
@@ -201,6 +205,7 @@ describe("§4.4's GET /models — the difference §3.8 exists to serve, in one b
     assert.equal(model.reported.supports.toolCalling, true, "reported is the endpoint's claim");
     assert.equal(model.override.source, "manual");
     assert.equal(model.provenance.supports.toolCalling.to, false);
+    // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
     const broken = answer.body.providers.find((row: any) => row.id === "broken");
     assert.equal(broken.state, "disabled");
     assert.match(
@@ -233,6 +238,7 @@ describe("§4.4's PUT /models/{provider}/{model}/overrides — `crabby model edi
       headers: {},
     });
     assert.equal(noToken.status, 400);
+    // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
     assert.equal((noToken.body as any).error.code, "if_match_required");
 
     const read = await raw(open.at(-1), "/api/v1/config");
@@ -242,6 +248,7 @@ describe("§4.4's PUT /models/{provider}/{model}/overrides — `crabby model edi
       headers: { "if-match": '"deadbeefdeadbeef"' },
     });
     assert.equal(stale.status, 409);
+    // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
     assert.equal((stale.body as any).error.code, "config_stale");
     assert.ok(read.status === 200, "the read the client should repeat worked");
   });
@@ -256,6 +263,7 @@ describe("§4.4's PUT /models/{provider}/{model}/overrides — `crabby model edi
       headers: { "if-match": etag },
     });
     assert.equal(noProvider.status, 404);
+    // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
     assert.equal((noProvider.body as any).error.code, "provider_unknown");
     const noModel = await raw(open.at(-1), "/api/v1/models/local/llama-3/overrides", {
       method: "PUT",
@@ -263,6 +271,7 @@ describe("§4.4's PUT /models/{provider}/{model}/overrides — `crabby model edi
       headers: { "if-match": etag },
     });
     assert.equal(noModel.status, 404);
+    // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
     assert.equal((noModel.body as any).error.code, "model_unknown");
   });
 
@@ -345,7 +354,9 @@ describe("§4.4's PUT /models/{provider}/{model}/overrides — `crabby model edi
       headers: { "if-match": read.etag as string },
     });
     assert.equal(blocked.status, 409);
+    // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
     assert.equal((blocked.body as any).error.code, "override_unparsable");
+    // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
     assert.match((blocked.body as any).error.message, /clear/i, "the refusal names the repair");
 
     const cleared = await raw(open.at(-1), "/api/v1/models/local/qwen2.5:3b/overrides", {
@@ -459,11 +470,13 @@ describe("W10-07/C7-09 — POST /models/{provider}/{model}/probe (D-133)", () =>
       method: "POST",
     });
     assert.equal(noProvider.status, 404);
+    // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
     assert.equal((noProvider.body as any).error.code, "provider_unknown");
     const noModel = await raw(h, "/api/v1/models/fake/model_nobody_declared/probe", {
       method: "POST",
     });
     assert.equal(noModel.status, 404);
+    // biome-ignore lint/suspicious/noExplicitAny: the assertion reads an untyped wire body — the shape is what this route test exists to pin, and restating it as a type would duplicate the contract under test
     assert.equal((noModel.body as any).error.code, "model_unknown");
   });
 });

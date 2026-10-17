@@ -28,11 +28,19 @@ Then: `PROJECT_BRIEF.md` → `ARCHITECTURE.md` → `DECISIONS.md` → the spec f
 recovery (including cross-process resume), scheduler, tools, event delivery, compaction with automatic and manual triggers,
 and pins.
 
-**M3 is code-complete, and every gate that can run without a Telegram socket passes** (sweep 1308/1308, typecheck,
-biome, parity, docs:check — re-run 2026-10-16). What remains of the phase exit is **only the four-interface demo**,
-which awaits the live-token check on the host: `TG_BOT_TOKEN=… npm run telegram:check` (the build sandbox cannot
-reach `api.telegram.org`), then the demo — a task started on Telegram, watched from Web, approved in the TUI,
-cancelled from the CLI — documented as the release test.
+**M3 is code-complete, and every gate that can run without a Telegram socket passes.** What remains of the phase
+exit is **only the four-interface demo**, which awaits the live-token check on the host: `TG_BOT_TOKEN=… npm run
+telegram:check` (the build sandbox cannot reach `api.telegram.org`), then the demo — a task started on Telegram,
+watched from Web, approved in the TUI, cancelled from the CLI — documented as the release test.
+
+**M4 is complete (2026-10-17).** All of its scope landed: provider adapters with the conformance suite (D-042), the
+per-model override editor (D-126), memory (D-065's FTS5) with the executor-side tools, the skills layer (D-035), the
+`crabby ext` verbs (C-E1…C-E12), the §10 MCP client with its C-2 import (D-040/D-137), `each` plus the route gaps the
+owner named — whoami, `/logs`, `/audit`, `DELETE /jobs/{id}`, the model probe (D-133) — and §4.6's extension routes
+over the installed-record store, with both faces writing §14's `extension_install` trail. The exit gate holds: a
+SKILL.md import shows every transferred key in its report, and imported content can grant itself nothing — tool
+names are read for the capability diff and granted never. Full sweep 1466/1466, typecheck, biome, parity
+(47 routes, 45 tools, 32 capabilities), docs:check.
 
 | Workstream | State |
 | --- | --- |
@@ -46,34 +54,29 @@ carrying an accepted limitation — **that half passes** — and one task is sta
 the TUI, cancelled from the CLI — in one demo, documented as the release test. **The demo is the remaining M3 work, and it
 needs a live Telegram token.**
 
-Decisions run to **D-132**; open questions to **O-075**. `docs/ROADMAP.md` has one paragraph per slice (39–65) — read the
+Decisions run to **D-138**; open questions to **O-075**. `docs/ROADMAP.md` has one paragraph per slice (39–74) — read the
 last three to know what just happened and why.
 
 ## 3. The last three slices, and the bugs they found
 
-- **57 (D-130)** — the chat pane: `apps/tui/markdown.ts` (D-061's named subset), `transcript.ts` (events → rows),
-  `composer.ts` (`Enter` sends, `Ctrl+J` newlines). Pure modules, 73 tests, no pty needed.
-- **58 (D-131)** — `apps/tui/stream.ts` (`GET /api/v1/events`), the composer sending through `POST /tasks`, the app
-  opening on chat, and `apps/tui/main.test.ts` driving the whole loop with a fake stdin.
-- **59–63 (this stretch)** — the TUI's remaining element rows, wired to what the routes already answer:
-  `tools.ts`/`access.ts`/`settings.ts` are pure projections (T12/T14/T13) and `main.ts` only wires them: `t` opens the
-  tools view inside the models pane (dangerous-first sort, Enter folds the schema), and the logs pane's `v` cycle is five
-  stops — log, audit, decisions, **clients** (revoke asks twice and says what ends; `n` mints a pairing code through the
-  same client method `crabby auth` uses), **config** (the buffer → diff → write pipeline is the CLI's own `applyEdit`,
-  same CAS, same 0600 file). The polish rows: the composer drives the **real terminal cursor** (T5-02 — no drawn block
-  on a TTY), `↑`/`↓` walk the session's input history (T5-09, stepping out past the newest to the empty buffer), the
-  overflow warning computes before the send from the Gateway's own count plus the draft's estimate (T8-08), quitting
-  with a task running confirms once **in words that the task survives** (T1-08, `q`/Ctrl-Q; Ctrl-Z suspends through
-  cooked mode + SIGTSTP and SIGCONT redraws), created task ids and their watch commands get **bare lines** in the
-  transcript (T2-09/T-C8 — `addNote`, no prefix), and the tasks pane has T6-01's filter row (`f` enters, `f` toggles
-  field, Esc clears; prefix match on state and session).
+- **72 (D-040/D-137)** — the §10 MCP client: `initialize` + `tools/list` + `tools/call` over stdio (one JSON per line)
+  and HTTP (POST JSON-RPC, SSE answers tolerated, `Mcp-Session-Id` echoed); server entries in `<stateDir>/mcp/
+  servers.json` (env names only, never values), and the C-2 import turns a `claude mcp` config into Crabby entries at
+  a T2 capability floor.
+- **73 (D-133)** — the route gaps the owner named, closed together because they share one contract slice: `each`
+  (one fire → one run per occurrence), `GET /auth/whoami` (the caller's own grants row — the TUI's capability line
+  prints real grants now), `GET /logs` (the ring buffer, level floors, redaction before delivery), `GET /audit`
+  (§14's trail as a route, `aud_` cursors), `DELETE /jobs/{id}` and the model probe route with its per-row 20 s wall.
+- **74 (this slice)** — §4.6's extension routes over `<stateDir>/extensions`: the list carries each pack's verdict,
+  install runs the CLI's no-override verdict first (C-E6 over the wire), a re-install is D-039's update with reports
+  never overwriting, reports answer newest first, uninstall leaves a trail row — and the CLI's `ext install` now
+  writes the same trail row its route writes, plus the fix for `ext install --json` answering an empty stdout (it
+  answers `{code:"approval_required"}`, exit 3, when `--yes` is missing).
 
-**T5-06 stays a named gap, not a guess.** The capability line under the composer still prints the documented
-conservative defaults (`fs: workspace · net: off · shell: off`), because the one route that could make them real does
-not exist: `GET /auth/clients` carries `capabilities` *per identity*, but nothing answers **"which identity am I"** —
-the caller's own grants row. Building it without that route would mean printing "shell: on" from a guess, and a wrong
-"shell: on" is a wrong promise about what a run may do. The fix is a route (`GET /api/v1/auth/whoami` or an `own` flag
-on the clients list); the line and its comment in `main.ts` name this and wait.
+**T5-06 is answered (slice 73).** The capability line under the composer used to print the documented conservative
+defaults, because nothing answered **"which identity am I"**. `GET /api/v1/auth/whoami` now does — the caller's own
+grants row, with the executor's declared surfaces beside them — and the TUI prints the real grants, falling back to
+the conservative defaults with a note only when the route says nothing.
 
 Four bugs in this stretch were found **by running the TUI**, not by tests, and each is now either a test or a comment:
 
@@ -157,8 +160,9 @@ log is the only place the answer is.
   as derived (D-064) and the record has no column for it. The TUI draws the input (the row, as written) and reports
   `reserve is derived … (F-62)` on save without storing it. If the owner wants it stored, §3.8's schema and D-064
   revisit; if the row should drop it, D-076 reopens T11-04.
-- **T17-05/W16-11's delete** — there is no `DELETE /jobs/{id}` route and no delete in the scheduler. The TUI's typed-name
-  confirmation runs and then reports the gap by name; the job stands. Needs a route or an accepted limitation.
+- **T17-05/W16-11's delete** — **answered (D-133, slice 73): `DELETE /jobs/{id}` exists**; the scheduler refuses to
+  fire a job someone is deleting, the TUI's typed-name confirmation really deletes, and the audit trail holds a
+  `job_delete` row.
 - **T17-06/C12-05/W16-06's objective edit** — a material change is re-approval (§4.5) and nothing here can open one
   (D-084). The form collects both fields and the save prints the notice and writes nothing for an objective change; the
   schedule half lands through `PATCH /jobs/{id}`. Same decision the CLI made in leaving `job edit` planned.

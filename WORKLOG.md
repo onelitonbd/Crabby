@@ -271,3 +271,24 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - **tool_invocation:** লুপ = একমাত্র সাক্ষী, `auditToolInvocation` seam দিয়ে fact বেরিয়ে যায় (composition root লেখে) — **args ছাড়া** (§7: model-এর কথা checkpoint-এর মতো ট্রেইলেরও নয়; per-task journal-ই arg-বহনকারী রেকর্ড); ok/error/rejected তিনটাই — rejected = policy-র moment-of-execution re-evaluation (denied ও revoked-দুই সাইটে)।
 - **ডক:** INTERFACES §4.1-এ /logs /audit /whoami উত্তর-shape সহ, jobs-রোতে DELETE+each; §8 parity --write; DECISIONS **D-138** (aud_ prefix, counter 138) + §4A ম্যাপ; ROADMAP সত্তরতম-তৃতীয় slice; check-docs-এ whoami pattern; TUI/CLI/WEB/TELEGRAM-এ সৎ "source/why-not" নোট; DATA_AND_MEMORY sqlite-রো v14+v15।
 - **শিক্ষা:** E2B re-init-এ HEAD ব্রাঞ্চ-পয়েন্টে ফেরে — restore = `git fetch` + `git reset origin/<branch>` (mixed) + `npm install --ignore-scripts`; better-sqlite3-এর bundled prebuild যথেষ্ট, rebuild-এর দরকার নেই।
+## Slice 9 — §4.6-র extension routes + installed-records দুই মুখ, CLI install --json ফিক্স — M4 শেষ — 2026-10-17
+
+- **Gateway `registerExtensionRoutes`:** `GET /extensions` (extList + প্রতি রোতে verdict — W11-04-এর "reason সহ greyed",
+  এক রিকোয়েস্টে), `POST /extensions/validate` ({path} absolute বাধ্যতামূলক), `POST /extensions/install` (আগে extValidate —
+  C-E6-এর no-override ওয়্যারেও; unsafe/incompatible = 400 `extension_*`; re-install = D-039-র update path, report
+  never-overwrites; 201 + location), `GET /extensions/{id}/reports` (newest-first, D-065-র two-version depth; `..`/`/`-যুক্ত
+  id = 404), `DELETE /extensions/{id}` (extUninstall; 404-দ্বিতীয়বার)। সবই `<stateDir>/extensions`-এর ওপর — CLI-র `ext`
+  verb-দের একই store, দুই মুখ, এক সত্য (§13 reconcile)। Authority = token (F-52 substitution, job-routes-র মতো)।
+- **audit:** route install/uninstall `extension_install` রো লেখে; **CLI-র `ext install` এখন নিজেই** openDatabase+migrate+
+  recordAudit করে — ট্রেইল ঘটনার, interface-এর নয় (§14)।
+- **`ext install --json` ফাঁকা-stdout বাগ ফিক্স:** --json-এ প্রম্পট নেই — `--yes` ছাড়া উত্তর `renderer.fail({code:
+  "approval_required"})` + exit 3; স্ক্রিপ্ট ডকুমেন্ট পায়, প্রোজ বা নীরবতা নয়।
+- **contracts:** `packages/api-contracts/extensions.ts` — ExtPackBody, InstalledExtensionRow, ExtListBody (verdict-সহ),
+  ExtensionReportRow/Body; exactOptionalPropertyTypes-এ store-এর `T | undefined` → conditional spread দিয়ে ম্যাপ।
+- **টেস্ট:** tests/integration/extensions.test.ts ৪/৪ (install+trail+verdict-in-list, validate-বিধিনিষেধ+update-path,
+  reports newest-first+path-walk 404, uninstall+trail+401 guard); ext-cli.test.ts ৭/৭ (নতুন: --json --yes-বিহীন =
+  ডকুমেন্ট+exit 3+কিছু লেখা হয়নি)।
+- **ডক:** ROADMAP **74th slice** এন্ট্রি + §6-তে M4-র **Status: complete** লাইন; HANDOVER §2-তে M4-সম্পূর্ণ অনুচ্ছেদ
+  (D-138/O-075, slices 39–74), §3-র শেষ-তিন-স্লাইস = 72/73/74, T5-06 ও T17-05 এন্ট্রি "answered"; parity ৪৭ routes।
+- **lint-নোট:** লক করা biome 2.5.15 পুরনো integration টেস্টের `any`-গুলো ধরেছে (audit/memory/models) — repo-র চিরচেনা
+  per-line `biome-ignore` + কারণ দিয়ে ১৯ জায়গায় স্থগিত; নীতি-পরিবর্তন নয়।

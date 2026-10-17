@@ -30,6 +30,7 @@ import {
   workspaceSkillsDir,
 } from "@crabby/extensions";
 import type { DataLayout } from "@crabby/platform";
+import { migrate, openDatabase, recordAudit } from "@crabby/storage";
 import { parseTail } from "../args.ts";
 import type { Renderer } from "../output.ts";
 import { findCommand } from "../registry.ts";
@@ -409,7 +410,16 @@ export async function runExt(
         "size",
         `${formatBytes(size.bytes)} across ${size.files} file(s) · dependencies: 0 (content-only pack)`,
       );
-      // Step 4 — the approval itself.
+      // Step 4 — the approval itself. In `--json` mode there is no prompt to answer: a scripting call that wants the
+      // install carries `--yes`, and one that omits it gets a document saying so rather than a question a script
+      // cannot read — which is the empty-stdout bug this line fixed.
+      if (renderer.json && !tail.booleans.has("--yes")) {
+        renderer.fail({
+          code: "approval_required",
+          message: "install needs --yes in --json mode: a prompt is not a scripting answer",
+        });
+        return EXIT.needsApproval;
+      }
       const answer = await confirmInstall(renderer, tail.booleans.has("--yes"));
       if (answer === "refuse-non-tty") return EXIT.needsApproval;
       if (answer === "no") {
@@ -421,6 +431,34 @@ export async function runExt(
         renderer.line("ext install", installed.reason);
         for (const problem of installed.problems ?? []) renderer.line("  problem", problem);
         return EXIT.failure;
+      }
+      // §14's `extension_install` row, written by the CLI's own face: the trail holds the event, not the interface
+      // that happened to perform it — the same row the Gateway's route writes when a phone installs.
+      try {
+        const handle = openDatabase(join(layout.stateDir, "crabby.sqlite3"));
+        try {
+          // Idempotent, and required: an install may be the first thing a fresh state dir ever runs, and the trail's
+          // table exists only after the migrations do.
+          migrate(handle.db);
+          recordAudit(handle.db, {
+            ts: new Date().toISOString(),
+            kind: "extension_install",
+            outcome: "ok",
+            actor: "cli",
+            interface: "cli",
+            detail: {
+              action: "install",
+              name: installed.name,
+              report: installed.reportPath,
+            },
+          });
+        } finally {
+          handle.close();
+        }
+      } catch {
+        // A trail write that cannot reach the database is logged as a note, never a failed install — the pack is on
+        // disk and the next install's report still names this one.
+        renderer.line("audit", "the trail row could not be written (database unavailable)");
       }
       renderer.line("installed", join(repoRoot, installed.name));
       // C-E4: the report path is part of the answer, not a side effect to go looking for.

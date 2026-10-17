@@ -44,6 +44,8 @@
 // prompt in it is a lie a user acts on (D-093, F-48). And there is no second listener: §2's loopback default is what
 // `listen` is given, and `crabby gateway start` refuses a non-loopback host until pairing has something to protect.
 
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import {
   type ApprovalRecord,
   type Approvals,
@@ -96,6 +98,10 @@ import {
   configETag,
   EditMemoryBody,
   type Event,
+  type ExtensionReportRow,
+  type ExtensionReportsBody,
+  type ExtListBody,
+  ExtPackBody,
   errorEnvelope,
   isJobState,
   JOB_STATES,
@@ -153,6 +159,13 @@ import {
   RANK,
   writeConfig,
 } from "@crabby/core";
+import {
+  extInstall,
+  extList,
+  extUninstall,
+  extValidate,
+  type ImportResult,
+} from "@crabby/extensions";
 import type { DataLayout } from "@crabby/platform";
 import { detectProcess } from "@crabby/platform";
 import {
@@ -708,6 +721,7 @@ export async function buildApp(deps: GatewayDeps): Promise<BuiltApp> {
   registerConfigRoutes(app, deps);
   registerModelRoutes(app, deps);
   registerMemoryRoutes(app, deps, memoryStore);
+  registerExtensionRoutes(app, deps);
   registerAuthRoutes(app, deps, bus);
   registerTaskRoutes(app, deps, bus, checkpoints, cancellation, approvals, runner);
   registerJobRoutes(app, deps, jobStore, scheduler);
@@ -1587,6 +1601,195 @@ function registerConfigRoutes(app: FastifyInstance, deps: GatewayDeps): void {
  *  nothing else, and 20 s is the number `LIMITS.netFetchMs` already prices for one outbound call (D-115) — a probe is
  *  exactly that, driven from a route instead of from a tool. */
 const PROBE_TIMEOUT_MS = 20_000;
+
+// ------------------------------------------------------------------ extensions (§4.6, EXTENSIONS.md §5–§6)
+
+/** §4.6's four extension paths over the imported-content repo the CLI's `ext` verbs already maintain — one store,
+ *  two faces, the rule D-127 applied to overrides and D-133's whoami applies to the tool surface. `repoRoot` is
+ *  `<stateDir>/extensions`, the directory `crabby ext install` writes, so a phone installing through this route and a
+ *  terminal listing through `crabby ext list` cannot hold two opinions about what is installed (§13's reconcile reads
+ *  the folders either way).
+ *
+ *  Authority is the token, per the substitution the job routes record (F-52): §6.1 names no extension capability, and
+ *  inventing one would lock the paired owner out of their own settings screen. What keeps install honest is not a
+ *  capability but the same gate the CLI answers to — the verdict, which has no override (C-E6) — and the audit row,
+ *  because §14 prices an install as exactly the event a trail exists for. The path in a body is read by this process;
+ *  that is the act, stated rather than hidden — the same trust `PUT /config` already carries, held by the same token. */
+function registerExtensionRoutes(app: FastifyInstance, deps: GatewayDeps): void {
+  const repoRoot = join(deps.layout.stateDir, "extensions");
+  /** The audit row both writes answer through, so install and uninstall cannot disagree about what a record says. */
+  const audit = (
+    action: "install" | "uninstall",
+    name: string,
+    request: FastifyRequest,
+    extra: Record<string, unknown> = {},
+  ): void => {
+    const client = request.crabbyClient;
+    recordAudit(deps.db, {
+      ts: new Date().toISOString(),
+      kind: "extension_install",
+      outcome: "ok",
+      ...(client === undefined ? {} : { actor: client.id }),
+      ...(client === undefined ? {} : { interface: client.interface }),
+      ...(request.crabbyRequestId === undefined ? {} : { correlationId: request.crabbyRequestId }),
+      detail: { action, name, ...extra },
+    });
+  };
+
+  app.get("/api/v1/extensions", async (_request, reply) => {
+    const state = extList(repoRoot, undefined);
+    // The verdict rides the list, because W11-04's row is "greyed with the reason, not silently missing" and a settings
+    // pane that had to validate N packs per render would be a pane inventing N requests the store already answers.
+    // `exactOptionalPropertyTypes`: the store's `undefined` means "no version known", and the contract's absent field
+    // means the same thing — so the mapping is spelled rather than spread.
+    const items = state.installed.map((extension) => ({
+      name: extension.name,
+      kind: extension.kind,
+      source: extension.source,
+      installedAt: extension.installedAt,
+      ...(extension.version === undefined ? {} : { version: extension.version }),
+      path: extension.path,
+      ...(extension.originalPath === undefined ? {} : { originalPath: extension.originalPath }),
+      ...(extension.lastReportPath === undefined
+        ? {}
+        : { lastReportPath: extension.lastReportPath }),
+      verdict: extValidate(extension.path, process.platform).verdict,
+    }));
+    return reply.send({
+      items,
+      count: items.length,
+      collisions: state.collisions,
+    } satisfies ExtListBody);
+  });
+
+  app.get<{ Params: { id: string } }>("/api/v1/extensions/:id/reports", async (request, reply) => {
+    const { id } = request.params;
+    // An id is a name in this repo, and `..` in one is not a name: it is a path walk wearing an id's clothes, and the
+    // 404 below is the honest answer to it — no extension is named that.
+    if (id.includes("/") || id.includes(".."))
+      throw notFound(`extension ${id}`, request.crabbyRequestId);
+    const dir = join(repoRoot, id, "reports");
+    const items: ExtensionReportRow[] = [];
+    if (existsSync(dir)) {
+      const files = readdirSync(dir)
+        .filter((file) => file.endsWith(".json"))
+        .sort()
+        .reverse();
+      for (const file of files) {
+        try {
+          items.push({
+            file,
+            report: JSON.parse(readFileSync(join(dir, file), "utf8")) as Record<string, unknown>,
+          });
+        } catch {
+          // An unreadable report is skipped rather than fatal: D-039's history answers "when did this start failing",
+          // and one corrupt file does not unanswer it.
+        }
+      }
+    }
+    if (items.length === 0 && !existsSync(join(repoRoot, id)))
+      throw notFound(`extension ${id}`, request.crabbyRequestId);
+    return reply.send({ items, count: items.length } satisfies ExtensionReportsBody);
+  });
+
+  app.post<{ Body: ExtPackBody }>(
+    "/api/v1/extensions/validate",
+    { schema: { body: ExtPackBody } },
+    async (request, reply) => {
+      if (!isAbsolute(request.body.path) || !existsSync(request.body.path))
+        throw validationError(
+          [
+            {
+              path: "path",
+              kind: "pattern",
+              message:
+                "must be an absolute path this device can read — the Gateway reads its own filesystem, and a relative path would be relative to a cwd a caller cannot know",
+            },
+          ],
+          request.crabbyRequestId,
+        );
+      const result = extValidate(request.body.path, process.platform);
+      return reply.send({ path: request.body.path, verdict: result.verdict, lines: result.lines });
+    },
+  );
+
+  app.post<{ Body: ExtPackBody }>(
+    "/api/v1/extensions/install",
+    { schema: { body: ExtPackBody } },
+    async (request, reply) => {
+      if (!isAbsolute(request.body.path) || !existsSync(request.body.path))
+        throw validationError(
+          [
+            {
+              path: "path",
+              kind: "pattern",
+              message:
+                "must be an absolute path this device can read — the Gateway reads its own filesystem, and a relative path would be relative to a cwd a caller cannot know",
+            },
+          ],
+          request.crabbyRequestId,
+        );
+      // The verdict first, and no override: the CLI's C-E6 rule is not a terminal preference but §6.2's — `unsafe` and
+      // `incompatible` stop before anything is written, whichever face asked for the install.
+      const verdict = extValidate(request.body.path, process.platform);
+      if (verdict.verdict === "unsafe" || verdict.verdict === "incompatible")
+        throw new GatewayError({
+          code: `extension_${verdict.verdict}`,
+          message:
+            `the check answered \`${verdict.verdict}\`, and this verdict has no override — the lines name what was ` +
+            "seen; fix the pack or do not install it",
+          class: "validation",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      const installed: ImportResult = extInstall({ sourceDir: request.body.path, repoRoot });
+      if (!installed.ok)
+        throw new GatewayError({
+          code: "extension_install_refused",
+          message: installed.reason,
+          class: "conflict",
+          retryable: false,
+          ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+        });
+      audit("install", installed.name, request, {
+        report: installed.reportPath,
+        ...(installed.warnings.length === 0 ? {} : { warnings: installed.warnings }),
+      });
+      deps.log.info("extension installed", {
+        name: installed.name,
+        report: installed.reportPath,
+        ...(request.crabbyClient === undefined ? {} : { by: request.crabbyClient.id }),
+        ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+      });
+      return reply
+        .code(201)
+        .header("location", `/api/v1/extensions/${installed.name}`)
+        .send({
+          name: installed.name,
+          path: join(repoRoot, installed.name),
+          report: installed.reportPath,
+          warnings: installed.warnings,
+        });
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>("/api/v1/extensions/:id", async (request, reply) => {
+    const { id } = request.params;
+    if (id.includes("/") || id.includes(".."))
+      throw notFound(`extension ${id}`, request.crabbyRequestId);
+    const removed = extUninstall(repoRoot, id);
+    if (!removed.ok) throw notFound(`extension ${id}`, request.crabbyRequestId);
+    // §14's row for the write whose subject stops existing: the converted content, the originals and the reports all
+    // went, and the trail is what says they were here.
+    audit("uninstall", id, request);
+    deps.log.info("extension uninstalled", {
+      name: id,
+      ...(request.crabbyClient === undefined ? {} : { by: request.crabbyClient.id }),
+      ...(request.crabbyRequestId === undefined ? {} : { requestId: request.crabbyRequestId }),
+    });
+    return reply.send({ removed: id, note: removed.message });
+  });
+}
 
 // ------------------------------------------------------------------ models (§4.4, D-045/D-126/D-127)
 

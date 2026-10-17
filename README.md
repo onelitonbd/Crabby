@@ -9,13 +9,41 @@ that work the same way on Linux and macOS.
 It is not a mobile app and not a chatbot wrapper. It is a harness: model providers, multi-step agents,
 tools, memory, skills, plugins, and permission-controlled execution — all behind a single local-first Gateway.
 
-> **Current phase: M2.** The planning set is what governs, and it is still the specification code must follow rather
-> than a description of it: M1a shipped the contracts, platform, core and CLI skeleton, M1b shipped the Gateway and the
-> state directory, and M1c shipped the policy engine, the provider contract, the parity generator and CI — so
-> `crabby gateway start` answers HTTP, `crabby tools ls` answers policy, and `npm run test:parity` is what stops the
-> documents drifting from either. `DECISIONS.md` records what is still deliberately undecided — including two shapes
-> those builds found the documents had not defined (O-070, O-071), and two questions M1c chose not to answer with an
-> inference (F-33, F-34).
+## Install
+
+The path is a checkout plus `npm install` — no global install, no package repository, no self-updater (D-050).
+**[`docs/INSTALL.md`](docs/INSTALL.md)** has it per platform (Termux, Linux, macOS), the "from clone to first
+conversation" commands, and what was rehearsed. In short:
+
+```sh
+git clone https://github.com/onelitonbd/Crabby.git && cd Crabby
+npm install                                   # Termux: npm install --build-from-source
+node apps/cli/crabby.ts doctor                # the green-light check, and the recovery tool forever
+node apps/cli/crabby.ts init
+node apps/cli/crabby.ts gateway start         # loopback; prints the pairing code for the next client
+```
+
+The model attaches by URL and key — any OpenAI-compatible endpoint, no code change (D-041) — with the key in the
+vault (`crabby vault set groq`, then `config set provider.groq.key vault://groq`), never in a config file.
+
+## Using it
+
+| You want | Reach for |
+| --- | --- |
+| One question, one answer | `crabby chat "…"` |
+| A multi-step task with approvals | `crabby task run "…"`, `crabby task watch <id>` |
+| A full terminal UI | `crabby tui` |
+| A browser | `crabby web open` — served by the Gateway itself, one origin |
+| Telegram | `crabby telegram start` (pairing happens in-chat) |
+| Another device | `crabby tunnel on` — one confirmed decision, the URL printed fresh every start (§13) |
+| A timer | `cron.schedule` from a task, then `crabby job ls` |
+| Memory | it accumulates; `crabby memory list/search/forget` |
+| Skills from another harness | `crabby ext install <path>` — inert import, honest report, granted nothing (D-035) |
+| Before you panic | `crabby doctor` — and [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) |
+
+**Honest limitations, collected in one page:** [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — what Crabby does
+not promise, from the no-sandbox sentence on Termux to what the tunnel does and refuses to do. The release bar is
+that a new user hits nothing that page did not already mention.
 
 ## Planning documents
 
@@ -49,65 +77,26 @@ element-review criteria a row at a time whenever an inventory changes.
 
 ## Where the work stands
 
-Nothing in this repository needs another planning document. Implementation has started, in the order the plan set;
-what is scheduled from here:
+**M0 through M5 are complete on the container/CI side** — the seven probes ran (`probes/RESULTS.md`; the phone
+column is still owed), the contracts and skeleton shipped (M1), the whole runtime and Gateway exist (M2), all four
+interfaces are built (M3), providers/memory/skills/MCP/extensions landed with their conformance suites (M4), and
+security hardening is in: the vault (D-139), the quick tunnel (§13), the O-008 gate made final (D-140), the §17
+injection corpus, and `crabby doctor --security`'s plain-language posture. **M6 — release readiness — is
+underway:** backup/restore shipped (D-142), the changelog exists (D-143), the license audit runs (D-144), and the
+install path is written and rehearsed (`docs/INSTALL.md`).
 
-01. **M0 — half done.** The seven probes are written and run from one command (`npm run probe`, contract in
-    `probes/README.md`): `P1` the Node baseline that decides `engines`, `P2` the Fastify Gateway and its SSE channel,
-    `P3` `better-sqlite3` build and WAL torture, `P4` the framework-free Web bundle, `P5` Ink 8 at 40×24, `P6` Android
-    process lifetime, `P7` a hostile extension against the sandbox; `P8` then regenerates `docs/UI_UX_SPEC.md` and
-    `docs/DESIGN_SYSTEM.md` from the accepted inventories. Each one says which machine it ran on: the container half is
-    generated into `probes/RESULTS.md`, and the phone's column — `npm run test:termux` — is what M0 is waiting for.
-    Two of them already contradicted the plan in ways worth reading before the first line of M1 (`docs/CONSISTENCY_REVIEW.md`).
+Still owed, and by whom:
 
-02. **M1a — shipped, and it is the first product code.** `packages/api-contracts` is the shared shape four interfaces
-    have to agree on before any of them exists: identifiers, the §5.2 event envelope, the §6 error envelope, task
-    records, the five exit codes, and one `validate()` that rejects an unknown field *by name* the way §2 demands.
-    `packages/platform` resolves the data directory and detects Termux from its own markers; `packages/core` loads and
-    validates `config.json`, redacts before anything is written down, and records how the last process exited;
-    `apps/cli` runs as `crabby init | doctor | version` and `crabby config path | get | set | schema` — after
-    `npm install`, `npx crabby doctor`, since D-050 promises no global install and no self-updater. `crabby status`
-    and the contract harness need a Gateway to read, so they are M1b; what M1a found unanswered is opened as
-    O-066…O-069 rather than filled in with plausible numbers (`docs/ROADMAP.md` §3, and F-27 in
-    `docs/CONSISTENCY_REVIEW.md` for why a citation here means a line `grep` can find).
+- **The owner's device:** the Telegram wire check (`TG_BOT_TOKEN=… npm run telegram:check`) and with it the M3
+  four-interface demo — a task started on Telegram, watched from Web, approved in the TUI, cancelled from the CLI;
+  the Termux install rehearsal (also O-001's last clause); the performance pass (memory, startup, idle CPU,
+  battery, WAL growth); the phone column of the probes (P-003/P-004/P-010/P-011).
+- **This repository:** the release pages (this file, limitations, troubleshooting), then the `v0.1.0` cut at M6's
+  exit bar — a new user, following only the docs on a phone, reaches a completed multi-step task with approvals,
+  and hits nothing the limitations page did not already mention.
 
-03. **M1b — shipped: the Gateway and the state directory.** `packages/storage` owns the one SQLite file, the migration
-    ledger, per-task `seq` numbering, redaction on write, and the 64 KiB overflow rule that moves a payload into
-    `scratch/<taskId>/` with a marker in its place. `packages/gateway` is Fastify 5 validating with the contract's own
-    `validate()`, pairing over a single-use 8-character code, tokens stored as digests, `Idempotency-Key` replay that
-    returns the recorded answer, and SSE with a 15 s heartbeat plus §5.4's explicit gap frame; every route needs a
-    token, health included. On the CLI side: `crabby gateway start` (loopback, Ctrl-C drains it, and it publishes and
-    removes `gateway.json` so other processes discover the port instead of assuming one), `gateway status`, `status`,
-    `auth pair|list|revoke`, `task ls`, `task show`. `tests/integration/gateway.test.ts` asserts the routes over a real
-    socket and drives one spawned CLI against one spawned Gateway — P-003's lifecycle half, as a test. What is
-    *absent* on purpose: `task run` (an executor is M2's), `POST /admin/*` (M2's policy engine — an interface may
-    request and relay, never grant), and any bind beyond loopback.
-03b. **M1c — shipped: policy, providers, the parity generator, CI.** `packages/policy` is `SECURITY.md` §6 as code —
-    the 32-capability vocabulary, the four tiers, every §4.2 tool row transcribed with its base tier and grants,
-    argument-dependent escalation, and a `registryDigest` so a stored answer says *which* policy gave it (D-080).
-    `packages/providers` is the adapter contract with a fake provider that is held to the same conformance suite a real
-    adapter will be, which is why no test in this repository needs a provider key (D-081). `GET /api/v1/tools` and
-    `crabby tools ls` expose the registry to the four interfaces, `crabby diagnostics` writes the sanitized report as a
-    0600 temp file and refuses a leaky one rather than redacting it after the fact, and `scripts/parity.ts` generates
-    `docs/INTERFACES_AND_API.md` §8 while failing on any route, command, tier or capability the documents and the code
-    disagree about. `.github/workflows/ci.yml` runs the seven legs that pass today and §12 names the ones that need a
-    milestone first, the Termux container among them (D-082). Writing that generator found six findings — F-32…F-37 —
-    three of them defects in the documents, which is the argument for a check that reads code and prose instead of two
-    prose files.
-04. **From there, every step that ships carries its own owner review:** the running screen or command plus the element
-    IDs it implements, one unit at a time (`D-076`). An answer becomes a code change *and* an inventory-row change in
-    the same commit; no answer is recorded as `unreviewed`, never as accepted.
-05. **Nine rows are open** until a device, a real user, or a policy nobody has written yet answers them: O-006 and
-    O-051 (terminal rendering on a phone), O-008 (extension isolation), O-064 (signing a distribution tier), O-065
-    (what a Termux sandbox can enforce), O-052 (remembered approvals, post-v1 by choice), O-070 and O-071 — two shapes
-    the contracts require and the documents never defined, a client id with no prefix and `system.*` events that must
-    carry a `taskId` — and O-072, two §11 auth tests that each need a rule the spec has not written. Two more (O-001,
-    O-002) are closed on everything but one measurement each: a clean Termux build and a WAL torture. Each row states
-    what closes it, and none of them is closed by writing code that assumes an answer.
-
-The element review (675 rows in `docs/review/`) is complete: 25 rows moved by D-059's narrow exception and 650 by the
-delegated pass in D-075, whose criteria and re-runnable scan live in `docs/review/README.md`. To reopen any of it —
-one row at a time, then `python3 scripts/count-inventory.py --markdown`, paste, `python3 scripts/check-docs.py`.
+`docs/ROADMAP.md` has one paragraph per slice (39–82); `HANDOVER.md` is where the next agent starts; `WORKLOG.md`
+is the running logbook.
 
 ## Non-negotiable principles
 
@@ -121,4 +110,4 @@ one row at a time, then `python3 scripts/count-inventory.py --markdown`, paste, 
 
 ## License
 
-MIT (planned).
+MIT — see [`LICENSE`](LICENSE). Third-party notices: [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).

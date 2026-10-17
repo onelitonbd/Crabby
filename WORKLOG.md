@@ -404,3 +404,10 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   মানে backup), rehearsed বক্স (linux/x64, আজ; Termux কলাম = মালিক-ডিভাইস, O-001-র শেষ ক্লজ)।
 - **রিহার্সাল:** সতেজ clone → install → init/doctor exit 0 → backup integrity ok → gateway start (v16, pairing
   কোড, auth gate, clean drain)।
+## Slice 18 — M6 slice-5: রিলিজ-পেজ (README + LIMITATIONS + TROUBLESHOOTING) — 2026-10-17
+
+- **README:** M2-যুগের বর্ণনা সরিয়ে — ৪-কমান্ড install, "using it" টেবিল (চার ইন্টারফেস), কে-কী-ধর্য (মালিক-ডিভাইস:
+  telegram wire check + ডেমো + Termux rehearsal + performance pass + probe phone কলাম; রিপো: পেজগুলো + v0.1.0 কাটা)।
+- **`docs/LIMITATIONS.md`:** §18-09-এর user-facing পেজ — no-sandbox, no local inference, no executable extension,
+  once-only approvals, forward-only migration, tunnel fresh-URL, weaker file-store — প্রতিটা লাইনে সিদ্ধান্ত-লিংক।
+- **`docs/TROUBLESHOOTING.md`:** লক্ষণ → বিল্ড আসলে যে বাক্য ছাপে → টাইপ করার কমান্ড; doctor = triage entry।

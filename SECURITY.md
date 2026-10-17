@@ -453,7 +453,8 @@ The security design is ready for implementation planning when:
 06. Remote-mode requirements are complete enough that no implementer must invent a security rule — **met (D-032/D-066):** loopback default, pairing-granted capabilities, and the quick tunnel behind one confirmed decision whose URL is printed per start and never redirected.
 07. Audit redaction rules are decided (O-022 closed by D-065) and covered by tests.
 08. Threat model rows T-01…T-15 each map to at least one concrete mitigation and at least one test — **met:** §20's map names the tests beside the sections.
-09. Platform limitations are documented in user-facing docs, not only in this file.
+09. Platform limitations are documented in user-facing docs, not only in this file — **met (M6):** `docs/LIMITATIONS.md`
+   is that page, and `docs/TROUBLESHOOTING.md` repeats the sentences a user actually hits.
 10. `DECISIONS.md` reflects the accepted/open status of every choice referenced above.
 
 ## 19. Open Security Decisions

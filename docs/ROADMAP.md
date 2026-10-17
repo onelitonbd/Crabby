@@ -1711,6 +1711,17 @@ version, backup, gateway start with schema v16 applied and the auth gate refusin
 drain — and the page records exactly that, with the Termux column named as owner-device work, which is also
 O-001's last clause. Gates: doctor's node check green, docs:check (27 documents), full sweep, parity.
 
+**Eighty-third slice — the release pages: README told the truth, and the two pages the exit bar names.** README
+stopped describing M2: it now installs in four commands, points at `docs/INSTALL.md`'s rehearsal, shows the
+"using it" table across the four interfaces, and states who owes what (the owner's device holds the Telegram wire
+check and the demo, the Termux rehearsal, the performance pass and the probe phone column; the repository holds
+the pages themselves and the `v0.1.0` cut). `docs/LIMITATIONS.md` is §18-09's user-facing page — the no-sandbox
+sentence, no local inference on Android, no third-party executable code, once-only approvals, forward-only
+migrations, the tunnel's fresh-URL rule, the weaker file-store disclosure — every line a decision link, none a
+bug to file. `docs/TROUBLESHOOTING.md` is the symptom → sentence Crabby actually prints → command to type table,
+drawn from the refusals the build really answers with. `docs/DEVELOPMENT.md` §9's release bar now has the page it
+always meant. Gates: docs:check (29 documents), full sweep, parity.
+
 ## 8. Phase M6 — Release readiness
 
 *Underway (2026-10-17): the backup/restore mechanics are shipped (D-142, slice 79); the install docs, license

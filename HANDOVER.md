@@ -58,9 +58,11 @@ verified copy and a named-exclusions manifest, secrets excluded by default, rest
 exists (`CHANGELOG.md`, D-143 — `Unreleased` accumulates, `v0.1.0` is cut at this phase's exit bar), the license
 audit is `npm run license:audit` (D-144 — allowlist, fails on anything outside it) and `LICENSE` (MIT) plus
 `THIRD-PARTY-NOTICES.md` are in the repository. The install path is written and rehearsed (`docs/INSTALL.md`,
-D-050's path; `engines.node >=22.22` pinned from the P1 measurement; the Termux column and the performance pass
-are owner-device work). What the phase still owes: the README/troubleshooting/limitations release pages — and the
-performance pass, which is a phone measurement the owner's device owes.
+D-050's path; `engines.node >=22.22` pinned from the P1 measurement), and the release pages exist: README told the
+truth about the phase, `docs/LIMITATIONS.md` is §18-09's user-facing page, `docs/TROUBLESHOOTING.md` pairs real
+refusal sentences with the command that fixes them. What the phase still owes **this repository**: the `v0.1.0`
+cut at the exit bar — and the exit bar itself is owner-device: the Termux install rehearsal (O-001's last clause),
+the performance pass, the probe phone column, and the Telegram wire check with the M3 demo.
 
 | Workstream | State |
 | --- | --- |
@@ -74,7 +76,7 @@ carrying an accepted limitation — **that half passes** — and one task is sta
 the TUI, cancelled from the CLI — in one demo, documented as the release test. **The demo is the remaining M3 work, and it
 needs a live Telegram token.**
 
-Decisions run to **D-144**; open questions to **O-075**. O-008's gate is final (D-140) — the strategy half is post-v1. O-008's gate is final (D-140) — the strategy half is post-v1. `docs/ROADMAP.md` has one paragraph per slice (39–81) — read the
+Decisions run to **D-144**; open questions to **O-075**. O-008's gate is final (D-140) — the strategy half is post-v1. `docs/ROADMAP.md` has one paragraph per slice (39–83) — read the
 last three to know what just happened and why.
 
 ## 3. The last three slices, and the bugs they found

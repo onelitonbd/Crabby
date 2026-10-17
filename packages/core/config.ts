@@ -257,6 +257,22 @@ export const TelegramConfig = Type.Object(
 );
 export type TelegramConfig = Static<typeof TelegramConfig>;
 
+/** M4's memory namespace (D-073's controls, W8-05's kill switch): how the agent's automatic memory creation behaves.
+ *  `off` is the default and disables it entirely — a memory written silently is a personality change nobody approved.
+ *  `propose` lands every candidate in the pending queue a person reviews (W8-06); `store` writes directly, which is
+ *  still T1 at the tool and still flags external-derived content T2. The promotion threshold D-073 left open has no
+ *  key here on purpose: a config key nothing reads is a field that lies, and the open number is recorded where the
+ *  decision left it. */
+export const MemoryConfig = Type.Object(
+  {
+    autoMemory: Type.Optional(
+      Type.Union([Type.Literal("off"), Type.Literal("propose"), Type.Literal("store")]),
+    ),
+  },
+  { additionalProperties: false },
+);
+export type MemoryConfig = Static<typeof MemoryConfig>;
+
 export const ConfigFile = Type.Object(
   {
     limits: Type.Optional(LimitsConfig),
@@ -275,6 +291,9 @@ export const ConfigFile = Type.Object(
     /** §7.4's Telegram interface: the allow-list and the token reference. Absent means the interface is not
      *  configured, which `crabby telegram start` reports instead of papering over. */
     telegram: Type.Optional(TelegramConfig),
+    /** D-073's automatic-memory policy, named once here so `crabby config set memory.autoMemory propose` is the
+     *  documented override path (D-074's rule about defaults being `limits.*`-style keys, applied to a mode). */
+    memory: Type.Optional(MemoryConfig),
   },
   { additionalProperties: false },
 );

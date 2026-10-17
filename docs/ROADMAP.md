@@ -1474,6 +1474,18 @@ automatic extraction and its config toggle are the item's named remainder. Gates
 7/7 over HTTP, contracts 17/17 with the prefix list moved on purpose, full sweep, typecheck, biome, parity,
 docs:check.
 
+**Sixty-ninth slice — the model's memory hand: `memory.save/search/delete` over the real store (D-136).** §4.2's
+three rows existed as prices before this gave them an executor, and wiring them answered the question the tables left
+open: what may a model claim when it saves? One thing — `fromUntrustedContent`, the argument §4.3's escalation reads
+for the T2 move and the tool maps to the store's `external` marker. Origin, status and source count are not in the
+tool's schema at all: the writer is the agent, a proposal is born pending or active by the owner's mode and nothing
+else, and the mode itself — `memory.autoMemory`, `off` by default, `propose` for the queue, `store` for direct writes —
+is bound at composition, so a change is a restart fact rather than a per-call opinion. `off` refuses and names the
+config key; search and delete never consult the switch, because silencing the pen must not silence the recall, and
+forgetting is priced by §4.2 rather than by a mode. The bulk path reads `bulk` + `query` and counts what it touched in
+the answer. The promotion threshold D-073 left open gets no config key. Gates: memory tools 6/6, store 11/11, routes
+7/7, full sweep, typecheck, biome, parity (45 tools unchanged — these rows were already priced), docs:check.
+
 ## 6. Phase M4 — Providers, memory, extensions
 
 - Provider adapters: `openai-compatible` (+ user-defined endpoints, D-041), `ollama`, `anthropic`, `gemini`, each

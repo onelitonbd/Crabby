@@ -183,3 +183,15 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - **নাম-ধরা বাকি (এই M4-আইটেমের):** loop-এর automatic extraction + config toggle (memory.* namespace), executor-এ
   memory.save/search/delete tools, T9/W8/G3-19 স্ক্রিন; propagation call-site history.deleteConversation (C9-02 verb
   নেই)। স্যান্ডবক্স restore HEAD নামিয়েছিল (9c230b9) → fetch+reset-এ 391354a ফেরত; node_modules পুনঃইনস্টল।
+
+## করলাম (M4 slice 4 — memory tools executor + auto-memory মোড, D-136)
+
+- **core config:** `memory.autoMemory` namespace — `"off"` (ডিফল্ট) | `"propose"` (pending কিউ) | `"store"`; D-073-এর
+  promotion threshold-এর কোনো কি নেই ইচ্ছাকৃতভাবে (কিছুই না-পড়া কি মিথ্যা ক্ষেত)।
+- **packages/tools/memory.ts:** memory.save/search/delete — kill switch কম্পোজিশনে বাঁধা (প্রতি-কল মত নয়); `off` রিফিউজাল
+  কি-নাম বলে; মডেল একটাই দাবি করতে পারে — `fromUntrustedContent` (escalation-এর T2 + store-এর external মার্কার);
+  origin/status/sourceCount স্কিমাতেই নেই; sourceKind সবসময় "agent"; bulk T3 গুনে উত্তর দেয়; search/save-এর সীমা
+  store-এর ঘড়ি ধার (sqliteBusyTimeoutMs)। টেস্ট ৬/৬।
+- **gateway composition root:** memoryTools composed-তালিকায় (runner-থাকা গেটওয়েতে runtime.implemented 17→20)।
+- **D-136 রেকর্ড** (৩ সিদ্ধান্ত: kill switch কম্পোজিশনের, মডেলের এক-দাবি, escalation-আর্গ = ডিক্লেয়ার্ড-আর্গ); INTERFACES
+  GET /tools রো 17→20; ROADMAP-এ ঊনসত্তরতম slice; counter 136।

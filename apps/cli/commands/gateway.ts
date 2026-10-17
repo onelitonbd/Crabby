@@ -36,6 +36,7 @@ import {
 import { type DataLayout, homeDirectory } from "@crabby/platform";
 import { composeProviders, selectDefaultModel } from "@crabby/providers";
 import {
+  createMemoryStore,
   DB_FILE_NAME,
   getSession,
   getTask,
@@ -55,6 +56,7 @@ import {
   createConfigTools,
   createFileTools,
   createHttpTools,
+  createMemoryTools,
   createNetTools,
   createSchedulerTools,
   createSessionTools,
@@ -343,6 +345,13 @@ async function runStart(
    *  read-modify-write and the token that goes with it, which is D-099's rule about a declared field: a token the model
    *  could choose would be a write aimed at a document nobody read. What the write does *not* do is change this running
    *  process, and the tool says so in its answer rather than letting a switch look like it took effect. */
+  /** §4.2's three memory rows, over the same database every route reads. The mode is D-073's kill switch as the
+   *  composition read it — `off` unless the document says otherwise — and it is read here rather than inside the tool
+   *  so that a mode change is a restart fact like every other configuration change, not a per-call opinion. */
+  const memoryTools = createMemoryTools({
+    store: createMemoryStore(handle.db),
+    mode: loaded.config.memory?.autoMemory ?? "off",
+  });
   const configTools = createConfigTools({
     read: () => configDocument(layout),
     write: ({ key, value }) => {
@@ -383,6 +392,7 @@ async function runStart(
           workspaceTools,
           netTools,
           httpTools,
+          memoryTools,
           configTools,
           schedulerTools,
           sessionTools,

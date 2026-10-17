@@ -84,6 +84,15 @@ export {
   runHttpTool,
 } from "./http.ts";
 export {
+  type AutoMemoryMode,
+  createMemoryTools,
+  MEMORY_DELETE_TOOL,
+  MEMORY_SAVE_TOOL,
+  MEMORY_SEARCH_TOOL,
+  type MemoryToolExecutor,
+  type MemoryToolOptions,
+} from "./memory.ts";
+export {
   createNetTools,
   MAX_REDIRECTS,
   NET_FETCH_TOOL,

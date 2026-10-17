@@ -195,3 +195,31 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - **gateway composition root:** memoryTools composed-তালিকায় (runner-থাকা গেটওয়েতে runtime.implemented 17→20)।
 - **D-136 রেকর্ড** (৩ সিদ্ধান্ত: kill switch কম্পোজিশনের, মডেলের এক-দাবি, escalation-আর্গ = ডিক্লেয়ার্ড-আর্গ); INTERFACES
   GET /tools রো 17→20; ROADMAP-এ ঊনসত্তরতম slice; counter 136।
+
+## করলাম (M4 slice 5 — extensions core: manifest + SKILL.md + checker + C-1, D-035)
+
+- **নতুন প্যাকেজ `@crabby/extensions`** — EXTENSIONS.md-র content-only পথ প্রথমবার কোডে:
+  - `manifest.ts` — §4.2 নেটিভ `crabby.extension.json`: অজানা-ফিল্ড hard reject (নাম ধরে), বাধ্যতামূলক ৮ ফিল্ড,
+    reverse-DNS id, semver, hostApi {min,max} এক জোড়া (§4.4), SPDX-ish license, kind enum, 64 KiB/depth-8 পার্সার-সীমা,
+    `HOST_API = 1.0`, EXECUTABLE_KINDS (tool/provider/hook/interface) vs CONTENT_KINDS।
+  - `skill.ts` — §4.3/D-071 ফ্রন্টম্যাটার (yaml@2): name 1–64 + ফোল্ডার-নাম হার্ড-এরর, description 1–1024 untrusted,
+    license অনুপস্থিত=warn, compatibility displayed-not-enforced, metadata version/author/tags/`crabby.*` + অজানা
+    verbatim-preserved, `allowed-tools` recorded-never-granted (string-না-এন্ট্রি হলে পুরো তালিকা preserved), body
+    >500 লাইন warn / >32 KiB validation-পাস-কিন্তু activationBlock (ট্রাঙ্কেশন নেই)।
+  - `scan.ts` — §6 ধাপ-৬ স্ট্যাটিক স্ক্যান: ৫ নাম-ঘোষিত প্যাটার্ন (instruction-override, role-hijack, secret-exfiltration,
+    shell-payload, destructive-command), description+body-তে, প্যাটার্ন-ক্রমে deterministic।
+  - `check.ts` — §6 নির্ধারক চেকার: ফরম্যাট ডিটেকশন (native বা SKILL.md direct/one-level-down pack), §4.4 পলিসি
+    (min-major>host → incompatible দুই-ভার্সন-নামে; additive-minor → লোড+named gap), platforms অনুপস্থিত="unstated"
+    নন-"all", executable-kind → D-038 রিফিউজাল, capabilities-অনুরোধ warn-recorded, verdict
+    compatible|partial|incompatible|unsafe (unsafe-এর override নেই)।
+  - `convert.ts` — §11 C-1: pack (one-level-down) বা single; রিপোর্ট mapped/displayed/reinterpreted(খালি, ইচ্ছাকৃত)/
+    unknown + allowedTools {raw, granted:false}; alias টেবিল Bash→shell.run, Read→fs.read, WebFetch→net.fetch…;
+    `originals/`-ফোল্ডারে SKILL.md verbatim; `reports/`-এ timestamped JSON; সোর্স ডিরেক্টরি অস্পৃশ্য; unsafe কিছুই ইমপোর্ট করে না।
+  - `workspace.ts` — §4.1 `<workspace>/skills` স্ক্যান (one skill per folder, ভাঙা ফোল্ডার স্ক্যান থামায় না)।
+  - `repo.ts` — §12 verb-গুলোর ফাংশন-রূপ: extList (ফোল্ডার=সত্য reconcile + workspace-মার্জ + repo↔workspace
+    collision রিপোর্ট, imported জেতে), extValidate, extInit, extCheckCompat, extInstall, extUninstall।
+- **টেস্ট ৪১/৪১** (manifest 9, frontmatter 8, checker 9, conversion 8, repo 3, workspace 4) — node:test, tmpdir fixture।
+- **শিক্ষা:** §4.3-র folder-name হার্ড-এরর সর্বত্র — টেস্ট-fixture-ও নাম-সঠিক ফোল্ডারে; §4.1-এর collision এক-কালেকশনে
+  structurally অসম্ভব (folder=name হলে), তাই সেটি repo↔workspace মার্জে ধরা হয়; `docs/extensions/PACKAGES.md` +
+  `docs/extensions/REPO.md` (অ্যাডভাইজরি ব্যাখ্যা: first-party-র লোডিং কোথায়, ইমপোর্ট-পাইপলাইনের লেআউট কী)।
+- **ডক:** ROADMAP-এ সপ্ততম slice। yaml@2.9.1 রুট-dependency (--ignore-scripts)।

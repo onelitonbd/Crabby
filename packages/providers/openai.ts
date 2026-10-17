@@ -38,7 +38,6 @@
 // the one that must keep it out of a log and out of model context; and any retry logic, because D-043's ladder is the
 // loop's and an adapter that retried would double it.
 
-import { LIMITS_DEFAULTS } from "@crabby/core";
 import { validateProviderConfig } from "./config.ts";
 import {
   assertNoPrivilegedFields,
@@ -55,14 +54,13 @@ import {
   type StreamEvent,
   type Usage,
 } from "./contract.ts";
-import { type ModelDescriptor, parseDescriptor, type SupportedFeature } from "./descriptor.ts";
+import { type ModelDescriptor, parseDescriptor } from "./descriptor.ts";
 import { ProviderError, translateProviderError } from "./errors.ts";
 import type { OverrideProvenance } from "./override.ts";
 import {
   asNumber,
   asString,
   createInFlightTable,
-  type DeadlineName,
   type Guard,
   guardFor,
   type InFlight,

@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import { createLogger } from "@crabby/core";
-import { buildApp, createClient } from "@crabby/gateway";
+import { buildApp } from "@crabby/gateway";
 import { dataLayout } from "@crabby/platform";
 import { capabilitiesFor } from "@crabby/policy";
 import { migrate, mintPairingCode, openDatabase, redeemPairingCode } from "@crabby/storage";

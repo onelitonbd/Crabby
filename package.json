@@ -40,5 +40,8 @@
     "probe:results": "node probes/to-results.mjs",
     "test:termux": "node probes/run.mjs --device",
     "format:check": "biome format ."
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
   }
 }

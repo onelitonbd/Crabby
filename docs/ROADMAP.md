@@ -1486,6 +1486,24 @@ forgetting is priced by §4.2 rather than by a mode. The bulk path reads `bulk` 
 the answer. The promotion threshold D-073 left open gets no config key. Gates: memory tools 6/6, store 11/11, routes
 7/7, full sweep, typecheck, biome, parity (45 tools unchanged — these rows were already priced), docs:check.
 
+**Seventieth slice — the extensions core: manifest, frontmatter, checker, C-1 import (D-035).** `@crabby/extensions`
+exists now, and its shape is EXTENSIONS.md's asymmetry made code: the native `crabby.extension.json` **rejects unknown
+fields and names them** (a typo'd capability would otherwise disable a permission silently), while an imported
+`SKILL.md` **records and preserves them** (an upstream format is dated after this release by definition, and refusing
+it for carrying a field we never saw is how an import path becomes useless). The §4.3 table is per-field treatment,
+not summary — `allowed-tools` is read for the capability diff and granted never, `compatibility` is displayed not
+enforced, unknown metadata survives verbatim — and the 500-line/32-KiB rules stay two rules: the first a warning, the
+second an activation refusal that truncates nothing. §6's checker is one deterministic function (format, structure,
+the §4.4 API policy — higher major refuses naming both versions, additive minor loads with the gap named — platform
+fit where absence means *unstated*, not *all*), executable kinds are refused until O-008 passes a hostile-extension
+test (D-038), and the scan's `unsafe` verdict has no override and no import. The C-1 import writes converted content,
+the verbatim original under `originals/`, and a per-skill report under `reports/` — mapped, displayed, an honestly
+empty *reinterpreted* column, and every unknown field — while the source directory stays byte-identical; the report's
+tool mapping is an explicit alias table (Bash → `shell.run`), because a heuristic that pretended to be exact would be
+a grant in disguise. §4.1's name uniqueness lands where both collections are visible: the imported copy wins the row,
+the overlap is reported as a collision. Gates: extensions 41/41 (manifest 9, frontmatter 8, checker 9, conversion 8,
+repo 3, workspace 4), full sweep, typecheck, biome, parity, docs:check.
+
 ## 6. Phase M4 — Providers, memory, extensions
 
 - Provider adapters: `openai-compatible` (+ user-defined endpoints, D-041), `ollama`, `anthropic`, `gemini`, each

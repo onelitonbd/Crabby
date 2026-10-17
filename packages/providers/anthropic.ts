@@ -34,7 +34,6 @@ import {
   type Provider,
   type ProviderConfig,
   type ProviderContext,
-  type ProviderMessage,
   type ProviderRequest,
   type ProviderToolCall,
   type ProviderToolSpec,
@@ -464,7 +463,6 @@ export function createAnthropicProvider(options: AnthropicProviderOptions): Prov
         number,
         { id: string; name: string | undefined; arguments: string }
       >();
-      let text = "";
       let sawFirstToken = false;
       let usage: Usage | undefined;
       let stopReason: unknown;
@@ -588,7 +586,6 @@ export function createAnthropicProvider(options: AnthropicProviderOptions): Prov
                   sawFirstToken = true;
                   guard.firstToken();
                 } else guard.progress();
-                text += fragment;
                 yield { type: "delta", text: fragment };
               }
               if (json !== undefined && json !== "") {

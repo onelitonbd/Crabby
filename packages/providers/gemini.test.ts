@@ -490,7 +490,9 @@ describe("the generateContent wire's own grammar", () => {
       ["model", "user"],
       "the system turn rides systemInstruction; assistant maps to model",
     );
-    assert.deepEqual((wire?.body.systemInstruction as Record<string, unknown>).parts, [
+    const systemInstruction = wire?.body.systemInstruction;
+    assert.ok(typeof systemInstruction === "object" && systemInstruction !== null);
+    assert.deepEqual((systemInstruction as Record<string, unknown>).parts, [
       { text: "you are terse" },
     ]);
   });
@@ -515,7 +517,9 @@ describe("the generateContent wire's own grammar", () => {
     const contents = local.last()?.body.contents as Record<string, unknown>[];
     const toolTurn = contents.at(-1);
     assert.equal(toolTurn?.role, "user");
-    const part = (toolTurn?.parts as Record<string, unknown>[])[0] ?? {};
+    const toolParts = toolTurn?.parts;
+    assert.ok(Array.isArray(toolParts));
+    const part = (toolParts as Record<string, unknown>[])[0] ?? {};
     assert.deepEqual(part.functionResponse, {
       name: "file.read",
       response: { content: "- one" },

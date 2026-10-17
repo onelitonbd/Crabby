@@ -1,0 +1,15 @@
+{
+  "name": "@crabby/extensions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "EXTENSIONS.md's content-only path (D-035): the native manifest, the SKILL.md frontmatter contract (D-071), the deterministic checker (\u00a76), the C-1 import and its conversion report (D-039), and the file-backed extension repo",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@crabby/core": "0.0.0",
+    "yaml": "^2.9.1"
+  }
+}

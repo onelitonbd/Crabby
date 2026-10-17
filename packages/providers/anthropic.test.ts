@@ -482,12 +482,9 @@ describe("the Messages API's own grammar", () => {
     const wire = local.last();
     assert.equal(wire?.body.model, TOOL_MODEL);
     assert.equal(wire?.body.system, "you are terse");
-    assert.ok(Array.isArray(wire?.body.messages));
-    assert.equal(
-      (wire?.body.messages as unknown[]).length,
-      1,
-      "the system turn does not ride in messages",
-    );
+    const sent = wire?.body.messages;
+    assert.ok(Array.isArray(sent));
+    assert.equal(sent.length, 1, "the system turn does not ride in messages");
     assert.equal(wire?.body.max_tokens, 1_024, "the descriptor's maxOutputTokens is the default");
     assert.equal(wire?.body.stream, false);
     assert.equal(wire?.headers["anthropic-version"], ANTHROPIC_VERSION);
@@ -527,11 +524,15 @@ describe("the Messages API's own grammar", () => {
     const sent = wire?.body.messages as Record<string, unknown>[];
     const toolTurn = sent.at(-1);
     assert.equal(toolTurn?.role, "user", "the family carries a tool result in a user turn");
-    const block = (toolTurn?.content as Record<string, unknown>[])[0] ?? {};
+    const toolContent = toolTurn?.content;
+    assert.ok(Array.isArray(toolContent));
+    const block = (toolContent as Record<string, unknown>[])[0] ?? {};
     assert.equal(block.type, "tool_result");
     assert.equal(block.tool_use_id, "toolu_1");
     const assistantTurn = sent.at(-2);
-    const toolUse = (assistantTurn?.content as Record<string, unknown>[]).find(
+    const assistantContent = assistantTurn?.content;
+    assert.ok(Array.isArray(assistantContent));
+    const toolUse = (assistantContent as Record<string, unknown>[]).find(
       (candidate) => candidate.type === "tool_use",
     );
     assert.deepEqual(toolUse?.input, { path: "notes/todo.md" });

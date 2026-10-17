@@ -30,7 +30,6 @@ import {
   type Provider,
   type ProviderConfig,
   type ProviderContext,
-  type ProviderMessage,
   type ProviderRequest,
   type ProviderToolCall,
   type ProviderToolSpec,

@@ -18,17 +18,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import { type ConfigFile, createLogger } from "@crabby/core";
-import { buildApp, createClient } from "@crabby/gateway";
+import { buildApp } from "@crabby/gateway";
 import { dataLayout } from "@crabby/platform";
 import { capabilitiesFor } from "@crabby/policy";
 import { composeProviders } from "@crabby/providers";
-import {
-  migrate,
-  mintPairingCode,
-  openDatabase,
-  redeemPairingCode,
-  type SqliteDb,
-} from "@crabby/storage";
+import { migrate, mintPairingCode, openDatabase, redeemPairingCode } from "@crabby/storage";
 
 const DESCRIPTOR = {
   contextWindow: 4096,

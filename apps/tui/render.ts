@@ -119,6 +119,13 @@ export function planFrame(
   previous: readonly string[],
   next: readonly string[],
   columns: number,
+  /** The screen row the cursor is actually on when this plan runs. The plan's moves are **relative**, so every move it
+   *  emits is computed from this row — the old assumption ("the cursor sits on the previous frame's last row") was true
+   *  only while the renderer was the only thing moving it. T5-02's real cursor broke that: after every draw the cursor
+   *  is parked on the composer's edit row, and a plan that assumed the frame's last row emitted its first move four
+   *  rows too high — every keystroke's composer line landed above the old one, and the stale line below sat there
+   *  looking like a second draft. Found on the owner's phone, where `❯ h` and `❯ hi` were both on screen at once. */
+  cursorAt: number = previous.length - 1,
 ): FramePlan {
   const fitted = next.map((line) => fit(line, columns));
   const previousLines = previous.map((line) => fit(line, columns));
@@ -134,9 +141,11 @@ export function planFrame(
   }
 
   const rows = Math.max(previousLines.length, fitted.length);
-  // Start on the last row of the **previous** frame, clamped to the taller of the two so a frame that grew is drawn from a
-  // row that exists. A brand-new frame (`previous` empty) starts on its own first row, which is where the cursor is.
-  let cursor = previousLines.length === 0 ? 0 : Math.min(previousLines.length - 1, rows - 1);
+  // Start from **where the cursor actually is** (`cursorAt`), clamped to the taller of the two so a frame that grew is
+  // drawn from a row that exists. A brand-new frame (`previous` empty) starts on its own first row, which is where the
+  // anchor left it.
+  let cursor =
+    previousLines.length === 0 ? 0 : Math.min(Math.max(0, Math.trunc(cursorAt)), rows - 1);
   let text = "";
   const emit = (row: number, body: string): void => {
     text += moveBy(row - cursor) + clearLine() + body;
@@ -165,6 +174,8 @@ export class FrameRenderer {
   #previous: string[] = [];
   #height = 0;
   #cursorRow = 0;
+  #eraseScreen = false;
+  #everDrawn = false;
 
   constructor(terminal: Terminal) {
     this.#terminal = terminal;
@@ -192,16 +203,29 @@ export class FrameRenderer {
    *  owner's own canvas, a 63×30 phone terminal, where a 30-row frame plus even one startup line cannot fit. The
    *  anchor walks to the bottom row (`CSI B` clamps, so the count may overshoot), scrolls one line per frame row so
    *  everything above goes to the scrollback that D-061 promises the user keeps, steps back up to the frame's first
-   *  row, and lets the plan draw from there — exactly the "brand-new frame starts on its own first row" position. */
+   *  row, and lets the plan draw from there — exactly the "brand-new frame starts on its own first row" position.
+   *
+   *  **Unless the frame already owns the screen** (`invalidate("screen")` — a reflow after a shrink, the soft
+   *  keyboard opening): then the visible screen *is* the old frame's tail, so the anchor is an erase from the top of
+   *  the screen (`CSI 999A` clamps up, `CSI J` clears down) and a redraw **with no scrolling at all**. A re-anchor
+   *  that scrolled would push the old frame's copy into the scrollback on every keyboard toggle — and mid-word, on
+   *  a keyboard that settles in more than one resize, that is a separate `❯ h` and `❯ hi` draft sitting in the
+   *  scrollback as if the composer had been three different messages. The user's scrollback keeps their
+   *  conversation, not our repaints. */
   drawNow(lines: readonly string[]): void {
     let anchor = "";
     if (this.#height === 0 && lines.length > 0) {
       const rows = this.#terminal.rows;
-      anchor = `${CSI}999B${"\n".repeat(Math.max(1, rows))}${CSI}${rows - 1}A\r`;
+      anchor =
+        this.#eraseScreen && this.#everDrawn
+          ? `${CSI}999A\r${CSI}J`
+          : `${CSI}999B${"\n".repeat(Math.max(1, rows))}${CSI}${rows - 1}A\r`;
+      this.#eraseScreen = false;
     }
-    const plan = planFrame(this.#previous, lines, this.#terminal.columns);
+    const plan = planFrame(this.#previous, lines, this.#terminal.columns, this.#cursorRow);
     this.#previous = [...plan.lines];
     this.#height = plan.height;
+    if (plan.lines.length > 0) this.#everDrawn = true;
     if (plan.text !== "" || anchor !== "") this.#terminal.write(anchor + plan.text);
     if (plan.cursorRow >= 0) this.#cursorRow = plan.cursorRow;
   }
@@ -231,8 +255,14 @@ export class FrameRenderer {
   /** T1-05's reflow begins here: the terminal changed size under the app (on a phone, the soft keyboard opening is a
    *  resize), and the frame the renderer remembers is drawn for a size that no longer exists. Forgetting is the honest
    *  response — the next draw re-anchors (the anchor path above) and repaints every line from scratch, because a
-   *  line-diff against a frame whose geometry is gone would patch a screen that is not there. */
-  invalidate(): void {
+   *  line-diff against a frame whose geometry is gone would patch a screen that is not there.
+   *
+   *  The mode is about who owns the screen at the moment of the resize: `"screen"` says the *old* frame filled the
+   *  *old* terminal exactly (`renderer.height === old rows`), so whatever is visible now is the frame's own tail and
+   *  the reflow may erase it in place — no scroll, no copy pushed into the scrollback. `"scroll"` says part of the
+   *  screen belongs to the shell's history above the frame, and the re-anchor has to scroll to make room. */
+  invalidate(mode: "screen" | "scroll" = "scroll"): void {
+    this.#eraseScreen = mode === "screen";
     this.#previous = [];
     this.#height = 0;
     this.#cursorRow = 0;

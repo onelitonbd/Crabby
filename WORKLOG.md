@@ -522,7 +522,8 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   (১) **T1-05 অবাস্তবায়িত ছিল** — SIGWINCH/resize হ্যান্ডলিং নেই; ফোনে সফট-কিবোর্ড খুললেই Termux pty-র rows কমে
   (৩০→~১৮), অথচ অ্যাপ পুরোনো ৩০-সারির জ্যামিতিতে diff এঁকে যায় → প্রতিটা কিপ্রেসের লেখা স্ক্রিনের নিচের সারিতে
   গিয়ে **স্ক্রলব্যাকে smear** — মালিকের পেস্টেই প্রমাণ: ফ্রেমগুলো উল্টো ক্রমে (hi আগে, h পরে)। এক send-এর id-লাইনগুলো
-  ছড়িয়ে-পুনরাবৃত্ত দেখায় = "ডাবল সেন্ড"-এর অনুভূতি। (২) কিছু কিবোর্ড Enter পাঠায় **CRLF হিসেবে** — `` সেন্ড করে,
+  ছড়িয়ে-পুনরাবৃত্ত দেখায় = "ডাবল সেন্ড"-এর অনুভূতি। (২) কিছু কিবোর্ড Enter পাঠায় **CRLF হিসেবে** — `
+` সেন্ড করে,
   `
 ` খালি composer-এ Ctrl+J newline হয়ে ফ্যান্টম প্রথম লাইন বসায়।
 - **ঠিক:** (১) `renderer.invalidate()` + debounced (150ms) SIGWINCH → size বদলালে পুনঃ-মাপা (terminalFacts-এর
@@ -533,3 +534,18 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - **প্রমাণ:** python pty (TIOCSWINSZ) — ৩০→১৮ resize মাঝ-সেশনে → ফ্রেম re-anchor, hint strip নিচের সারিতে; `abc`+
   এক Enter = ঠিক এক task; Gateway-তত্ত্বও পরীক্ষিত — একই idempotency key = একই task id (ডুপ্লিকেট নয়)। গেট: sweep
   **1526/1526**, tsc, biome।
+
+## Slice 29 — "প্রতি অক্ষরে আলাদা draft"-এর আসল root cause: planFrame-এর cursor-অনুমান — 2026-10-18
+
+- **মালিকের দ্বিতীয় রিপোর্ট:** `❯ h` আর `❯ hi` স্ক্রিনে **একসাথে** দুই আলাদা draft-এর মতো। pyte (সত্যিকারের
+  terminal emulator) দিয়ে pty-capture replay করে ধরা পড়ল root cause: `planFrame`-এর relative moves সবসময়
+  "কার্সর আগের ফ্রেমের শেষ সারিতে" ধরে হিসাব করত — কিন্তু T5-02-র real cursor প্রতি draw-এর পরে cursor-কে
+  composer-সারিতে পার্ক করে। ফলে প্রতিটা কিস্ট্রোকের composer-লাইন কয়েক সারি **ওপরে** লেখা হতো, নিচের পুরোনো
+  লাইন স্থির থাকত → দুই draft-এর মতো দেখাত (দুইটার মাঝের ফাঁক = cursor-delta)।
+- **ঠিক:** `planFrame(previous, next, columns, cursorAt)` — caller সত্যিকারের cursor-row পাস করে
+  (`drawNow` তার `#cursorRow` দেয়); default পুরোনো আচরণ (পুরোনো টেস্ট অক্ষত)।
+- **সাথে:** reflow-দুই-মোড — `invalidate("screen")` যখন পুরোনো ফ্রেমই পুরো স্ক্রিন দখল করে ছিল: `CSI 999A` +
+  `CSI J` দিয়ে **জায়গাতেই erase+repaint, কোনো scroll নয়** — কিবোর্ড খোলা/বন্ধা কোনোটাতেই আর ফ্রেম-কপি
+  scrollback-এ ঠেলে যায় না।
+- **প্রমাণ (pyte, h → কিবোর্ড-খোলা → i → কিবোর্ড-বন্ধ):** চূড়ান্ত ৩০×৬৩ স্ক্রিনে **একটাই `❯ hi`**; প্রথম anchor-এর
+  পরে সব-সেশনে newline = **০** (scrollback পুরোপুরি পরিষ্কার)। গেট: sweep **1528/1528**, tsc, biome।

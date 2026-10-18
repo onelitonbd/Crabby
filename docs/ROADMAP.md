@@ -1791,7 +1791,8 @@ nothing handled terminal resize, and on a phone the soft keyboard *is* a resize:
 thirty rows to about eighteen while the app keeps diffing a thirty-row frame, so every keystroke's repaint landed
 at the screen's bottom row and scrolled the frame into the scrollback as a smear — the owner's own paste held the
 frames out of order (`hi` above `h`), which is the smear's signature, and one send's task-id lines scattered
-across it read as a double send. Second, some keyboards deliver Enter as **CRLF**: the `` sends, and the `
+across it read as a double send. Second, some keyboards deliver Enter as **CRLF**: the `
+` sends, and the `
 `
 lands as a Ctrl+J newline in the composer the send just emptied — a phantom blank first line on every next
 draft. The fixes: a debounced SIGWINCH handler that re-measures through `terminalFacts` (the zero-report rule
@@ -1804,6 +1805,24 @@ The Gateway side was checked rather than assumed: the same idempotency key retur
 words never mint a second task. Proof is a python-driven pty that resizes mid-session (the keyboard's own
 gesture): the frame re-anchors at eighteen rows with the hint strip on the bottom row, and `abc` plus one Enter
 creates exactly one task. Gates: sweep 1526/1526, tsc, biome.
+
+**Eighty-ninth slice — the two-drafts bug: the plan did not know where the cursor was.** The owner's next report
+came with a screenshot's worth of scrollback: `❯ h` and `❯ hi` sitting on screen at once, as if every letter were
+a separate draft. A real terminal emulator (pyte) replaying the pty capture found the root cause in one line of
+assumption: `planFrame`'s moves are relative, and it assumed the cursor sat on the previous frame's last row. That
+assumption was true only while the renderer was the only thing that ever moved the cursor — T5-02's real cursor
+(the whole point of it, on a phone, is that the IME edits around where the terminal's cursor actually is) parks
+the cursor on the composer's edit row after every draw. So every keystroke's composer line was emitted relative to
+a position four rows below the truth and landed above the old one, which stayed put — two drafts, the gap between
+them exactly the cursor delta. The fix is the assumption made explicit: `planFrame` takes the cursor's actual row,
+and `drawNow` passes its tracker. The same session's captures also upgraded the resize reflow into two modes —
+when the old frame filled the old terminal exactly (always true here, the frame is sized to the screen), the
+reflow after a keyboard toggle is an erase-in-place (`CSI 999A` clamps to the screen top, `CSI J` clears the
+frame's own tail) and a whole repaint, with **no scrolling at all**, so no frame copy is ever pushed into the
+scrollback; a frame that shared the screen with shell history would still scroll. The pyte proof, replaying the
+owner's exact gesture — type `h`, keyboard opens, type `i`, keyboard closes — ends with one `❯ hi` on a clean
+30-row screen and **zero** newlines written after the initial anchor: nothing but the conversation ever reaches
+the scrollback. Gates: sweep 1528/1528, tsc, biome.
 
 ## 8. Phase M6 — Release readiness
 

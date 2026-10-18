@@ -2251,9 +2251,14 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       stdin.isTTY === true,
     );
     if (next.columns === columns && next.rows === rows) return;
+    // Who owns the screen right now? If the frame filled the *old* terminal exactly, everything visible after the
+    // resize is the frame's own tail, and the reflow erases it in place — no scroll, so no copy of the frame is
+    // pushed into the scrollback on every keyboard toggle (that copy trail is what read as a separate draft per
+    // keystroke on the owner's phone). A frame that shared the screen with shell history has to scroll instead.
+    const ownedScreen = renderer.height > 0 && renderer.height === rows;
     columns = next.columns;
     rows = next.rows;
-    renderer.invalidate();
+    renderer.invalidate(ownedScreen ? "screen" : "scroll");
     drawNow();
   };
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;

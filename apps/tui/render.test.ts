@@ -208,6 +208,71 @@ describe("FrameRenderer", () => {
     assert.ok(!written.at(-1)?.includes("999B"), "no second anchor");
   });
 
+  it("a shrink reflow erases in place and never scrolls the old frame into the scrollback", () => {
+    // The keyboard opening is the phone's most frequent resize, and it can land mid-word. If the reflow scrolled,
+    // every toggle pushed a full frame copy into the scrollback — which is how `❯ h` and `❯ hi` ended up sitting
+    // there as two "drafts". The screen-mode anchor erases the frame's own tail and repaints: zero newlines.
+    const terminalRow = { value: 30 };
+    const written: string[] = [];
+    const terminal: Terminal = {
+      get columns() {
+        return 63;
+      },
+      get rows() {
+        return terminalRow.value;
+      },
+      write: (t) => written.push(t),
+    };
+    const renderer = new FrameRenderer(terminal);
+    const frame = (n: number): string[] => [
+      ">chat",
+      ...Array.from({ length: n - 4 }, () => "body"),
+      "status",
+      "hints",
+    ];
+    renderer.drawNow(frame(30));
+    const afterFirst = written.join("").split("\n").length - 1;
+    terminalRow.value = 18; // the keyboard opened
+    renderer.invalidate("screen");
+    written.length = 0;
+    renderer.drawNow(frame(18));
+    const reflow = written.join("");
+    assert.ok(reflow.includes("\u001b[999A"), "clamps to the top of the screen");
+    assert.ok(reflow.includes("\u001b[J"), "erases the frame's own tail in place");
+    assert.equal(
+      reflow.split("\n").length - 1,
+      0,
+      "the shrink reflow writes no newline — nothing is scrolled into the scrollback",
+    );
+    assert.ok(reflow.includes("hints"), "and the whole frame repaints at the new size");
+    assert.equal(afterFirst, 30, "the initial anchor is the only scroll a clean session ever pays");
+  });
+
+  it("the next plan starts from the cursor the app actually moved (T5-02), not the frame's last row", () => {
+    // The owner's phone bug: after every draw the real cursor is parked on the composer's edit row (T5-02), but the
+    // plan assumed it sat on the frame's last row — so each keystroke's composer line was written several rows too
+    // high while the stale line below stayed put, and the screen showed `❯ h` and `❯ hi` as two drafts.
+    const { renderer, written } = fake(63, 30);
+    const frame = (draft: string): string[] => [
+      ">chat",
+      ...Array.from({ length: 24 }, () => "body"),
+      `❯ ${draft}`,
+      "the draft is ~2 tokens",
+      "status",
+      "hints",
+    ];
+    renderer.drawNow(frame("")); // full 28-line frame; plan ends on the hints row
+    renderer.placeCursor(25, 4); // T5-02: the terminal cursor parks on the composer's edit row (row 25)
+    written.length = 0;
+    renderer.drawNow(frame("h"));
+    const first = written[0] ?? "";
+    assert.ok(
+      !first.includes("A\r"),
+      `the plan must not move up to reach a row it is already on: ${JSON.stringify(first.slice(0, 40))}`,
+    );
+    assert.match(first, /❯ h/, "and the composer line is written where the old one was");
+  });
+
   it("invalidate() forgets the frame, so the next draw re-anchors and repaints whole (T1-05)", () => {
     const { renderer, written } = fake(63, 30);
     renderer.drawNow([">chat", "body", "status", "hints"]);

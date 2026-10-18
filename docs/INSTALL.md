@@ -5,6 +5,14 @@ package-manager repository, no self-updater in v1. The recovery tool for everyth
 the version you are on is what `crabby version` says. Uninstalling is deleting the checkout and the state
 directory (`~/.crabby/`); a backup taken first (`crabby backup`) is how anything else survives.
 
+## The short version: `crabby onboard`
+
+After `npm install`, one command walks the whole first run — init, doctor, the Gateway and its pairing (the code
+appears boxed and the wizard pairs this terminal itself), an optional provider, and a model verified with a real
+completion before the wizard claims success. It prints every command it runs, skips what is already done on a
+re-run, and without a TTY it prints the numbered manual path instead of prompting. The rest of this page is what
+the wizard does, step by step.
+
 ## Prerequisites
 
 - **Node.js ≥ 22.22** — the `engines.node` field in the root `package.json` is the single pin (D-070), and the

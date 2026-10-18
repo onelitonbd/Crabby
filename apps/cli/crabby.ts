@@ -44,6 +44,7 @@ import { runInit } from "./commands/init.ts";
 import { type JobVerb, runJob } from "./commands/job.ts";
 import { runMcp } from "./commands/mcp.ts";
 import { type MemoryVerb, runMemory } from "./commands/memory.ts";
+import { runOnboard } from "./commands/onboard.ts";
 import { type ModelVerb, type ProviderVerb, runModel, runProvider } from "./commands/provider.ts";
 import { runSession, type SessionVerb } from "./commands/session.ts";
 import { runStatus } from "./commands/status.ts";
@@ -228,6 +229,18 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       // environment a second time and risking two answers. The tail carries `init`'s own flags (`--enable-shell`),
       // parsed by the command against the registry like every other verb.
       return runInit(rest, layout, renderer, home);
+    }
+    case "onboard": {
+      return await runOnboard(
+        rest,
+        {
+          layout,
+          facts,
+          rootPackageJson,
+          repoRoot: new URL("../..", import.meta.url).pathname,
+        },
+        renderer,
+      );
     }
     case "version": {
       return runVersion(facts, readVersion(rootPackageJson), renderer);

@@ -471,3 +471,12 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   সাথে জোনো; (২) `gateway start`-এ bootstrap কোড শেষ লাইনে; (৩) doctor-এ "next commands" ব্লক; (৪) `gateway stop` রুট।
   নেব না: curl|bash, full-access default, key-config-এ।
 - **drift ঠিক:** registry-র `gateway stop/restart`-র milestone এখনো "M2" — M2 শেষ অথচ verb planned; সত্য-লেবেল post-v0.1.0।
+## Slice 25 — `crabby onboard` — পুরো first-run এক টার্মিনাল-ফ্লোতে (মালিকের চাওয়া আকারে) — 2026-10-18
+
+- **`crabby onboard` (ready):** state-aware (fresh/paired/configured বলে শুরুতেই) → init → doctor → gateway start
+  (child, ইউজারের টার্মিনালেই) → bootstrap কোড **বক্স-ব্লকে** → উইজার্ড নিজেই redeem (এটাই দ্বিতীয় client) →
+  provider (ঐচ্ছিক, skip-এ সৎ মূল্য) → **real-completion যাচাই** (model probe route) → done-ব্লক (chat/task/tui/web)।
+- প্রতিটা driven verb `$ crabby …` হিসেবে ছাপা হয় — paste trail; পুনরায় চালালে done-স্কিপ; non-TTY = নম্বরওয়ালা
+  manual path, কোনো প্রম্পট নয়।
+- **pty smoke ২টি বাগ ধরল:** (১) `$`-অ্যাংকরড কোড-রেগেক্স chunked pty আউটপুটে হারায় → unanchored + sawPrompt/
+  sawListener fallback-মেসেজ; (২) বক্সের "OTHER session" বাক্য বিভ্রান্তিকর — উইজার্ড নিজেই pair করে।

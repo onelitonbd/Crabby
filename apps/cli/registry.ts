@@ -21,6 +21,17 @@ export interface CommandSpec {
 
 export const COMMANDS: readonly CommandSpec[] = [
   {
+    // The one guided entrance, in the shape the owner asked for: the whole first-run as one terminal flow that
+    // drives the same verbs a user would type by hand, prints each before running it, makes the pairing code
+    // the loudest thing on screen, and verifies a model with a real completion before calling itself done.
+    // Non-TTY is the manual path: it prints the remaining commands as a numbered list and exits.
+    noun: "onboard",
+    summary:
+      "guided first-run: init, doctor, gateway + pairing, provider, verified model — one flow; re-runs skip what is done",
+    flags: ["--help"],
+    status: "ready",
+  },
+  {
     noun: "init",
     summary: "create the data directory and config file",
     flags: ["--data-dir DIR", "--enable-shell"],

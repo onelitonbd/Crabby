@@ -1733,6 +1733,18 @@ across eight package.json files later, the module graph is declarative, and the 
 link plus `crabby doctor` exit 0 from an unrelated directory. Gates: tsc, biome, full sweep, parity,
 docs:check (145 accepted), and the fresh-clone rehearsal.
 
+**Eighty-fifth slice — `crabby onboard`: the whole first run as one terminal flow, in the shape the owner asked
+for.** The wizard drives the same verbs a user types by hand and prints each as `$ crabby …` before running it
+(the paste trail — nothing happens that could not have been typed); it reads where you are and skips what is
+done, so a second run is a sentence, not a mystery; the pairing code arrives as the loudest block on screen and
+the wizard itself redeems it (it *is* the second client — the manual two-session dance is what it saves);
+a provider is optional and priced honestly when skipped; and the model is verified with a **real completion**
+through the probe route before the wizard claims success — OpenClaw's best onboarding idea, now ours too,
+without the registry. Non-TTY is the manual path: the numbered commands, no prompts. The pty smoke caught the
+first draft's `$`-anchored code regex losing to chunked terminal delivery — unanchored now, with the honest
+fallbacks (code seen but not captured → "read it above"; no prompt at all → identities exist). Gates: onboard
+3/3, cli 56/56, tsc, biome, pty smoke with a boxed code.
+
 ## 8. Phase M6 — Release readiness
 
 *Everything this repository can ship is shipped (2026-10-17, slices 79–83): backup/restore (D-142), the changelog

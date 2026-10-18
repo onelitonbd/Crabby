@@ -36,6 +36,7 @@ import { findUnsafeShapes, writeDiagnosticsArtifact } from "../cli/commands/diag
 import { nextOverride, writeOverrideRecord } from "../cli/commands/model-edit.ts";
 import { connect } from "../cli/connect.ts";
 import { accessLines, type ClientRow, mintLines } from "./access.ts";
+import { PROMPT } from "./chatview.ts";
 import {
   actionFor,
   applyAction,
@@ -673,6 +674,12 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       // the composer's lines sit `extras + capability line` above the body's end, so the edit row is the body length
       // minus that tail plus the view's own cursor line. `--plain` and pipes keep the drawn block (no cursor to move).
       const view = composerView(composer, columns, false);
+      // The skin's model fact (T4-02's header source): the draft's one-turn override wins, then the running task's
+      // model — the model the turn is actually being spoken with. When neither exists the header stays absent,
+      // because a model line that names a guess is worse than no model line.
+      const runningModel = tasks.find(
+        (task) => task.state === "running" || task.state === "awaiting_approval",
+      )?.model;
       const bodyLines = chatPane(
         transcript,
         composer,
@@ -686,11 +693,23 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
         rows - CHROME,
         extras,
         facts.isTTY,
+        {
+          tier: context().color,
+          ...(draftModel === undefined && runningModel === undefined
+            ? {}
+            : { model: draftModel ?? runningModel }),
+          ...(lastSession(transcript) === undefined ? {} : { session: lastSession(transcript) }),
+        },
       );
       cursorHint = facts.isTTY
         ? {
             row: bodyLines.length - extras.length - 1 - view.lines.length + view.cursorLine,
-            column: Math.min(view.cursorColumn, columns - 1),
+            // The prompt mark is part of the composer's first drawn line, so the real cursor sits past it —
+            // PROMPT's width and the drawing can never disagree, because both come from the one constant.
+            column: Math.min(
+              view.cursorColumn + (view.cursorLine === 0 ? PROMPT.length : 2),
+              columns - 1,
+            ),
           }
         : undefined;
       return bodyLines;

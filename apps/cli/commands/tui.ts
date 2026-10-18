@@ -37,6 +37,13 @@ export async function runTuiCommand(
   const facts = terminalFacts(
     process.env,
     {
+      // `--columns` wins; otherwise the pty's own measurement — which is what a real terminal reports and what
+      // `script`, a CI harness or a freshly-resized Termux window may report as 0 (terminalFacts then falls back
+      // to 80, honestly named below). The first version of this call passed `columns` only from the flag, which
+      // made every unflagged terminal draw at the fallback: found by running the TUI in a real 63×30 pty.
+      ...(asked === undefined && typeof process.stdout.columns === "number"
+        ? { columns: process.stdout.columns }
+        : {}),
       ...(asked === undefined ? {} : { columns: asked }),
       ...(typeof process.stdout.rows === "number" ? { rows: process.stdout.rows } : {}),
     },
@@ -44,7 +51,10 @@ export async function runTuiCommand(
   );
   const columns = facts.columns;
   const rows = facts.rows;
-  if (facts.columns !== asked) {
+  const measured =
+    asked !== undefined ||
+    (typeof process.stdout.columns === "number" && process.stdout.columns > 0);
+  if (!measured) {
     // Said once, in words: a frame drawn at the fallback width when the terminal reported none is at least honest about it.
     stdout.write(`tui: the terminal reported no width, drawing at ${columns} columns\n`);
   }

@@ -499,3 +499,19 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   formatter-only pass আলাদা কমিটে; audit.test-এর same-millisecond mint flake — id-স্কিম ডকেরই সত্য মানল ("ordered by
   nothing"), টেস্ট এখন ms-সীমা পেরোয়। ফাইনাল: sweep **1505/1505**, tsc ✓, biome 0, parity 51/45/32, docs:check
   145·11·75।
+
+## Slice 27 — TUI chat view OpenClaw-ছদ্মে, মালিকের ৬৩×৩০ ক্যানভাসে — 2026-10-18
+
+- **নতুন `apps/tui/chatview.ts`:** OpenClaw-এর terminal chat-এর পাঁচ উপাদান আমাদের চুক্তি-সারির ভেতরে — user-বার্তা
+  **full-width bar** (`bg.raised`; 256-tier xterm-235, 16-tier inverse, none-tier পুরোনো `│ `), assistant turn-এর
+  প্রথম লাইনে **model header** (T4-02 — আগে বাস্তবায়িতই ছিল না), tool কার্ডে ◇/◆ glyph (contract-টেক্সট অক্ষত),
+  composer-এ `❯ ` prompt (PROMPT=২ কলাম ধ্রুবক — real cursor-ও একই ধ্রুবক থেকে), empty state-এ ৩-লাইন welcome।
+- `chatPane(..., style)`: default `{tier:"none"}` — পুরোনো ১০৮ TUI-টেস্ট একটুও না ভেঙে চুক্তি-প্রমাণ। bar-এর ভেতরে
+  markdown reset হলে bg পুনঃ-বসানো হয় (reset দাগ নয়)। ৬৩-কলামে bar-প্রস্থ ঠিক ৬৩।
+- **pty smoke-এ দুই আসল বাগ ধরা পড়ল:** (১) `crabby tui`-র size-মাপায় `columns` শুধু `--columns` flag থেকে আসত —
+  pty-র আসল `process.stdout.columns` পড়া হতো না; ৬৩-কলাম টার্মিনালও 80-এ আঁকত → flag > pty-measure > fallback;
+  সততা-লাইন এখন শুধু সত্যিকারের fallback-এ। (২) renderer-এর প্রথম ফ্রেম "কার্সর যেখানে" — startup-লাইনের পরে ৩০-সারির
+  ফ্রেমের শেষ শারি CSI B clamp-এ **status/hints একে অপরের ওপরে** → first-draw anchor: bottom-clamp + `rows` ×
+  scrollback + `rows-1` ওপরে (D-061 অক্ষত — ওপরের সব স্ক্রলব্যাকে)।
+- **প্রমাণ:** জীবন্ত gateway-র সাথে সত্যিকারের ৬৩×৩০ pty-তে সম্পূর্ণ ফ্রেম — pane row, welcome, `❯`, capability,
+  status (`model: none · live · approvals: 0`), hint strip। গেট: sweep **1523/1523**, tsc, biome, parity, docs:check।

@@ -12,6 +12,14 @@
 
 import type { Response } from "@crabby/gateway";
 import {
+  assistantHeader,
+  dimLine,
+  PROMPT,
+  toolMark,
+  userBarLine,
+  welcomeLines,
+} from "./chatview.ts";
+import {
   actionFor,
   applyAction,
   type ComposerState,
@@ -22,6 +30,7 @@ import {
 } from "./composer.ts";
 import type { FrameState, Pane, StatusState } from "./frame.ts";
 import { statusLine } from "./frame.ts";
+import type { CharsetTier } from "./markdown.ts";
 import { type TranscriptRow, type TranscriptState, visibleRows } from "./transcript.ts";
 
 /** What the pane layer is given. A client, a layout and a renderer: no terminal, no escape sequences, no clock. That is the
@@ -317,12 +326,26 @@ export function plannedPane(pane: Pane, milestone: string, equivalent: string): 
   ];
 }
 
+/** The chat view's skin, as data. `tier` is the colour tier the *terminal* answered; `model` is the model the
+ *  current turn speaks with (the draft's one-turn override, else the running task's — T4-02's header source), and
+ *  `session` is the session the transcript belongs to. Everything defaults to the old plain skin, which is what
+ *  makes the pane's existing tests the contract they were before this file existed. */
+export interface ChatStyle {
+  readonly tier: CharsetTier;
+  readonly model?: string | undefined;
+  readonly session?: string | undefined;
+}
+
 /** The chat pane's body (T4/T5), built from a transcript state and a composer state. **Both are plain data**, so the pane
  *  is a projection and the tests can read the rows without a stream, a pty or a clock.
  *
  *  The body is ordered transcript → composer → capability line, because that is the order the eye needs them in: the
  *  conversation, what you are about to add to it, and what that turn may do. The capability line is **below** the input on
- *  purpose (T5-06's row describes it as "before send"), so it is never mistaken for part of the message being composed. */
+ *  purpose (T5-06's row describes it as "before send"), so it is never mistaken for part of the message being composed.
+ *
+ *  The `style` half is the OpenClaw-shaped skin (`apps/tui/chatview.ts`): user turns as full-width bars, assistant
+ *  turns opening with their model, tool lines with a collapsed/expanded glyph, a welcome block when nothing has been
+ *  said yet. The default is the plain skin, and `--plain` lands there by tier. */
 export function chatPane(
   transcript: TranscriptState,
   composer: ComposerState,
@@ -339,6 +362,7 @@ export function chatPane(
   /** T5-02: draw no block glyph and let the caller move the real terminal cursor to `composerView`'s position. A drawn
    *  block is what the row refuses on the primary platform — the IME edits around a real cursor or not at all. */
   realCursor = false,
+  style: ChatStyle = { tier: "none" },
 ): readonly string[] {
   // The composer takes up to six rows (T5-01), the extras and capability line their own, and the transcript gets what is
   // left — never zero, because a pane that has nothing left for the conversation is a pane that cannot show the answer.
@@ -347,34 +371,51 @@ export function chatPane(
   const height = Math.max(1, rows - chrome);
   const lines: string[] = [];
   const shown = visibleRows(transcript, height);
+  // T6-06's rule, drawn: an empty conversation says who and what it is instead of showing a blank pane. It costs
+  // three rows of the transcript's own height and appears only while there is nothing to show instead of.
+  if (shown.length === 0 && transcript.streaming === undefined) {
+    lines.push(...welcomeLines(style.model, style.session, style.tier));
+    lines.push("");
+  }
   for (const row of shown) {
-    for (const line of rowLines(row)) lines.push(line);
+    for (const line of rowLines(row, style, columns)) lines.push(line);
   }
   const padding = Math.max(0, height - lines.length);
   for (let index = 0; index < padding; index += 1) lines.push("");
-  lines.push(...composerLines);
+  lines.push(
+    ...composerLines.map((line, index) => (index === 0 ? `${PROMPT}${line}` : `  ${line}`)),
+  );
   // T5-03's menu, filtered as typed, under the input and at most six lines — each with its about line now, because a
   // bare `/pin` teaches nothing and a phone has no room for a second help sheet.
   for (const line of slashMenuLines(composer.buffer.slice(0, composer.cursor), columns))
     lines.push(`  ${line}`);
   lines.push(...extras);
   lines.push(capabilityLine(capabilities));
-  // T4-12's held-position note, only when something is actually held.
-  if (transcript.held > 0) lines.push(`  new content (${transcript.held}) — press End to follow`);
+  // T4-12's held-position note, only when something is actually held — quiet, per the skin's register.
+  if (transcript.held > 0)
+    lines.push(dimLine(`  new content (${transcript.held}) — press End to follow`, style.tier));
   return lines;
 }
 
-/** One transcript row's lines, flattened. A `tool` row is one collapsed line unless it was expanded (T4-07/T4-08), and an
- *  error row is the panel T4-11 asks for: a code, one human line, and whether it can be resumed — three facts and no toast,
- *  because there is no toast in a terminal. */
-function rowLines(row: TranscriptRow): readonly string[] {
+/** One transcript row's lines, flattened — now wearing the skin. A `tool` row is one collapsed line unless it was
+ *  expanded (T4-07/T4-08), and an error row is the panel T4-11 asks for: a code, one human line, and whether it can be
+ *  resumed — three facts and no toast, because there is no toast in a terminal. */
+function rowLines(row: TranscriptRow, style: ChatStyle, columns: number): readonly string[] {
   switch (row.kind) {
-    case "turn":
-      return row.lines.map((line) => (row.role === "user" ? `│ ${line}` : line));
+    case "turn": {
+      // T4-01: the bar adds no prefix characters, so long-press selection still lands on the whole message; the
+      // `none` tier keeps the `│ ` gutter (chatview.ts is where that trade is written down).
+      if (row.role === "user")
+        return row.lines.map((line) => userBarLine(line, style.tier, columns));
+      // T4-02: the model that spoke is the turn's first line. Only an assistant turn carries it, and only when the
+      // pane knows the model — a replay with no model fact prints words alone rather than a guess.
+      const header = style.model === undefined ? [] : [assistantHeader(style.model, style.tier)];
+      return [...header, ...row.lines];
+    }
     case "system":
-      return [`· ${row.text}`];
+      return [dimLine(`· ${row.text}`, style.tier)];
     case "tool":
-      return row.lines.map((line) => `  ${line}`);
+      return row.lines.map((line) => `  ${toolMark(!row.expanded)}${line}`);
     case "error":
       return [
         `! ${row.code}: ${row.line}`,

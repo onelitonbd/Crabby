@@ -1763,6 +1763,27 @@ had drifted from ten files (formatter-only pass, its own commit), and the audit 
 order was a coin flip — the id scheme's own doc says ids minted together are ordered by nothing, so the test now
 mints across a millisecond boundary. Final gates: sweep 1505/1505, tsc, biome, parity, docs:check.
 
+**Eighty-seventh slice — the chat view, drawn like a chat: OpenClaw's terminal surfaces on the owner's canvas.**
+The chat pane already held every fact the element rows ask for; what it looked like was a wire report. This slice
+gives it the OpenClaw-shaped skin (`apps/tui/chatview.ts`, pure and tier-aware) without moving a single accepted
+row: the user's message becomes a **full-width raised bar** (`bg.raised` in truecolor, its 256-colour cousin in
+that tier, inverse video in the 16-colour tier, the old `│ ` gutter in `none` — a background is an escape, and §4
+keeps escapes out of pipes) whose text starts at column 0, so T4-01's long-press selection lands the whole message
+with a gutter of zero; an assistant turn now opens with **the model that spoke** — T4-02's first-line header,
+which turned out never to have been implemented; tool cards carry ◇/◆ collapsed/expanded glyphs around the
+contract text; the composer wears a `❯ ` prompt whose width is one constant shared with the real cursor's
+arithmetic (T5-02); and an empty conversation says who and what it is in three lines instead of showing a blank
+pane (T6-06). The default style is the plain skin, which is why all 108 pre-skin TUI tests still pass unchanged.
+Two real bugs fell out of the pty smoke on the owner's own canvas — a 63×30 terminal: `crabby tui` measured its
+width from the `--columns` flag only and never read the pty's own `process.stdout.columns`, so a 63-column
+terminal drew at the 80-column fallback (the flag now wins, then the pty, then the fallback, and the honesty line
+fires only when the fallback is real); and the renderer's first frame drew from wherever the cursor happened to
+be, so a 30-row frame on a 30-row terminal with even one startup line above it ran past the bottom and let the
+status line and hint strip overwrite each other — the first draw now anchors the screen (walk to the bottom row,
+scroll one line per frame row into the scrollback D-061 promises, step back up, draw). A live Gateway and a real
+63×30 pty show the whole frame: pane row, welcome, prompt, capability line, status, hints. Gates: sweep
+1523/1523, tsc, biome, parity, docs:check.
+
 ## 8. Phase M6 — Release readiness
 
 *Everything this repository can ship is shipped (2026-10-17, slices 79–83): backup/restore (D-142), the changelog

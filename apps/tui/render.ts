@@ -185,12 +185,24 @@ export class FrameRenderer {
     this.drawNow(lines);
   }
 
-  /** The uncapped path: one write per changed line, and nothing when nothing changed. */
+  /** The uncapped path: one write per changed line, and nothing when nothing changed. The **first** frame draws on an
+   *  anchored screen: the cursor is wherever the startup lines left it — a shell prompt, `connecting…` — and a frame
+   *  that fills the terminal's height would then run past the bottom row, where `CSI B` clamps and the frame's last
+   *  rows (the status line and hint strip, the two rows that must always be true) overwrite each other. Found on the
+   *  owner's own canvas, a 63×30 phone terminal, where a 30-row frame plus even one startup line cannot fit. The
+   *  anchor walks to the bottom row (`CSI B` clamps, so the count may overshoot), scrolls one line per frame row so
+   *  everything above goes to the scrollback that D-061 promises the user keeps, steps back up to the frame's first
+   *  row, and lets the plan draw from there — exactly the "brand-new frame starts on its own first row" position. */
   drawNow(lines: readonly string[]): void {
+    let anchor = "";
+    if (this.#height === 0 && lines.length > 0) {
+      const rows = this.#terminal.rows;
+      anchor = `${CSI}999B${"\n".repeat(Math.max(1, rows))}${CSI}${rows - 1}A\r`;
+    }
     const plan = planFrame(this.#previous, lines, this.#terminal.columns);
     this.#previous = [...plan.lines];
     this.#height = plan.height;
-    if (plan.text !== "") this.#terminal.write(plan.text);
+    if (plan.text !== "" || anchor !== "") this.#terminal.write(anchor + plan.text);
     if (plan.cursorRow >= 0) this.#cursorRow = plan.cursorRow;
   }
 

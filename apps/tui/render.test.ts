@@ -182,6 +182,23 @@ describe("FrameRenderer", () => {
     renderer.drawNow(["a", "b", "c"]);
     assert.equal(renderer.height, 3);
   });
+
+  it("anchors the first frame to a full screen, so startup lines cannot push the pinned rows off the bottom", () => {
+    // The owner's canvas: a 30-row terminal where the shell prompt and `connecting…` already sit above the cursor.
+    // Without the anchor, a 30-row frame drawn from row 2 runs two rows past the bottom, where CSI B clamps and the
+    // status line and hint strip overwrite each other — the two rows T2/T3 say must always be true.
+    const { renderer, written } = fake(63, 30);
+    renderer.drawNow([">chat", "body", "status", "hints"]);
+    const first = written[0] ?? "";
+    assert.match(first, /\x1b\[999B/, "the walk to the bottom row (clamped wherever the cursor was)");
+    assert.match(first, /\n{30}/, "one scroll per frame row — everything above goes to the scrollback");
+    assert.match(first, /\x1b\[29A/, "back up to the frame's first row before the plan writes");
+    // The second draw anchors nothing: the frame now owns its region.
+    const before = written.length;
+    renderer.drawNow([">chat", "body two", "status", "hints"]);
+    assert.equal(written.length, before + 1, "the change itself is one diffed write");
+    assert.ok(!written.at(-1)?.includes("999B"), "no second anchor");
+  });
 });
 
 describe("T5-02's real cursor", () => {

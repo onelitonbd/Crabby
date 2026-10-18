@@ -685,7 +685,9 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: "ask a running Gateway to drain and exit (D-066)",
     flags: [],
     status: "planned",
-    milestone: "M2 (the supervisor `start` is foreground for)",
+    // The old milestone string said M2, and M2 shipped without it — the honest label names the real gates: a stop
+    // route beside the listener and, on a phone, the daemon question. Ctrl-C and the pid are today's stops.
+    milestone: "post-v0.1.0 (a stop route beside the listener; Ctrl-C and the pid are today's stops)",
   },
   {
     noun: "gateway",
@@ -693,7 +695,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: "drain, restart, and print who was disconnected (T3, D-058)",
     flags: ["--yes"],
     status: "planned",
-    milestone: "M2 (restart is T3 and needs the approval service)",
+    milestone: "post-v0.1.0 (T3: needs the approval service and the same supervisor as stop)",
   },
   {
     // M5 (§13, D-066's lifecycle): on is the T3 act — the prompt lists which paired identities become

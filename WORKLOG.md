@@ -461,3 +461,13 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - মালিকের start-এ first-client ব্লক নেই → ডিবিতে identity বিদ্যমান → কোনো এক redeem সফল হয়েছিল; `crabby status`
   সম্ভবত সরাসরি উত্তর দেবে। লকআউট-পথও (token হারানো + identity আছে + revoke-র টোকেন লাগে) TROUBLESHOOTING-এ:
   Gateway বন্ধ → client.json মুছুন → client_identity সারি সাফ → start → নতুন কোড।
+## Slice 24 — OpenClaw-র সাথে install-possession তুলনা + registry-milestone drift — 2026-10-18
+
+- **তুলনা (docs.openclaw.ai: install, getting-started, wizard, cli/doctor):** ওরা curl|bash installer + Node auto-provision +
+  -g npm/pnpm/bun + desktop app + Docker/Nix/Ansible + VPS + ৭-পেজের doctor + `triage` + `onboard` wizard
+  (detect→real-completion-verify→dashboard); আমরা এক পথ (clone+npm install, Termux-first, rehearsed) + link-global (D-145)
+  + এক-কমান্ড doctor + TROUBLESHOOTING (আজকের ৪টা আসল ডিভাইস-হিট)।
+- **সিদ্ধান্ত-সুপারিশ (র‍্যাংকড):** (১) `crabby onboard` guided verb — verify-with-real-completion আমাদের planned model probe-এর
+  সাথে জোনো; (২) `gateway start`-এ bootstrap কোড শেষ লাইনে; (৩) doctor-এ "next commands" ব্লক; (৪) `gateway stop` রুট।
+  নেব না: curl|bash, full-access default, key-config-এ।
+- **drift ঠিক:** registry-র `gateway stop/restart`-র milestone এখনো "M2" — M2 শেষ অথচ verb planned; সত্য-লেবেল post-v0.1.0।

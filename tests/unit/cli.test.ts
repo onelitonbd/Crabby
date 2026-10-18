@@ -503,14 +503,16 @@ test("`doctor --security` prints the security subset with a plain-language postu
   assert.equal(code, 0);
   // The subset: security-relevant ids only — the Node version and the native toolchain are not posture.
   const ids = payload.checks.map((check) => check.id);
-  assert.ok(ids.every((id) => /^(data\.dir|config|workspace|vault|shell|tunnel)/.test(id)), ids.join(","));
+  assert.ok(
+    ids.every((id) => /^(data\.dir|config|workspace|vault|shell|tunnel)/.test(id)),
+    ids.join(","),
+  );
   assert.ok(ids.includes("vault"), "the vault is the first row a posture reader looks for");
   // Plain language: the sentences name the user's life, not the build's subsystems.
   const raw = JSON.stringify(payload);
   assert.match(raw, /workspace roots/);
   assert.match(raw, /ask first/, "the approval sentence is the posture's core promise");
 });
-
 
 function checkIn(payload: DoctorPayload, id: string) {
   return payload.checks.find((check) => check.id === id);
@@ -580,13 +582,21 @@ test("`doctor` defers a keyed provider instead of failing it, and names the mile
   // The vault arrived (M5, D-139, closing F-56), so a keyed entry is no longer `deferred` on a missing
   // subsystem — it is a configuration the user can complete now, and the fix is the two commands.
   assert.equal(provider?.status, "warn", provider?.detail ?? "");
-  assert.equal(code, 0, "a refused entry is a warning about configuration, not a broken install (F-28)");
+  assert.equal(
+    code,
+    0,
+    "a refused entry is a warning about configuration, not a broken install (F-28)",
+  );
   assert.match(
     provider?.fix ?? "",
     /vault set/,
     "the fix names the commands: the store, then the restart that composes with it",
   );
-  assert.match(provider?.detail ?? "", /vault:\/\/groq/, "the detail quotes the reference, never a value");
+  assert.match(
+    provider?.detail ?? "",
+    /vault:\/\/groq/,
+    "the detail quotes the reference, never a value",
+  );
   assert.equal(checkIn(payload, "model")?.status, "warn");
 });
 

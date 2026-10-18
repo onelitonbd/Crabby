@@ -26,7 +26,15 @@
 // which is the same class of act as `crabby init` and `crabby vault set` — local-only commands with no remote
 // face, because a tunnel caller asking a Gateway to write a directory tree is a §13 question nobody should have
 // to answer at restore time.
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { DB_FILE_NAME, openDatabase, type SqliteDb } from "./db.ts";
 import { schemaVersion } from "./migrate.ts";
@@ -58,10 +66,16 @@ export function exclusionsFor(): readonly BackupExclusion[] {
       reason:
         "secrets are excluded by default (§8) — on the restoring device a key arrives by `crabby vault set`, from the person who types it",
     },
-    { name: "client.json", reason: "a paired client's bearer token; pairing again is the revocation-safe path" },
+    {
+      name: "client.json",
+      reason: "a paired client's bearer token; pairing again is the revocation-safe path",
+    },
     { name: "telegram.json", reason: "bearer tokens for the bot's paired chats" },
     { name: "gateway.json / last-exit.json", reason: "runtime state a Gateway start rewrites" },
-    { name: "scratch/", reason: "tool payloads over the inline cap; the startup prune treats them as disposable" },
+    {
+      name: "scratch/",
+      reason: "tool payloads over the inline cap; the startup prune treats them as disposable",
+    },
     { name: "backups/", reason: "a backup never contains itself" },
   ];
 }
@@ -75,7 +89,10 @@ export async function createBackup(input: {
 }): Promise<BackupResult> {
   const now = input.now ?? new Date();
   const stamp = now.toISOString().replace(/[:.]/g, "-");
-  const dir = path.join(input.destination ?? path.join(input.stateDir, "backups"), `crabby-backup-${stamp}`);
+  const dir = path.join(
+    input.destination ?? path.join(input.stateDir, "backups"),
+    `crabby-backup-${stamp}`,
+  );
 
   const configPath = path.join(input.stateDir, "config.json");
   const extensionsDir = path.join(input.stateDir, "extensions");
@@ -111,21 +128,28 @@ export async function createBackup(input: {
     const verify = openDatabase(databasePath, { readonly: true });
     let verdict: string | undefined;
     try {
-      const row = verify.db.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined;
+      const row = verify.db.prepare("PRAGMA integrity_check").get() as
+        | { integrity_check?: string }
+        | undefined;
       verdict = row?.integrity_check;
     } finally {
       verify.close();
     }
     if (verdict !== "ok") {
       rmSync(dir, { recursive: true, force: true });
-      return { ok: false, reason: `the copy failed its integrity check (${verdict ?? "no answer"}) and was deleted` };
+      return {
+        ok: false,
+        reason: `the copy failed its integrity check (${verdict ?? "no answer"}) and was deleted`,
+      };
     }
 
     // A database that has never been migrated (a fresh `crabby init`, before the first Gateway start) is still a
     // legal thing to back up — it is exactly what you want on disk before an upgrade — so the manifest records
     // version 0 rather than asking for a table the file does not have yet.
     const ledger = input.db
-      .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'schema_migration'")
+      .prepare(
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'schema_migration'",
+      )
       .get() as { n: number };
     const version = ledger.n === 0 ? 0 : schemaVersion(input.db);
     const excluded = exclusionsFor();

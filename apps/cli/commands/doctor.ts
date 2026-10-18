@@ -122,9 +122,9 @@ function postureSentences(checks: readonly Check[], input: DoctorInput): readonl
       ? "no vault check ran — `crabby doctor` without --security prints the full set"
       : vaultUnset === true
         ? "no vault yet — any provider key must stay out of config.json, and `crabby vault set <name>` creates the store"
-        : (vaultCheck.status === "ok"
-            ? "secrets are in the vault and it is unlocked; a locked vault means keyed providers wait, they never fall back to plaintext"
-            : "the vault needs attention (the ! line above names the fix) — keyed providers wait rather than fall back to plaintext, which is the design working"),
+        : vaultCheck.status === "ok"
+          ? "secrets are in the vault and it is unlocked; a locked vault means keyed providers wait, they never fall back to plaintext"
+          : "the vault needs attention (the ! line above names the fix) — keyed providers wait rather than fall back to plaintext, which is the design working",
   );
   sentences.push(
     "every file tool is confined to your workspace roots, and reads outside them (including ~/.ssh and the Crabby data dir) are denied",

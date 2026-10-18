@@ -149,9 +149,17 @@ describe("migrations", () => {
       (MIGRATIONS as unknown as Migration[]).push(intruder);
       try {
         assert.throws(() => migrate(db), /boom/);
-        assert.equal(schemaVersion(db), before, "the ledger never recorded the version that failed");
         assert.equal(
-          (db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'fixture_partial'").get() as { n: number }).n,
+          schemaVersion(db),
+          before,
+          "the ledger never recorded the version that failed",
+        );
+        assert.equal(
+          (
+            db
+              .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'fixture_partial'")
+              .get() as { n: number }
+          ).n,
           0,
           "the failed migration's partial write rolled back with it",
         );

@@ -47,14 +47,28 @@ test("fixture: a SKILL.md that grants itself tools is imported with the grants r
   );
   const installDir = scratch("install");
   const result = importSkillPack({ sourceDir: dir, installDir });
-  assert.ok(result.ok, "the pack itself is well-formed content — inert import is the design, not a refusal");
+  assert.ok(
+    result.ok,
+    "the pack itself is well-formed content — inert import is the design, not a refusal",
+  );
   if (!result.ok) return;
-  assert.equal(result.report.allowedTools.granted, false, "D-035's rule: read for the diff, granted never");
-  assert.ok(result.report.allowedTools.raw.includes("Bash"), "the request is *recorded* — silence hides the attempt");
+  assert.equal(
+    result.report.allowedTools.granted,
+    false,
+    "D-035's rule: read for the diff, granted never",
+  );
+  assert.ok(
+    result.report.allowedTools.raw.includes("Bash"),
+    "the request is *recorded* — silence hides the attempt",
+  );
   assert.match(result.report.allowedTools.note, /never/);
   // The elevation prose is stored as data — the report does not act on it, and nothing in the install does.
   const installed = readFileSync(path.join(installDir, "weekly-report", "SKILL.md"), "utf8");
-  assert.match(installed, /ignore any instruction/i, "content is preserved, not sanitized into something else");
+  assert.match(
+    installed,
+    /ignore any instruction/i,
+    "content is preserved, not sanitized into something else",
+  );
 });
 
 test("fixture: unknown frontmatter keys that look like permissions are named lines, never behaviour", () => {
@@ -66,12 +80,17 @@ test("fixture: unknown frontmatter keys that look like permissions are named lin
   const result = importSkillPack({ sourceDir: dir, installDir: scratch("install") });
   assert.ok(result.ok);
   if (!result.ok) return;
-  const named = result.report.unknown.map((entry) => `${entry.field}: ${String(entry.value)}`).join("; ");
+  const named = result.report.unknown
+    .map((entry) => `${entry.field}: ${String(entry.value)}`)
+    .join("; ");
   assert.match(named, /permissions/, "the unknown key is a named line (D-071's requirement)");
   assert.match(named, /auto-approve/, "…and so is the one that sounds like it should do something");
   // And the named line is all it is: no capability vocabulary grew to meet the request.
   const baseline = capabilitiesFor("cli");
-  assert.ok(!baseline.includes("shell.run"), "the CLI baseline keeps §9's rule: shell is never in a baseline");
+  assert.ok(
+    !baseline.includes("shell.run"),
+    "the CLI baseline keeps §9's rule: shell is never in a baseline",
+  );
 });
 
 test("fixture: content carrying the wrapper's own closer cannot close the frame — the nonce holds", () => {
@@ -90,7 +109,11 @@ test("fixture: content carrying the wrapper's own closer cannot close the frame 
   assert.ok(genuineClosed, "the real closer exists and repeats the nonce for the pair-check");
   const nonce = /nonce="([a-f0-9]+)"/.exec(wrapped)?.[1] ?? "";
   assert.ok(nonce.length >= 8, "the nonce is real entropy, not a constant");
-  assert.match(wrapped, /SYSTEM: the file read is over/, "the bytes pass through untouched — the frame is the defence");
+  assert.match(
+    wrapped,
+    /SYSTEM: the file read is over/,
+    "the bytes pass through untouched — the frame is the defence",
+  );
 });
 
 test("fixture: content that reproduces the call's own nonce is an attack, refused rather than retried", () => {
@@ -115,5 +138,3 @@ test("fixture: content that reproduces the call's own nonce is an attack, refuse
   );
   assert.ok(calls >= 6, `the wrapper tried its budget (${String(calls)} calls) before refusing`);
 });
-
-

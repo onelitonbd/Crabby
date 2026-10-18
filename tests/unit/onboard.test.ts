@@ -17,7 +17,10 @@ const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), 
 function harness(home: string) {
   const layout = dataLayout(path.join(home, ".crabby"));
   const out: string[] = [];
-  const renderer = createRenderer({ write: (text) => out.push(text), err: (text) => out.push(text) }, false);
+  const renderer = createRenderer(
+    { write: (text) => out.push(text), err: (text) => out.push(text) },
+    false,
+  );
   const input = {
     layout,
     facts: { platform: "linux", arch: "x64", nodeVersion: "v22.22.3", isTermux: false } as never,
@@ -37,8 +40,16 @@ test("`onboard` in a pipe never prompts — it prints the numbered manual path a
   assert.match(text, /non-interactive/);
   assert.match(text, /1\.\s+crabby init/);
   assert.match(text, /crabby doctor/);
-  assert.match(text, /pair from a second session/, "the manual list carries the lesson of hits 2 and 3");
-  assert.match(text, /skips what is already done/, "the skip-what-is-done promise is on the record");
+  assert.match(
+    text,
+    /pair from a second session/,
+    "the manual list carries the lesson of hits 2 and 3",
+  );
+  assert.match(
+    text,
+    /skips what is already done/,
+    "the skip-what-is-done promise is on the record",
+  );
   assert.ok(!text.includes("Configure a model provider now?"), "no prompt reaches a pipe");
 });
 
@@ -48,7 +59,10 @@ test("`onboard` says where you are — paired and configured installs skip ahead
   mkdirSync(layout.stateDir, { recursive: true });
   writeFileSync(
     path.join(layout.stateDir, "config.json"),
-    JSON.stringify({ provider: { groq: { baseUrl: "https://api.groq.com/openai/v1" } }, defaultModel: "groq/x" }),
+    JSON.stringify({
+      provider: { groq: { baseUrl: "https://api.groq.com/openai/v1" } },
+      defaultModel: "groq/x",
+    }),
     "utf8",
   );
   const exit = await runOnboard([], input, renderer);
@@ -57,14 +71,25 @@ test("`onboard` says where you are — paired and configured installs skip ahead
   assert.match(text, /provider configured ✓/);
   assert.match(text, /default model: groq\/x ✓/);
   assert.ok(!/1\.\s+crabby init/.test(text), "a configured install is not told to init again");
-  assert.ok(!/vault set/.test(text.split("non-interactive")[1] ?? text), "a configured provider is not re-asked");
+  assert.ok(
+    !/vault set/.test(text.split("non-interactive")[1] ?? text),
+    "a configured provider is not re-asked",
+  );
 });
 
 test("the survey reads the real state dir, so `--data-dir` installs are seen as they are", async () => {
   const home = mkdtempSync(path.join(tmpdir(), "crabby-onboard-other-"));
   const { layout, out, renderer, input } = harness(home);
   mkdirSync(layout.stateDir, { recursive: true });
-  writeFileSync(path.join(layout.stateDir, "config.json"), JSON.stringify({ provider: {} }), "utf8");
+  writeFileSync(
+    path.join(layout.stateDir, "config.json"),
+    JSON.stringify({ provider: {} }),
+    "utf8",
+  );
   await runOnboard([], input, renderer);
-  assert.match(out.join(""), /no provider yet/, "a config with no baseUrl entry is not a configured provider");
+  assert.match(
+    out.join(""),
+    /no provider yet/,
+    "a config with no baseUrl entry is not a configured provider",
+  );
 });

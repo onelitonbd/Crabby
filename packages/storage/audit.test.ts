@@ -32,7 +32,7 @@ function mkdtemp(): string {
 }
 
 describe("the audit store (§14)", () => {
-  it("records rows with aud_ ids, every §14 field, and pages by id cursor", () => {
+  it("records rows with aud_ ids, every §14 field, and pages by id cursor", async () => {
     const db = freshDb();
     const first = recordAudit(db, {
       ts: new Date(0).toISOString(),
@@ -41,6 +41,10 @@ describe("the audit store (§14)", () => {
       actor: "anonymous",
       detail: { reason: "missing token" },
     });
+    // The id's time part is the minting millisecond, and ids minted in one millisecond are ordered by nothing
+    // (packages/api-contracts/ids.ts) — a pause keeps the two mints in different milliseconds so the id sort is
+    // the insertion sort, deterministically, instead of a coin flip on the entropy suffix.
+    await new Promise((resolve) => setTimeout(resolve, 3));
     const second = recordAudit(db, {
       ts: new Date(1).toISOString(),
       kind: "config_change",

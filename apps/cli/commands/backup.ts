@@ -11,14 +11,20 @@ import type { DataLayout } from "@crabby/platform";
 import { createBackup, openDatabase } from "@crabby/storage";
 import type { Renderer } from "../output.ts";
 
-export function runBackup(rest: string[], layout: DataLayout, renderer: Renderer): Promise<ExitCode> {
+export function runBackup(
+  rest: string[],
+  layout: DataLayout,
+  renderer: Renderer,
+): Promise<ExitCode> {
   if (rest.includes("--help")) {
     renderer.line("usage", "crabby backup [destination-dir] [--json]");
     renderer.line(
       "default",
       "a timestamped directory under <stateDir>/backups — the database, config.json, extensions/ and mcp/",
     );
-    renderer.fix("restore is a manual step: docs/DATA_AND_MEMORY.md §8 has the steps — nothing restores itself");
+    renderer.fix(
+      "restore is a manual step: docs/DATA_AND_MEMORY.md §8 has the steps — nothing restores itself",
+    );
     return Promise.resolve(EXIT.success);
   }
 
@@ -35,7 +41,10 @@ export function runBackup(rest: string[], layout: DataLayout, renderer: Renderer
   try {
     handle = openDatabase(dbPath);
   } catch (error) {
-    renderer.line("backup", `the database could not be opened: ${error instanceof Error ? error.message : error}`);
+    renderer.line(
+      "backup",
+      `the database could not be opened: ${error instanceof Error ? error.message : error}`,
+    );
     renderer.fix(`expected the database at ${dbPath} — \`crabby init\` creates it`);
     return Promise.resolve(EXIT.failure);
   }
@@ -44,7 +53,10 @@ export function runBackup(rest: string[], layout: DataLayout, renderer: Renderer
   // the online copy, and a `finally` here would close the database out from under it.
   return createBackup({ db: handle.db, stateDir: layout.stateDir, destination })
     .catch((error: unknown): "the backup did not complete" => {
-      renderer.line("backup", `the backup failed: ${error instanceof Error ? error.message : String(error)}`);
+      renderer.line(
+        "backup",
+        `the backup failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return "the backup did not complete";
     })
     .then((outcome) => {
@@ -52,7 +64,9 @@ export function runBackup(rest: string[], layout: DataLayout, renderer: Renderer
       if (typeof outcome === "string") return EXIT.failure;
       if (!outcome.ok) {
         renderer.line("backup", outcome.reason);
-        renderer.fix("the partial directory was removed — `backups/` only ever holds complete, verified copies");
+        renderer.fix(
+          "the partial directory was removed — `backups/` only ever holds complete, verified copies",
+        );
         return EXIT.failure;
       }
       if (renderer.json) {

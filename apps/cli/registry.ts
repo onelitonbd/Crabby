@@ -39,7 +39,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     noun: "doctor",
-    summary: "environment, Node, native modules, Termux constraints, vault, data dir; --security prints the plain-language posture",
+    summary:
+      "environment, Node, native modules, Termux constraints, vault, data dir; --security prints the plain-language posture",
     flags: ["--json", "--security"],
     status: "ready",
   },
@@ -698,7 +699,8 @@ export const COMMANDS: readonly CommandSpec[] = [
     status: "planned",
     // The old milestone string said M2, and M2 shipped without it — the honest label names the real gates: a stop
     // route beside the listener and, on a phone, the daemon question. Ctrl-C and the pid are today's stops.
-    milestone: "post-v0.1.0 (§7.1's stop verb wants a route beside the listener; Ctrl-C and the pid are today's stops)",
+    milestone:
+      "post-v0.1.0 (§7.1's stop verb wants a route beside the listener; Ctrl-C and the pid are today's stops)",
   },
   {
     noun: "gateway",
@@ -706,7 +708,8 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: "drain, restart, and print who was disconnected (T3, D-058)",
     flags: ["--yes"],
     status: "planned",
-    milestone: "post-v0.1.0 (§4.2's T3: needs the approval service and the same supervisor as stop)",
+    milestone:
+      "post-v0.1.0 (§4.2's T3: needs the approval service and the same supervisor as stop)",
   },
   {
     // M5 (§13, D-066's lifecycle): on is the T3 act — the prompt lists which paired identities become

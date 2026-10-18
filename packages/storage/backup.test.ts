@@ -17,10 +17,22 @@ function seededState(): { stateDir: string; close(): void; version: number } {
   // a backup must refuse to carry.
   writeFileSync(path.join(stateDir, "config.json"), JSON.stringify({ provider: {} }), "utf8");
   mkdirSync(path.join(stateDir, "extensions", "weekly-report", "reports"), { recursive: true });
-  writeFileSync(path.join(stateDir, "extensions", "weekly-report", "SKILL.md"), "name: weekly-report\n", "utf8");
-  writeFileSync(path.join(stateDir, "extensions", "weekly-report", "reports", "report-1.json"), "{}\n", "utf8");
+  writeFileSync(
+    path.join(stateDir, "extensions", "weekly-report", "SKILL.md"),
+    "name: weekly-report\n",
+    "utf8",
+  );
+  writeFileSync(
+    path.join(stateDir, "extensions", "weekly-report", "reports", "report-1.json"),
+    "{}\n",
+    "utf8",
+  );
   mkdirSync(path.join(stateDir, "mcp"), { recursive: true });
-  writeFileSync(path.join(stateDir, "mcp", "servers.json"), JSON.stringify({ servers: [] }), "utf8");
+  writeFileSync(
+    path.join(stateDir, "mcp", "servers.json"),
+    JSON.stringify({ servers: [] }),
+    "utf8",
+  );
   mkdirSync(path.join(stateDir, "vault"), { recursive: true });
   writeFileSync(path.join(stateDir, "vault", "secrets.vault"), "not-for-backups", "utf8");
   writeFileSync(path.join(stateDir, "client.json"), "token material", "utf8");
@@ -44,12 +56,17 @@ describe("the backup (D-065, DATA_AND_MEMORY §8)", () => {
       try {
         const row = copy.db.prepare("PRAGMA integrity_check").get() as { integrity_check: string };
         assert.equal(row.integrity_check, "ok");
-        const counted = copy.db.prepare("SELECT COUNT(*) AS n FROM schema_migration").get() as { n: number };
+        const counted = copy.db.prepare("SELECT COUNT(*) AS n FROM schema_migration").get() as {
+          n: number;
+        };
         assert.equal(counted.n, state.version, "the copy carries the whole migration ledger");
       } finally {
         copy.close();
       }
-      assert.ok(existsSync(path.join(result.dir, "manifest.json")), "the manifest is part of the answer");
+      assert.ok(
+        existsSync(path.join(result.dir, "manifest.json")),
+        "the manifest is part of the answer",
+      );
       const manifest = JSON.parse(readFileSync(path.join(result.dir, "manifest.json"), "utf8")) as {
         included: string[];
         excluded: { name: string }[];
@@ -68,16 +85,38 @@ describe("the backup (D-065, DATA_AND_MEMORY §8)", () => {
       const result = await createBackup({ db: liveDb(state), stateDir: state.stateDir });
       assert.ok(result.ok);
       if (!result.ok) return;
-      assert.ok(!existsSync(path.join(result.dir, "vault")), "the vault file never rides in a backup");
-      assert.ok(!existsSync(path.join(result.dir, "client.json")), "the client's bearer token stays out");
-      assert.ok(!existsSync(path.join(result.dir, "telegram.json")), "the bot's bearer tokens stay out");
-      assert.ok(!existsSync(path.join(result.dir, "scratch")), "scratch is rebuildable, not backed up");
+      assert.ok(
+        !existsSync(path.join(result.dir, "vault")),
+        "the vault file never rides in a backup",
+      );
+      assert.ok(
+        !existsSync(path.join(result.dir, "client.json")),
+        "the client's bearer token stays out",
+      );
+      assert.ok(
+        !existsSync(path.join(result.dir, "telegram.json")),
+        "the bot's bearer tokens stay out",
+      );
+      assert.ok(
+        !existsSync(path.join(result.dir, "scratch")),
+        "scratch is rebuildable, not backed up",
+      );
       const named = result.excluded.map((entry) => entry.name);
-      for (const must of ["vault/", "client.json", "telegram.json", "gateway.json / last-exit.json", "scratch/", "backups/"]) {
+      for (const must of [
+        "vault/",
+        "client.json",
+        "telegram.json",
+        "gateway.json / last-exit.json",
+        "scratch/",
+        "backups/",
+      ]) {
         assert.ok(named.includes(must), `the exclusion ${must} is named, not silent`);
       }
       for (const entry of result.excluded) {
-        assert.ok(entry.reason.length > 20, `the reason for ${entry.name} is a sentence, not a word`);
+        assert.ok(
+          entry.reason.length > 20,
+          `the reason for ${entry.name} is a sentence, not a word`,
+        );
       }
     } finally {
       state.close();
@@ -91,10 +130,19 @@ describe("the backup (D-065, DATA_AND_MEMORY §8)", () => {
       assert.ok(result.ok);
       if (!result.ok) return;
       const skill = path.join(result.dir, "extensions", "weekly-report", "SKILL.md");
-      const report = path.join(result.dir, "extensions", "weekly-report", "reports", "report-1.json");
+      const report = path.join(
+        result.dir,
+        "extensions",
+        "weekly-report",
+        "reports",
+        "report-1.json",
+      );
       assert.ok(existsSync(skill), "the pack rides along");
       assert.ok(existsSync(report), "D-039's per-version reports ride with it");
-      assert.ok(existsSync(path.join(result.dir, "mcp", "servers.json")), "the MCP server list rides with it");
+      assert.ok(
+        existsSync(path.join(result.dir, "mcp", "servers.json")),
+        "the MCP server list rides with it",
+      );
     } finally {
       state.close();
     }

@@ -446,3 +446,7 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 - **আসল বাগ:** fresh clone-এ `doctor` যেকোনো cwd থেকে `@crabby/vault` পেত না — ৮টা প্যাকেজ ২১টা cross-import
   ডিক্লেয়ারই করেনি (hoisting ঢেকে রাখছিল)। সব declared → links সত্যি → মডিউল-গ্রাফ এখন সৎ।
 - **প্রমাণ:** fresh clone + link-global → যেকোনো ডিরেক্টরি থেকে `crabby doctor` exit 0, `backup` ok।
+## Slice 21 — দ্বিতীয় ডিভাইস-হিট: ব্রাঞ্চ-বদলের পরে পুরোনো node_modules — 2026-10-17
+
+- মালিকের ফোনে `npm install` হয়েছিল পুরোনো main-এ; নতুন ব্রাঞ্চে গিয়ে `@crabby/extensions` ERR_MODULE_NOT_FOUND —
+  লিংক-গাছ package.json-এর সাথে চলে না, install চলে। TROUBLESHOOTING-এ লক্ষণ → `npm install` পুনরায়।

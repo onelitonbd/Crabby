@@ -13,6 +13,20 @@ properly with `sh scripts/link-global.sh` (D-145, one symlink into your checkout
 `crabby`" section). If even the `node` form fails with a syntax error, your Node is
 older than the `engines.node` pin — `node --version`, then upgrade (Termux: `pkg upgrade nodejs-lts`).
 
+## `ERR_MODULE_NOT_FOUND` for an `@crabby/…` package — after switching branches or pulling
+
+The `node_modules` tree was built from a different `package.json` set: the workspace links (`@crabby/vault`,
+`@crabby/extensions`, …) are created by `npm install` from the declarations, and a `git checkout`/`git pull`
+changes the declarations but never the tree. Re-run it:
+
+```sh
+npm install --build-from-source     # Termux; elsewhere: npm install
+crabby doctor
+```
+
+If a pull touched `package.json` (or you moved between `main` and a work branch), this is expected — install is
+the step that makes the module graph match the code you just checked out.
+
 ## "Gateway" — nothing answers
 
 - `crabby status` is the first command, not `curl`: it reads what a running Gateway published

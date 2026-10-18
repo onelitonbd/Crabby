@@ -1745,6 +1745,24 @@ first draft's `$`-anchored code regex losing to chunked terminal delivery — un
 fallbacks (code seen but not captured → "read it above"; no prompt at all → identities exist). Gates: onboard
 3/3, cli 56/56, tsc, biome, pty smoke with a boxed code.
 
+**Eighty-sixth slice — the onboarding screen: §5's wizard, drawn.** `docs/UI_UX_SPEC.md` §5 specified the first
+run "like a screen, not a README"; this slice gives `crabby onboard` that screen. A new stdlib-only primitives
+file (`apps/cli/onboard-ui.ts`) holds what the spec implied: a palette that exists only for a TTY (§6 again — a
+pipe gets the identity palette, `NO_COLOR` is honoured, and no pipe ever meets a prompt), a framed banner, a
+six-step rail redrawn in place (✓ done, ● now, ○ pending, ✗ failed — inline, no alternate screen, D-061; the
+scrollback keeps the honest transcript), and arrow-key menus whose selected row is marked twice — ❯ and inverse —
+so the choice survives colour loss; ↑/↓/j/k wrap at both ends, raw mode lives only inside one question, Escape
+means cancelled. The wizard walks §5's steps in §5's order: environment; model path (skip stays a supported
+answer); workspace with the deny-list named; shell access with §5's own consequence sentence ("That is not a
+sandbox") — where an Enter'd answer is recorded in config and an Escape is "ask me later", not a hidden decision;
+the boxed pairing code (every line measured, exactly 48 columns) redeemed by the wizard itself; and the first
+chat verified through the probe. Four pty smokes shaped it: two ESCs arriving in one terminal chunk lose the
+second (paced keystrokes proved the full path), the Enter path persists `shell.enabled: false`, the re-run
+prints "already decided" and never re-inits or re-pairs. The gates also caught up honestly: the pinned formatter
+had drifted from ten files (formatter-only pass, its own commit), and the audit test's same-millisecond mint
+order was a coin flip — the id scheme's own doc says ids minted together are ordered by nothing, so the test now
+mints across a millisecond boundary. Final gates: sweep 1505/1505, tsc, biome, parity, docs:check.
+
 ## 8. Phase M6 — Release readiness
 
 *Everything this repository can ship is shipped (2026-10-17, slices 79–83): backup/restore (D-142), the changelog

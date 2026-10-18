@@ -1,44 +1,56 @@
-// `crabby onboard` — the whole first-run as one guided flow, the way the owner asked for it: "পুরোটাই সুন্দর করে
-// টার্মিনাল UI-তে সাজানো" — the OpenClaw wizard's ergonomics bought without OpenClaw's mechanism.
+// `crabby onboard` — `docs/UI_UX_SPEC.md` §5's First-Run Experience, which that section specifies "like a screen,
+// not a README" and which no interface ran until this file: environment → model path → workspace → shell →
+// pairing → first task, in §5's order, as one guided flow.
 //
-// The design rule this file obeys is the one `docs/INSTALL.md`'s rehearsal already proved: every step it drives
-// is the same verb a user types by hand — `init`, `doctor`, `gateway start` (via the running CLI), `auth pair`,
-// `vault set`, `provider add`. The wizard is a **hand on those commands**, never a second collector: it prints
-// each command before running it (the paste trail), so a scripted reader can reproduce the whole session from
-// the output. What it adds over the loose steps is exactly what `docs/TROUBLESHOOTING.md`'s four real hits say a
-// first-run needs:
+// Three rules the screen obeys, each inherited rather than invented:
 //
-//   1. state-aware start — the wizard reads where you are (fresh? paired? configured?) and skips what is done,
-//      so "a start with no first-client code" (hit 4) becomes a sentence, not a mystery;
-//   2. the pairing code is the loudest thing on screen — printed as its own boxed block with the second-session
-//      instruction beside it (hits 2 and 3), because the single most-fumbled moment of the manual path is
-//      missing the code at the bottom of a wall of composition lines;
-//   3. verification before celebration — a provider is not "configured" until it answers a real completion
-//      (the `model probe` route, D-133), which is the wizard's analogue of OpenClaw's verify-with-a-real-reply;
-//   4. non-TTY is the manual path — no prompts, no piping surprises: the wizard prints the remaining commands
-//      as a numbered list and exits, because a wizard that guesses in a pipe is a hazard.
+//   - **§6's output rule:** colour is what a TTY gets, never what a pipe receives (`onboard-ui.ts`'s palette makes
+//     branching impossible). Non-TTY prints the numbered manual path and exits — a wizard that prompts into a
+//     pipe is a hazard, not a convenience.
+//   - **The paste trail:** every driven step is the same verb a user types by hand, echoed as `$ crabby …` before
+//     it runs. The wizard is a hand on the commands, never a second collector — a scripted reader can reproduce
+//     the whole session from the output, and nothing happens that could not have been typed.
+//   - **§5's honesty line:** every security-bearing choice names its consequence in one sentence — the shell
+//     screen says exactly what enabling means ("not a sandbox" is §5's own sentence), and the wizard's promise is
+//     a *verified* model (one real completion through the probe route), never a saved key.
 //
-// Scope, honestly named: this file drives steps and reads state; it does not re-implement any of them. Config
-// writes go through `commands/config.ts`'s writer, pairing through the same redeem the verb uses, and the
-// Gateway start is the real `gateway start` — the wizard runs it as a child process on the user's terminal and
-// waits for the listener file, because a wizard that swallowed the Gateway into its own process would take the
-// Ctrl-C away.
+// The four real owner-device hits (docs/TROUBLESHOOTING.md) are the reason the flow looks like it does: state is
+// spoken before anything runs (hit 4), the pairing code is the loudest block on screen (hits 2 and 3), and a
+// re-run skips what is done instead of re-asking it.
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { EXIT, type ExitCode } from "@crabby/api-contracts";
 import type { DataLayout, PlatformFacts } from "@crabby/platform";
+import {
+  banner,
+  colorEnabled,
+  type MenuOption,
+  palette,
+  pick,
+  rail,
+  type StepState,
+} from "../onboard-ui.ts";
 import type { Renderer } from "../output.ts";
 
-interface OnboardInput {
+export interface OnboardInput {
   readonly layout: DataLayout;
   readonly facts: PlatformFacts;
   readonly rootPackageJson: string;
   readonly repoRoot: string;
 }
 
-/** The one place the wizard asks a human a question. TTY only; the non-TTY branch never reaches it. */
+const STEP_NAMES = [
+  "environment",
+  "model path",
+  "workspace",
+  "shell",
+  "pairing",
+  "first chat",
+] as const;
+
 async function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   const answer = await new Promise<string>((resolve) => {
@@ -48,8 +60,7 @@ async function ask(question: string): Promise<string> {
   return answer.trim();
 }
 
-/** Run one existing verb as a child on the user's terminal, echoing it first — the wizard's whole honesty is
- *  that it never runs anything a user could not have typed. Returns the child's exit code. */
+/** One existing verb, as a child on the user's terminal, echoed first — the paste trail. */
 function runVerb(repoRoot: string, argv: readonly string[], renderer: Renderer): Promise<number> {
   renderer.line("", `$ crabby ${argv.join(" ")}`);
   return new Promise((resolve) => {
@@ -61,25 +72,27 @@ function runVerb(repoRoot: string, argv: readonly string[], renderer: Renderer):
   });
 }
 
-/** The model verification, through the model-probe route the CLI's `model probe` verb already drives. */
 function verifyModel(repoRoot: string, target: string): Promise<boolean> {
   return new Promise((resolve) => {
     const child = spawn(
       process.execPath,
       [path.join(repoRoot, "apps/cli/crabby.ts"), "model", "probe", target],
-      { stdio: ["ignore", "inherit", "inherit"] },
+      {
+        stdio: ["ignore", "inherit", "inherit"],
+      },
     );
     child.on("exit", (code) => resolve(code === 0));
     child.on("error", () => resolve(false));
   });
 }
 
-/** Where the first-run actually is. Four facts, each read the same way the manual commands read them. */
+/** Where the first-run actually is — each fact read the same way the manual commands read it. */
 async function survey(input: OnboardInput): Promise<{
   readonly fresh: boolean;
   readonly paired: boolean;
   readonly providerConfigured: boolean;
   readonly defaultModel: string | undefined;
+  readonly shellDecided: boolean;
 }> {
   const configPath = path.join(input.layout.stateDir, "config.json");
   let config: Record<string, unknown> = {};
@@ -99,8 +112,6 @@ async function survey(input: OnboardInput): Promise<{
   try {
     const dbPath = path.join(input.layout.stateDir, "crabby.sqlite3");
     if (existsSync(dbPath)) {
-      // Dynamic import so the native module resolves from the checkout's own node_modules — the same way
-      // `commands/backup.ts` reaches the database, and for the same reason: the wizard works from any cwd.
       const { default: Database } = (await import("better-sqlite3")) as {
         default: new (
           path: string,
@@ -117,12 +128,97 @@ async function survey(input: OnboardInput): Promise<{
   } catch {
     paired = false;
   }
+  const shell = (config.shell ?? {}) as { enabled?: unknown };
   return {
     fresh: !existsSync(configPath),
     paired,
     providerConfigured,
     defaultModel: typeof config.defaultModel === "string" ? config.defaultModel : undefined,
+    shellDecided: typeof shell.enabled === "boolean",
   };
+}
+
+interface GatewayPairing {
+  readonly code?: string | undefined;
+  readonly sawPrompt: boolean;
+  readonly sawListener: boolean;
+}
+
+function startGatewayForPairing(input: OnboardInput, renderer: Renderer): Promise<GatewayPairing> {
+  renderer.line(
+    "gateway",
+    "starting the Gateway here — pairing code will be boxed below; leave this terminal running",
+  );
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      [path.join(input.repoRoot, "apps/cli/crabby.ts"), "gateway", "start"],
+      {
+        stdio: ["ignore", "pipe", "inherit"],
+      },
+    );
+    let buffer = "";
+    let sawPrompt = false;
+    let sawListener = false;
+    const finish = (code: string | undefined) => {
+      clearTimeout(timer);
+      resolve({ ...(code === undefined ? {} : { code }), sawPrompt, sawListener });
+    };
+    const timer = setTimeout(() => finish(undefined), 30_000);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      process.stderr.write(text);
+      buffer += text;
+      if (/pair with this code/.test(buffer)) sawPrompt = true;
+      if (/gateway\s+http:\/\/127\.0\.0\.1/.test(buffer)) sawListener = true;
+      // Unanchored on purpose: a pty delivers the Gateway's output in whatever chunks the terminal decides, and a
+      // `$`-anchored match only wins when the buffer happens to end with the code.
+      const code = /pair with this code[^\n]*\n\s*([A-Z0-9]{8})/.exec(buffer)?.[1];
+      if (code !== undefined && sawListener) {
+        const p = palette(colorEnabled(process.stdout));
+        renderer.line("", "");
+        renderer.line("", p.cyan("┌──────────────────────────────────────────────┐"));
+        renderer.line(
+          "",
+          p.cyan("│") + p.bold("  pairing code — pairing this terminal now…   ") + p.cyan("│"),
+        );
+        renderer.line(
+          "",
+          p.cyan(`│                   ${p.green(p.bold(code))}                   │`),
+        );
+        renderer.line(
+          "",
+          p.cyan("│") + p.dim("  expires in ~2 minutes · single use          ") + p.cyan("│"),
+        );
+        renderer.line("", p.cyan("└──────────────────────────────────────────────┘"));
+        finish(code);
+      }
+    });
+    child.on("exit", () => finish(undefined));
+  });
+}
+
+function redeemCode(input: OnboardInput, code: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      [path.join(input.repoRoot, "apps/cli/crabby.ts"), "auth", "pair", "--code", code],
+      { stdio: ["ignore", "inherit", "inherit"] },
+    );
+    child.on("exit", (exit) => resolve(exit === 0));
+    child.on("error", () => resolve(false));
+  });
+}
+
+/** One arrow-key question. The result keeps Escape separate from an Enter'd row on purpose: Escape is "ask me
+ *  later" (nothing is recorded), while an Enter'd safe option is a decision the config remembers. */
+async function choose(
+  title: string,
+  options: readonly MenuOption[],
+  p: ReturnType<typeof palette>,
+): Promise<{ index: number; cancelled: boolean }> {
+  const result = await pick(title, options, p);
+  return { index: result.index, cancelled: result.cancelled };
 }
 
 export function runOnboard(
@@ -131,10 +227,10 @@ export function runOnboard(
   renderer: Renderer,
 ): Promise<ExitCode> {
   if (rest.includes("--help")) {
-    renderer.line("usage", "crabby onboard [--yes]");
+    renderer.line("usage", "crabby onboard");
     renderer.line(
       "what",
-      "init → doctor → gateway start → pair → provider → verify → first chat, one guided flow",
+      "environment → model path → workspace → shell → pairing → first chat (UI_UX_SPEC §5)",
     );
     renderer.line(
       "non-tty",
@@ -142,26 +238,36 @@ export function runOnboard(
     );
     return Promise.resolve(EXIT.success);
   }
-  const tty = process.stdin.isTTY === true;
   return (async (): Promise<ExitCode> => {
+    const color = colorEnabled(process.stdout);
+    const p = palette(color);
+    const tty = process.stdin.isTTY === true;
     const state = await survey(input);
-    renderer.line(
-      "onboard",
-      `Crabby first-run — ${input.facts.platform}/${input.facts.arch}, Node ${input.facts.nodeVersion}`,
-    );
+    const statuses: Record<(typeof STEP_NAMES)[number], StepState> = {
+      environment: "pending",
+      "model path": "pending",
+      workspace: "pending",
+      shell: "pending",
+      pairing: "pending",
+      "first chat": "pending",
+    };
 
-    // 0. Where you are, said out loud — the sentence the manual path never printed (hit 4).
-    renderer.line(
-      "state",
-      state.fresh
-        ? "fresh install — starting from the top"
-        : [
-            state.paired ? "paired ✓" : "not paired",
-            state.providerConfigured ? "provider configured ✓" : "no provider yet",
-            state.defaultModel ? `default model: ${state.defaultModel} ✓` : "no default model",
-          ].join(" · "),
-    );
     if (!tty) {
+      // §6: a pipe gets the manual path, numbered, never a prompt.
+      renderer.line(
+        "onboard",
+        `Crabby first-run — ${input.facts.platform}/${input.facts.arch}, Node ${input.facts.nodeVersion}`,
+      );
+      renderer.line(
+        "state",
+        state.fresh
+          ? "fresh install — starting from the top"
+          : [
+              state.paired ? "paired ✓" : "not paired",
+              state.providerConfigured ? "provider configured ✓" : "no provider yet",
+              state.defaultModel ? `default model: ${state.defaultModel} ✓` : "no default model",
+            ].join(" · "),
+      );
       renderer.line("", "");
       renderer.line(
         "non-interactive",
@@ -170,13 +276,18 @@ export function runOnboard(
       const steps: string[] = [];
       if (state.fresh) steps.push("crabby init");
       steps.push("crabby doctor");
-      if (!state.paired)
+      if (!state.providerConfigured) {
+        steps.push("crabby provider add <name> --base-url <url> --model <model-id>");
+        steps.push("crabby vault set <name>   # the key arrives on stdin");
+        steps.push("crabby config set defaultModel <name>/<model-id>");
+      }
+      if (!state.paired) {
         steps.push(
           "crabby gateway start        # pair from a second session: crabby auth pair --code <code>",
         );
-      if (!state.providerConfigured)
-        steps.push("crabby vault set <provider-name>   # the key arrives on stdin");
-      if (!state.defaultModel) steps.push("crabby config set defaultModel <provider>/<modelId>");
+      }
+      if (state.defaultModel !== undefined)
+        steps.push("crabby model probe <name>/<model-id>   # verify it answers");
       steps.forEach((step, index) => {
         renderer.line(`  ${String(index + 1)}.`, step);
       });
@@ -184,28 +295,162 @@ export function runOnboard(
       return EXIT.success;
     }
 
-    // 1. init
+    // The screen: banner, then the rail — redrawn in place as phases complete.
+    for (const line of banner(p)) renderer.line("", line);
+    renderer.line("", "");
+    const drawRail = (): void => {
+      for (const line of rail(
+        STEP_NAMES.map((name) => ({ name, state: statuses[name] })),
+        p,
+      )) {
+        renderer.line("", line);
+      }
+    };
+    drawRail();
+    const setStep = (name: (typeof STEP_NAMES)[number], value: StepState): void => {
+      statuses[name] = value;
+      const lines = rail(
+        STEP_NAMES.map((step) => ({ name: step, state: statuses[step] })),
+        p,
+      ).length;
+      process.stdout.write(`\x1b[${String(lines)}A\x1b[J`);
+      drawRail();
+    };
+    const stepDone = (name: (typeof STEP_NAMES)[number]): void => setStep(name, "done");
+    const stepNow = (name: (typeof STEP_NAMES)[number]): void => setStep(name, "now");
+    renderer.line("", "");
+
+    // ── §5 step 1: environment ──────────────────────────────────────────────
+    stepNow("environment");
     if (state.fresh) {
       if ((await runVerb(input.repoRoot, ["init"], renderer)) !== 0) {
+        statuses.environment = "failed";
         renderer.fix("init failed — run `crabby doctor` and send the output");
         return EXIT.failure;
       }
     }
-
-    // 2. doctor — the green light, and the recovery tool if this wizard cannot continue.
     if ((await runVerb(input.repoRoot, ["doctor"], renderer)) !== 0) {
+      statuses.environment = "failed";
       renderer.line("doctor", "reported problems — the fix lines above name each one");
       renderer.fix(
         "fix what it named, then re-run `crabby onboard` — it skips what you already did",
       );
       return EXIT.failure;
     }
+    stepDone("environment");
 
-    // 3. gateway + pairing — the wizard starts the real Gateway as a child on this terminal and waits for the
-    // pairing moment, because swallowing the process would take the Ctrl-C away. The code block is the loudest
-    // thing on screen (hits 2 and 3): boxed, with the second-session sentence beside it.
+    // ── §5 step 2: model path ───────────────────────────────────────────────
+    stepNow("model path");
+    let target = state.defaultModel;
+    if (!state.providerConfigured) {
+      const choice = await choose(
+        "Pick a model path (§5 step 2)",
+        [
+          {
+            label: "Set up a provider now",
+            hint: "any OpenAI-compatible endpoint — base URL, model id, optional key",
+          },
+          {
+            label: "Skip for now",
+            hint: "Crabby is usable without one; real tasks wait for a model (§5's skip path)",
+          },
+        ],
+        p,
+      );
+      if (!choice.cancelled && choice.index === 0) {
+        const name = (await ask("provider name (e.g. groq): ")) || "local";
+        const baseUrl = await ask("base URL (e.g. https://api.groq.com/openai/v1): ");
+        const modelId = await ask("model id (e.g. llama-3.3-70b-versatile): ");
+        if (
+          (await runVerb(
+            input.repoRoot,
+            ["provider", "add", name, "--base-url", baseUrl, "--model", modelId],
+            renderer,
+          )) !== 0
+        ) {
+          renderer.fix("`provider add` refused — its fix line above names the field");
+        }
+        const keyed = await ask("does this endpoint need an API key? [y/N] ");
+        if (keyed.toLowerCase() === "y") {
+          renderer.line(
+            "vault",
+            `the next prompt takes the key on stdin — type it and press Enter (never argv)`,
+          );
+          await runVerb(input.repoRoot, ["vault", "set", name], renderer);
+          renderer.fix(
+            `point the provider at it:  crabby config set provider.${name}.key vault://${name}`,
+          );
+        }
+        target = `${name}/${modelId}`;
+        await runVerb(input.repoRoot, ["config", "set", "defaultModel", target], renderer);
+      } else {
+        renderer.fix(
+          "skipped — the mock endpoint composes today, and a real model can be added any time with `crabby provider add`",
+        );
+      }
+    }
+    stepDone("model path");
+
+    // ── §5 step 3: workspace (display — M2m built the creation) ─────────────
+    stepNow("workspace");
+    let workspaceRoot = "$HOME/crabby-workspace";
+    try {
+      const configPath = path.join(input.layout.stateDir, "config.json");
+      const config = JSON.parse(readFileSync(configPath, "utf8")) as {
+        workspace?: { root?: string };
+      };
+      if (typeof config.workspace?.root === "string") workspaceRoot = config.workspace.root;
+    } catch {
+      // the default sentence is the answer when the config says nothing
+    }
+    renderer.line(
+      "workspace",
+      `${workspaceRoot.replace(os.homedir(), "~")} — §8's deny-list stands guard around it`,
+    );
+    stepDone("workspace");
+
+    // ── §5 step 4: shell access (a decided shell is never re-asked — re-run skips what is done) ──
+    stepNow("shell");
+    if (state.shellDecided) {
+      renderer.line(
+        "shell",
+        "already decided in config (§4.2) — change it with `crabby config set shell.enabled …`",
+      );
+      stepDone("shell");
+    }
+    const shellChoice = state.shellDecided
+      ? { index: 0, cancelled: false }
+      : await choose(
+          "Shell access (§5 step 4)",
+          [
+            {
+              label: "Keep shell OFF (recommended)",
+              hint: "the agent works with files, memory and tasks; no commands",
+            },
+            {
+              label: "Enable shell",
+              hint: "lets the agent run commands as your Termux user. That is not a sandbox. (§5's own sentence)",
+            },
+          ],
+          p,
+        );
+    if (!state.shellDecided) {
+      if (shellChoice.cancelled) {
+        setStep("shell", "pending");
+        renderer.fix("left undecided — you will be asked again; nothing was recorded");
+      } else if (shellChoice.index === 1) {
+        await runVerb(input.repoRoot, ["config", "set", "shell.enabled", "true"], renderer);
+        renderer.fix("shell composes at the next Gateway start — which is the very next step");
+      } else {
+        await runVerb(input.repoRoot, ["config", "set", "shell.enabled", "false"], renderer);
+      }
+      stepDone("shell");
+    }
+
+    // ── §5 step 5: pairing ──────────────────────────────────────────────────
+    stepNow("pairing");
     if (!state.paired) {
-const pairing = await startGatewayForPairing(input, renderer);
+      const pairing = await startGatewayForPairing(input, renderer);
       if (pairing.code === undefined) {
         if (pairing.sawPrompt) {
           renderer.fix(
@@ -221,6 +466,7 @@ const pairing = await startGatewayForPairing(input, renderer);
             "if `crabby status` says `auth_invalid` instead, see docs/TROUBLESHOOTING.md (pairing reset)",
           );
         }
+        statuses.pairing = "failed";
         return EXIT.failure;
       }
       const ok = await redeemCode(input, pairing.code);
@@ -228,82 +474,53 @@ const pairing = await startGatewayForPairing(input, renderer);
         renderer.fix(
           "the code expired or was already used — harmless: stop the Gateway (Ctrl-C) and re-run `crabby onboard`; a fresh code is printed every start until one identity exists",
         );
+        statuses.pairing = "failed";
         return EXIT.failure;
       }
     }
+    stepDone("pairing");
 
-    // 4. provider — optional by design (the mock endpoint needs no key), priced honestly if skipped.
-    let target = state.defaultModel;
-    if (!state.providerConfigured) {
-      const provision = await ask("Configure a model provider now? [Y/n] ");
-      if (provision === "" || provision.toLowerCase() === "y") {
-        const name = (await ask("provider name (e.g. groq): ")) || "local";
-        const baseUrl = await ask("base URL (e.g. https://api.groq.com/openai/v1): ");
-        if (
-          (await runVerb(
-            input.repoRoot,
-            ["provider", "add", name, "--base-url", baseUrl, "--model", "?"],
-            renderer,
-          )) !== 0
-        ) {
-          renderer.fix(
-            "`crabby provider add` needs a real model id — run it by hand with the model you use",
-          );
-        }
-        const key = await ask("API key (empty = no key needed): ");
-        if (key !== "") {
-          if ((await runVerb(input.repoRoot, ["vault", "set", name], renderer)) !== 0) {
-            renderer.fix(
-              "the key did not land in the vault — `crabby vault set " +
-                name +
-                "` by hand (the value arrives on stdin)",
-            );
-          }
-        }
-      } else {
-        renderer.fix(
-          "skipped — a provider is not required to onboard; the mock endpoint composes, and real tasks wait for one",
-        );
-      }
-    }
-
-    // 5. verification before celebration — a real completion through the probe route (OpenClaw's best idea, ours
-    // now too). Skipped honestly when there is nothing to verify yet.
-    if (target === undefined) {
-      const answer =
-        (await ask("default model <provider>/<modelId> (empty = skip verification): ")) || "";
-      target = answer === "" ? undefined : answer;
-    }
+    // ── §5 step 6: prove the loop ───────────────────────────────────────────
+    stepNow("first chat");
     if (target !== undefined) {
       renderer.line(
         "verify",
-        `asking ${target} for one small completion — the wizard's promise is a *working* model, not a saved key`,
+        `asking ${target} for one small completion — the promise is a working model, not a saved key`,
       );
-      const ok = await verifyModel(input.repoRoot, target);
-      renderer.line(
-        "verify",
-        ok
-          ? "the model answered ✓"
-          : "the model did not answer — the key, URL or model id needs another look",
-      );
-      if (!ok) {
+      const answered = await verifyModel(input.repoRoot, target);
+      if (!answered) {
         renderer.fix(
-          "`crabby model probe " +
-            target +
-            "` by hand shows the exact failure; onboarding is still saved",
+          `crabby model probe ${target} by hand shows the exact failure; onboarding is still saved`,
         );
+        statuses["first chat"] = "failed";
         return EXIT.failure;
       }
+      renderer.line("verify", `${target} answered ✓`);
+      const chatChoice = await choose(
+        "Say hello now? (§5's first task)",
+        [
+          {
+            label: "Yes — one short chat",
+            hint: 'runs `crabby chat "Say hello in one short sentence."` right here',
+          },
+          { label: "Not now", hint: "everything is saved; the same command works any time" },
+        ],
+        p,
+      );
+      if (!chatChoice.cancelled && chatChoice.index === 0) {
+        await runVerb(input.repoRoot, ["chat", "Say hello in one short sentence."], renderer);
+      }
+      stepDone("first chat");
     } else {
+      statuses["first chat"] = "pending";
       renderer.fix(
-        "no model verified yet — `crabby model probe <provider>/<model>` when one is configured",
+        "no model to verify yet — `crabby model probe <name>/<model-id>` after adding one",
       );
     }
 
-    // 6. done — the paste trail, and the two commands that matter now.
     renderer.line("", "");
-    renderer.line("onboard", "done — what you can type now:");
-    renderer.line("  chat", 'crabby chat "hello" — one question, one answer');
+    renderer.line("onboard", `${p.green("done")} — what you can type now:`);
+    renderer.line("  chat", 'crabby chat "…" — one question, one answer');
     renderer.line("  task", 'crabby task run "…" — a multi-step task with approvals');
     renderer.line("  tui", "crabby tui — the full terminal UI");
     renderer.line("  web", "crabby web open — the browser dashboard");
@@ -311,71 +528,4 @@ const pairing = await startGatewayForPairing(input, renderer);
     renderer.fix("re-run `crabby onboard` any time — it skips what is already done");
     return EXIT.success;
   })();
-}
-
-/** Starts `crabby gateway start` as a child on this terminal, watches its stdout for the bootstrap code, and
- *  resolves with the code once the listener line appears. The Gateway keeps running — the wizard does not own
- *  it; the user's Ctrl-C does. */
-interface GatewayPairing {
-  /** The bootstrap code, once the listener is up and the `first client` block has been seen. */
-  readonly code?: string | undefined;
-  /** The Gateway printed a pairing prompt but the code was not captured — the honest answer is "read it above". */
-  readonly sawPrompt: boolean;
-  readonly sawListener: boolean;
-}
-
-function startGatewayForPairing(
-  input: OnboardInput,
-  renderer: Renderer,
-): Promise<GatewayPairing> {
-  renderer.line(
-    "gateway",
-    "starting the Gateway here — pairing code will be boxed below; leave this terminal running",
-  );
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.join(input.repoRoot, "apps/cli/crabby.ts"), "gateway", "start"], {
-      stdio: ["ignore", "pipe", "inherit"],
-    });
-    let buffer = "";
-    let sawPrompt = false;
-    let sawListener = false;
-    const finish = (code: string | undefined) => {
-      clearTimeout(timer);
-      resolve({ ...(code === undefined ? {} : { code }), sawPrompt, sawListener });
-    };
-    const timer = setTimeout(() => finish(undefined), 30_000);
-    child.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      process.stderr.write(text);
-      buffer += text;
-      if (/pair with this code/.test(buffer)) sawPrompt = true;
-      if (/gateway\s+http:\/\/127\.0\.0\.1/.test(buffer)) sawListener = true;
-      // Unanchored on purpose: a pty delivers the Gateway's output in whatever chunks the terminal's line
-      // discipline decides, and a `$`-anchored match only wins when the buffer happens to end with the code.
-      const code = /pair with this code[^\n]*\n\s*([A-Z0-9]{8})/.exec(buffer)?.[1];
-      if (code !== undefined && sawListener) {
-        // The boxed block: the one moment the manual path fumbled, made the loudest thing on screen.
-        renderer.line("", "┌──────────────────────────────────────────────┐");
-        renderer.line("", "│  pairing code — pairing this terminal now…   │");
-        renderer.line("", `│                     ${code}                    │`);
-        renderer.line("", "│  expires in ~2 minutes · single use          │");
-        renderer.line("", "└──────────────────────────────────────────────┘");
-        finish(code);
-      }
-    });
-    child.on("exit", () => finish(undefined));
-  });
-}
-
-/** Redeems the bootstrap code through the same verb a user types, so the trail is reproducible. */
-function redeemCode(input: OnboardInput, code: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      [path.join(input.repoRoot, "apps/cli/crabby.ts"), "auth", "pair", "--code", code],
-      { stdio: ["ignore", "inherit", "inherit"] },
-    );
-    child.on("exit", (exit) => resolve(exit === 0));
-    child.on("error", () => resolve(false));
-  });
 }

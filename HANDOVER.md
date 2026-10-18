@@ -76,7 +76,7 @@ carrying an accepted limitation — **that half passes** — and one task is sta
 the TUI, cancelled from the CLI — in one demo, documented as the release test. **The demo is the remaining M3 work, and it
 needs a live Telegram token.**
 
-Decisions run to **D-145**; open questions to **O-075**. O-008's gate is final (D-140) — the strategy half is post-v1. `docs/ROADMAP.md` has one paragraph per slice (39–85) — read the
+Decisions run to **D-145**; open questions to **O-075**. O-008's gate is final (D-140) — the strategy half is post-v1. `docs/ROADMAP.md` has one paragraph per slice (39–86) — read the
 last three to know what just happened and why.
 
 ## 3. The last three slices, and the bugs they found

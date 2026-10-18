@@ -336,7 +336,7 @@ pipeable and free of color when not a TTY.
 
 | Area | Commands |
 | --- | --- |
-| Setup | `onboard` — the guided first-run: state-aware init → doctor → gateway + pairing (the code as a boxed block, redeemed by the wizard itself) → optional provider → verified model (the probe route) — non-TTY prints the numbered manual path instead of prompting; re-runs skip what is done. Then `init`, `doctor` (`--security` prints the plain-language posture summary — M5), `status`, `version`, `backup [destination-dir]` — the online backup (database, config, extensions; secrets excluded and named, integrity verified at backup time) whose restore is a documented manual step (D-065/D-142, `docs/DATA_AND_MEMORY.md` §8) |
+| Setup | `onboard` — the guided first-run: state-aware init → doctor → gateway + pairing (the code as a boxed block, redeemed by the wizard itself) → optional provider → verified model (the probe route) — on a TTY this is UI_UX_SPEC §5's screen (banner, step rail, arrow-key menus); non-TTY prints the numbered manual path instead of prompting; re-runs skip what is done. Then `init`, `doctor` (`--security` prints the plain-language posture summary — M5), `status`, `version`, `backup [destination-dir]` — the online backup (database, config, extensions; secrets excluded and named, integrity verified at backup time) whose restore is a documented manual step (D-065/D-142, `docs/DATA_AND_MEMORY.md` §8) |
 | Chat | `chat "…"` (one-shot), `chat --session <id>` |
 | Tasks | `task run "…"`, `task ls`, `task show <id>`, `task watch <id>`, `task cancel <id>`, `task resume <id>` |
 | Approvals | `approval ls`, `approval approve <id>`, `approval deny <id>` |

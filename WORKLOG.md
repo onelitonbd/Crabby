@@ -480,3 +480,22 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   manual path, কোনো প্রম্পট নয়।
 - **pty smoke ২টি বাগ ধরল:** (১) `$`-অ্যাংকরড কোড-রেগেক্স chunked pty আউটপুটে হারায় → unanchored + sawPrompt/
   sawListener fallback-মেসেজ; (২) বক্সের "OTHER session" বাক্য বিভ্রান্তিকর — উইজার্ড নিজেই pair করে।
+
+## Slice 26 — onboard এখন স্ক্রিন: §5-এর উইজার্ড আসল TUI-তে — 2026-10-18
+
+- **নতুন `apps/cli/onboard-ui.ts` (stdlib-only প্রিমিটিভ):** palette (§6 — রঙ শুধু TTY-তে, `NO_COLOR` সম্মানিত,
+  pipe-এ identity), ফ্রেম-ব্যানার, ধাপ-রেল (✓●○✗, জায়গায়ই redraw; no alt-screen, D-061 — স্ক্রলব্যাকই সৎ
+  transcript), তীর-মেনু (নির্বাচিত row দ্বি-নির্দেশিত: ❯ + inverse, রঙ-শূন্যেও টিকে; ↑/↓/j/k, দুই-প্রান্তে wrap),
+  `pick` — raw mode শুধু প্রশ্নের ভেতরে, Escape = cancelled, pipe-এ প্রম্পটই নেই।
+- **onboard.ts §5-এর ৬ ধাপ §5-এর ক্রমেই:** environment → model path (মেনু; skip = সমর্থিত পথ) → workspace
+  (deny-list নাম ধরে) → shell (মেনু + §5-এর বাক্যটাই: "That is not a sandbox"; Enter-সিদ্ধান্ত config-এ স্থায়ী,
+  Escape = "ask me later", কিছুই রেকর্ড নয়) → pairing (বক্স-কোড, নিখুঁত ৪৮-কলাম; উইজার্ড-ই redeem) → first chat
+  (probe-যাচাই)। টেস্ট: onboard-ui 10/10 + onboard 3/3।
+- **pty smoke ৪টি যা গড়ল:** (১) এক chunk-এ দুই ESC — দ্বিতীয়টা হারায় → paced কীস্ট্রোকে সম্পূর্ণ প্রবাহ প্রমাণ;
+  (২) Enter-path: `shell.enabled:false` config-এ স্থায়ী + কোড-বক্স + auto-redeem (client.json); (৩) re-run:
+  "already decided" — shell/init/pairing পুনঃপ্রশ্ন নেই, model-প্রশ্ন সঠিকভাবে আছে (provider নেই বলে); (৪) বক্স-প্রস্থ
+  প্রতিটা লাইনে ৪৮।
+- **গেট-সততা:** ফুল `biome check .`-এ pinned formatter-এর সাথে ১০ ফাইলের drift (আগের সেশন per-file lint-এ চলেছিল) —
+  formatter-only pass আলাদা কমিটে; audit.test-এর same-millisecond mint flake — id-স্কিম ডকেরই সত্য মানল ("ordered by
+  nothing"), টেস্ট এখন ms-সীমা পেরোয়। ফাইনাল: sweep **1505/1505**, tsc ✓, biome 0, parity 51/45/32, docs:check
+  145·11·75।

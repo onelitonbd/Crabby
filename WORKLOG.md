@@ -456,3 +456,8 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   identity শূন্য থাকলে প্রতি start-এ নতুন কোড; pair = দ্বিতীয় সেশনে `auth pair --code`; মেয়াদ শেষ = নিরীহ।
 - INSTALL.md-র clone→first-conversation অংশে দুই-সেশন ডায়াগ্রাম; TROUBLESHOOTING-এ নতুন প্রথম এন্ট্রি।
 - (UX-ক্যান্ডিডেট, মালিকের নোটের জন্য: bootstrap কোড start-আউটপুটের একেবারে শেষ লাইনে যেতে পারে।)
+## Slice 23 — চতুর্থ ডিভাইস-হিট: "কোড নেই কিন্তু Gateway চলছে" = identity আগেই আছে — 2026-10-18
+
+- মালিকের start-এ first-client ব্লক নেই → ডিবিতে identity বিদ্যমান → কোনো এক redeem সফল হয়েছিল; `crabby status`
+  সম্ভবত সরাসরি উত্তর দেবে। লকআউট-পথও (token হারানো + identity আছে + revoke-র টোকেন লাগে) TROUBLESHOOTING-এ:
+  Gateway বন্ধ → client.json মুছুন → client_identity সারি সাফ → start → নতুন কোড।

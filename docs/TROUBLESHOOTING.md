@@ -23,6 +23,20 @@ port — `crabby gateway status` names the pid, `kill <pid>` or Ctrl-C in its te
 stop` is a planned verb; Ctrl-C and the pid are today's stops.) Once paired, `crabby auth list` shows the
 identity and its last-seen time.
 
+**A start that runs cleanly but prints no `first client` block at all** means identities already exist — a
+redeem succeeded at some point, quite possibly yours: `crabby status` will likely just answer, and you are
+paired. The lockout case is real, though — identities exist and the token in `<stateDir>/client.json` is lost or
+stale (`auth_invalid`), and `auth revoke` needs a working token too. The escape hatch, with the Gateway stopped:
+
+```sh
+rm ~/.crabby/client.json
+node -e "const D=require('better-sqlite3');const db=new D(require('os').homedir()+'/.crabby/crabby.sqlite3');db.exec('DELETE FROM client_identity');db.close();console.log('pairing reset')"
+crabby gateway start            # prints a fresh first-client code
+```
+
+Pair again from the second session. Nothing else in the state dir is touched — tasks, sessions and config
+survive; only the pairing rows are cleared.
+
 ## `ERR_MODULE_NOT_FOUND` for an `@crabby/…` package — after switching branches or pulling
 
 The `node_modules` tree was built from a different `package.json` set: the workspace links (`@crabby/vault`,

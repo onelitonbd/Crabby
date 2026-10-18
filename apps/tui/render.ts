@@ -228,6 +228,16 @@ export class FrameRenderer {
     this.#terminal.write("\n".repeat(overflow));
   }
 
+  /** T1-05's reflow begins here: the terminal changed size under the app (on a phone, the soft keyboard opening is a
+   *  resize), and the frame the renderer remembers is drawn for a size that no longer exists. Forgetting is the honest
+   *  response — the next draw re-anchors (the anchor path above) and repaints every line from scratch, because a
+   *  line-diff against a frame whose geometry is gone would patch a screen that is not there. */
+  invalidate(): void {
+    this.#previous = [];
+    this.#height = 0;
+    this.#cursorRow = 0;
+  }
+
   get height(): number {
     return this.#height;
   }

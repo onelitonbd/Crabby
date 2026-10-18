@@ -190,14 +190,37 @@ describe("FrameRenderer", () => {
     const { renderer, written } = fake(63, 30);
     renderer.drawNow([">chat", "body", "status", "hints"]);
     const first = written[0] ?? "";
-    assert.match(first, /\x1b\[999B/, "the walk to the bottom row (clamped wherever the cursor was)");
-    assert.match(first, /\n{30}/, "one scroll per frame row — everything above goes to the scrollback");
+    assert.match(
+      first,
+      /\x1b\[999B/,
+      "the walk to the bottom row (clamped wherever the cursor was)",
+    );
+    assert.match(
+      first,
+      /\n{30}/,
+      "one scroll per frame row — everything above goes to the scrollback",
+    );
     assert.match(first, /\x1b\[29A/, "back up to the frame's first row before the plan writes");
     // The second draw anchors nothing: the frame now owns its region.
     const before = written.length;
     renderer.drawNow([">chat", "body two", "status", "hints"]);
     assert.equal(written.length, before + 1, "the change itself is one diffed write");
     assert.ok(!written.at(-1)?.includes("999B"), "no second anchor");
+  });
+
+  it("invalidate() forgets the frame, so the next draw re-anchors and repaints whole (T1-05)", () => {
+    const { renderer, written } = fake(63, 30);
+    renderer.drawNow([">chat", "body", "status", "hints"]);
+    written.length = 0;
+    renderer.invalidate();
+    renderer.drawNow([">chat", "body after resize", "status", "hints"]);
+    const first = written[0] ?? "";
+    assert.match(first, /\x1b\[999B/, "a re-anchor: the new geometry is owned from the bottom row");
+    assert.match(
+      first,
+      /body after resize/,
+      "and the whole frame repaints, not a diff against a dead geometry",
+    );
   });
 });
 

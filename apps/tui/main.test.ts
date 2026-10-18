@@ -322,6 +322,40 @@ describe("crabby tui, driven by bytes", () => {
     await run.finish();
   });
 
+  it("a keyboard's CRLF Enter is one press, not a send plus a stray newline", async () => {
+    const run = harness();
+    await run.ready();
+    // Some keyboards deliver Enter as `\r\n` in one chunk. The `\r` sends; the `\n` is the same press's tail —
+    // without the guard it lands as Ctrl+J in the composer the send just emptied, and the next draft starts life
+    // with a blank first line that shows up as a broken-looking composer and a token estimate for a line of nothing.
+    run.stdin.type("hello\r\n");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(run.created.length, 1);
+    run.stdin.type("next");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      run.created.length,
+      1,
+      "the guard must not have turned the CRLF into a second send",
+    );
+    const lines = plain(run.out()).split(/[\r\n]/);
+    assert.ok(
+      lines.some((line) => line.includes("❯ next")),
+      `the composer shows the draft once, with no leading blank line: ${lines.filter((l) => l.includes("❯")).join(" | ")}`,
+    );
+    await run.finish();
+  });
+
+  it("Enter on an empty composer says so instead of reading as a hang (T3-03)", async () => {
+    const run = harness();
+    await run.ready();
+    run.stdin.type("\r");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(run.created.length, 0, "nothing was typed, nothing was sent");
+    assert.match(plain(run.out()), /nothing to send yet/);
+    await run.finish();
+  });
+
   it("Ctrl-J inserts a newline instead of sending", async () => {
     const run = harness();
     await run.ready();

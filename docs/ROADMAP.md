@@ -1784,6 +1784,27 @@ scroll one line per frame row into the scrollback D-061 promises, step back up, 
 63×30 pty show the whole frame: pane row, welcome, prompt, capability line, status, hints. Gates: sweep
 1523/1523, tsc, biome, parity, docs:check.
 
+**Eighty-eighth slice — the phone's own weather: resize, CRLF Enters, and the empty composer.** The owner's first
+real session on the new chat view came back as a bug report: typing double-sends, and typed text does not appear
+where it should. The pty comparison found the truth in two parts. First, **T1-05 had never been implemented** —
+nothing handled terminal resize, and on a phone the soft keyboard *is* a resize: opening it shrinks the pty from
+thirty rows to about eighteen while the app keeps diffing a thirty-row frame, so every keystroke's repaint landed
+at the screen's bottom row and scrolled the frame into the scrollback as a smear — the owner's own paste held the
+frames out of order (`hi` above `h`), which is the smear's signature, and one send's task-id lines scattered
+across it read as a double send. Second, some keyboards deliver Enter as **CRLF**: the `` sends, and the `
+`
+lands as a Ctrl+J newline in the composer the send just emptied — a phantom blank first line on every next
+draft. The fixes: a debounced SIGWINCH handler that re-measures through `terminalFacts` (the zero-report rule
+stays in one place), assigns the two size bindings every pane reads, and calls the renderer's new
+`invalidate()` — the frame drawn for the old geometry is forgotten, and the next draw re-anchors and repaints
+whole, because a line-diff against a frame that is no longer where it was patches a screen that is not there.
+The CRLF tail is dropped in the input loop: one Enter per CRLF. And Enter on an empty composer now says
+"nothing to send yet" instead of reading as a hang, which also keeps an empty objective out of the send queue.
+The Gateway side was checked rather than assumed: the same idempotency key returns the same task id, so re-typed
+words never mint a second task. Proof is a python-driven pty that resizes mid-session (the keyboard's own
+gesture): the frame re-anchors at eighteen rows with the hint strip on the bottom row, and `abc` plus one Enter
+creates exactly one task. Gates: sweep 1526/1526, tsc, biome.
+
 ## 8. Phase M6 — Release readiness
 
 *Everything this repository can ship is shipped (2026-10-17, slices 79–83): backup/restore (D-142), the changelog

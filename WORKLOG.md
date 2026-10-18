@@ -515,3 +515,21 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
   scrollback + `rows-1` ওপরে (D-061 অক্ষত — ওপরের সব স্ক্রলব্যাকে)।
 - **প্রমাণ:** জীবন্ত gateway-র সাথে সত্যিকারের ৬৩×৩০ pty-তে সম্পূর্ণ ফ্রেম — pane row, welcome, `❯`, capability,
   status (`model: none · live · approvals: 0`), hint strip। গেট: sweep **1523/1523**, tsc, biome, parity, docs:check।
+
+## Slice 28 — ফোনের আসল ব্যবহার: resize, CRLF-Enter, খালি-Enter — 2026-10-18
+
+- **মালিকের রিপোর্ট:** টাইপ করতে গেলে "অটোমেটিক ডাবল সেন্ড" আর টাইপিং ঠিকমতো ওঠে না। pty-তুলনায় আসল কারণ দুই:
+  (১) **T1-05 অবাস্তবায়িত ছিল** — SIGWINCH/resize হ্যান্ডলিং নেই; ফোনে সফট-কিবোর্ড খুললেই Termux pty-র rows কমে
+  (৩০→~১৮), অথচ অ্যাপ পুরোনো ৩০-সারির জ্যামিতিতে diff এঁকে যায় → প্রতিটা কিপ্রেসের লেখা স্ক্রিনের নিচের সারিতে
+  গিয়ে **স্ক্রলব্যাকে smear** — মালিকের পেস্টেই প্রমাণ: ফ্রেমগুলো উল্টো ক্রমে (hi আগে, h পরে)। এক send-এর id-লাইনগুলো
+  ছড়িয়ে-পুনরাবৃত্ত দেখায় = "ডাবল সেন্ড"-এর অনুভূতি। (২) কিছু কিবোর্ড Enter পাঠায় **CRLF হিসেবে** — `` সেন্ড করে,
+  `
+` খালি composer-এ Ctrl+J newline হয়ে ফ্যান্টম প্রথম লাইন বসায়।
+- **ঠিক:** (১) `renderer.invalidate()` + debounced (150ms) SIGWINCH → size বদলালে পুনঃ-মাপা (terminalFacts-এর
+  zero-rule এক জায়গায়), renderer পুরোনো জ্যামিতি ভুলে re-anchor + পুরো রিপেইন্ট; columns/rows এখন `let` + terminal
+  getters — সব প্যান একই সৎ সংখ্যা পড়ে। (২) onData-তে: enter-এর ঠিক পরের একটা `
+` একই চাপের লেজ, কী নয়। (৩) খালি
+  Enter এখন বলে "nothing to send yet — type first" (T3-03) — আর খালি objective কখনো queue-তে ঢোকে না।
+- **প্রমাণ:** python pty (TIOCSWINSZ) — ৩০→১৮ resize মাঝ-সেশনে → ফ্রেম re-anchor, hint strip নিচের সারিতে; `abc`+
+  এক Enter = ঠিক এক task; Gateway-তত্ত্বও পরীক্ষিত — একই idempotency key = একই task id (ডুপ্লিকেট নয়)। গেট: sweep
+  **1526/1526**, tsc, biome।

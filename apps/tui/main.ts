@@ -161,11 +161,25 @@ export interface TuiOptions {
 const POLL_MS = 2000;
 
 export async function runTui(options: TuiOptions): Promise<ExitCode> {
-  const { columns, rows, env, stdin, stdout } = options;
+  const { env, stdin, stdout } = options;
+  // T1-05: the size is a **live measurement**, not a startup constant — on a phone the soft keyboard opening is the
+  // terminal shrinking, and a frame drawn for the old size smears across the new one. `columns` and `rows` are `let`
+  // and the terminal object reads them through getters, so a resize is an assignment plus a repaint, and every pane,
+  // the frame and the renderer all see the same fresh numbers because they all read the same two bindings.
+  let columns = options.columns;
+  let rows = options.rows;
   // `terminalFacts` takes the size and the TTY flag from the *caller* rather than reading `process.stdout`, because a test
   // drives this app with a fake stream and a real `process.stdout` would report the phone's width to a 40-column frame.
   const facts = terminalFacts(env, { columns, rows }, stdin.isTTY === true);
-  const terminal: Terminal = { columns, rows, write: (text) => stdout.write(text) };
+  const terminal: Terminal = {
+    get columns() {
+      return columns;
+    },
+    get rows() {
+      return rows;
+    },
+    write: (text) => stdout.write(text),
+  };
   const renderer = new FrameRenderer(terminal);
   const now = options.now ?? (() => Date.now());
   const layout = dataLayout(options.dataDir);
@@ -889,7 +903,13 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       if (decoded === undefined) return; // A partial escape sequence: wait for the rest.
       buffer = decoded.rest;
       seen += 1;
+      const wasEnter = decoded.key.kind === "enter";
       if (handle(decoded.key)) return;
+      // A keyboard that sends Enter as CRLF delivers `\r\n` — one press, two bytes — and the `\n` would land as a
+      // Ctrl+J newline in the composer the send just emptied, which reads on screen as a composer that typed itself a
+      // blank first line. One Enter per CRLF: after an `enter`, a single immediately-following LF is the same press's
+      // tail, not a second key.
+      if (wasEnter && buffer.startsWith("\n")) buffer = buffer.slice(1);
       if (options.quitAfterKeys !== undefined && seen >= options.quitAfterKeys) {
         quit = true;
         return;
@@ -2087,6 +2107,13 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
       }
       if (handled.action === "send") {
         const text = draft.buffer.trim();
+        // An Enter on an empty composer is a key with nothing to do, and silence here reads as a hang (T3-03's rule in
+        // the composer). It also guards the queue below: an empty objective would sit in the queue and send nothing
+        // when the run settled, a ghost row that never acted.
+        if (text.length === 0) {
+          message = "nothing to send yet — type first";
+          return false;
+        }
         // The slash menu first (T5-03): a buffer that names a command is a control, not a message — the row's own rule
         // that every command also has a visible control is what keeps these mapped onto panes and overlays that exist.
         if (text.startsWith("/")) {
@@ -2208,17 +2235,54 @@ export async function runTui(options: TuiOptions): Promise<ExitCode> {
     renderer.showCursor();
     stop();
   };
+  // T1-05's reflow: the terminal resized under the app — on a phone, the soft keyboard opening and closing is exactly
+  // this, several times a minute. Re-measured through `terminalFacts` so the zero-report rule stays in one place, and
+  // **debounced** because dragging a desktop terminal fires the signal faster than a phone can repaint. A change is
+  // two assignments plus `invalidate()`: the renderer forgets the frame it drew for the old geometry, and the next
+  // draw re-anchors and repaints whole — a line-diff against a frame that is no longer where it was would patch a
+  // screen that is not there, which is the smear that read as doubled output on the owner's phone.
+  const applyResize = (): void => {
+    const next = terminalFacts(
+      process.env,
+      {
+        ...(typeof process.stdout.columns === "number" ? { columns: process.stdout.columns } : {}),
+        ...(typeof process.stdout.rows === "number" ? { rows: process.stdout.rows } : {}),
+      },
+      stdin.isTTY === true,
+    );
+    if (next.columns === columns && next.rows === rows) return;
+    columns = next.columns;
+    rows = next.rows;
+    renderer.invalidate();
+    drawNow();
+  };
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  const onResize = (): void => {
+    if (resizeTimer !== undefined) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = undefined;
+      applyResize();
+    }, 150);
+  };
+  process.on("SIGWINCH", onResize);
+  const stopResize = (): void => {
+    if (resizeTimer !== undefined) clearTimeout(resizeTimer);
+    process.off("SIGWINCH", onResize);
+  };
+
   // The 50 ms tick is what turns a `quit` flag into a shutdown. **A `setInterval` rather than a busy loop**, because a
   // phone charging a frame per turn of the event loop is a phone that gets warm (§4 of `docs/DESIGN_SYSTEM.md`, and the
   // reason P-011 caps repaints at all).
   const tick = setInterval(() => {
     if (quit) {
       clearInterval(tick);
+      stopResize();
       shutdown();
     }
   }, 50);
   await ended;
   clearInterval(tick);
+  stopResize();
   shutdown();
   return EXIT.success;
 }

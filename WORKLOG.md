@@ -450,3 +450,9 @@ isRecord/asString/asNumber + requireDescriptor/refuseUndeclaredTools — openai.
 
 - মালিকের ফোনে `npm install` হয়েছিল পুরোনো main-এ; নতুন ব্রাঞ্চে গিয়ে `@crabby/extensions` ERR_MODULE_NOT_FOUND —
   লিংক-গাছ package.json-এর সাথে চলে না, install চলে। TROUBLESHOOTING-এ লক্ষণ → `npm install` পুনরায়।
+## Slice 22 — তৃতীয় ডিভাইস-হিট: pairing দুই-সেশন মানসিকতা — 2026-10-17
+
+- মালিক প্রথম bootstrap কোড মিস করলেন; restart-এ "কোড নেই" = পুরোনো Gateway পোর্ট ধরে ছিল। আসল নিয়মটা ডক-এ:
+  identity শূন্য থাকলে প্রতি start-এ নতুন কোড; pair = দ্বিতীয় সেশনে `auth pair --code`; মেয়াদ শেষ = নিরীহ।
+- INSTALL.md-র clone→first-conversation অংশে দুই-সেশন ডায়াগ্রাম; TROUBLESHOOTING-এ নতুন প্রথম এন্ট্রি।
+- (UX-ক্যান্ডিডেট, মালিকের নোটের জন্য: bootstrap কোড start-আউটপুটের একেবারে শেষ লাইনে যেতে পারে।)

@@ -13,6 +13,16 @@ properly with `sh scripts/link-global.sh` (D-145, one symlink into your checkout
 `crabby`" section). If even the `node` form fails with a syntax error, your Node is
 older than the `engines.node` pin — `node --version`, then upgrade (Termux: `pkg upgrade nodejs-lts`).
 
+## Missed the pairing code, it expired, or a restart printed no code at all
+
+The code is redeemed by a **client in a second session** while the Gateway keeps running — not typed into the
+Gateway's terminal. Termux: swipe from the left edge → *New session*, then `crabby auth pair --code <code>`.
+Expired? Harmless: until one identity exists, **every `gateway start` prints a fresh code** (the `first client`
+block near the end of the output). A start with **no** code almost always means the old Gateway still holds the
+port — `crabby gateway status` names the pid, `kill <pid>` or Ctrl-C in its terminal, start again. (`gateway
+stop` is a planned verb; Ctrl-C and the pid are today's stops.) Once paired, `crabby auth list` shows the
+identity and its last-seen time.
+
 ## `ERR_MODULE_NOT_FOUND` for an `@crabby/…` package — after switching branches or pulling
 
 The `node_modules` tree was built from a different `package.json` set: the workspace links (`@crabby/vault`,

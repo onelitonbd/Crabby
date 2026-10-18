@@ -87,8 +87,22 @@ node apps/cli/crabby.ts gateway start           # loopback; prints the pairing c
 
 `gateway start` composes the runner only when a provider **and** a default model both exist, and says exactly
 which is missing when they do not — a task created before that is recorded and stays `queued`, which is the truth
-rather than a shrug. Pair another interface with the code the start printed (`crabby auth pair --code <code>`, or
-the Web UI's first-run field), then `crabby chat "…"` / `crabby task run "…"`.
+rather than a shrug. Then pair — and pairing is a **second session**, not the Gateway's terminal (the code is
+redeemed by a client; typing it back into the Gateway does nothing):
+
+```sh
+# session 1                          # session 2 (Termux: swipe from the left edge → New session)
+crabby gateway start                 crabby auth pair --code ABCD1234
+   … first client: ABCD1234 …        crabby status        # now answers
+```
+
+The code is single-use and expires in ~2 minutes, but that is not a trap: **until one identity exists, every
+`gateway start` prints a fresh code** near the end of its output (the `first client` block). If a start printed
+no code, an older Gateway is still holding the port — `crabby gateway status` names the pid, `kill <pid>` (or
+Ctrl-C in its terminal) frees it. The token is printed once and saved to `<stateDir>/client.json`; the Gateway
+keeps only its digest. If you lose it, `crabby auth revoke <id>` and pair again.
+
+Then `crabby chat "…"` / `crabby task run "…"`.
 
 ## Update, rollback, backup
 
